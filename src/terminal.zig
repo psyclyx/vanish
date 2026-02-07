@@ -10,11 +10,17 @@ alloc: std.mem.Allocator,
 term: Terminal,
 cols: u16,
 rows: u16,
+/// Set to true when an ED 2 (clear screen) sequence is detected.
+/// When true, scrollback from before the clear should not be shared.
+screen_cleared: bool = false,
 
 pub fn init(alloc: std.mem.Allocator, cols: u16, rows: u16) !VTerminal {
     const term = try Terminal.init(alloc, .{
         .cols = cols,
         .rows = rows,
+        // Reduce scrollback to minimize memory allocation after fork
+        // Default is 10,000 which causes excessive mremap calls
+        .max_scrollback = 1000,
     });
     return .{
         .alloc = alloc,
@@ -35,6 +41,14 @@ pub fn resize(self: *VTerminal, cols: u16, rows: u16) !void {
 }
 
 pub fn feed(self: *VTerminal, data: []const u8) void {
+    // Detect ED 2 (clear screen) sequence: ESC [ 2 J
+    // This sets a flag to prevent sharing pre-clear scrollback
+    if (std.mem.indexOf(u8, data, "\x1b[2J") != null or
+        std.mem.indexOf(u8, data, "\x1b[3J") != null)
+    {
+        self.screen_cleared = true;
+    }
+
     var stream = self.term.vtStream();
     defer stream.deinit();
     stream.nextSlice(data) catch {};
@@ -276,4 +290,46 @@ test "terminal viewport dump" {
     try std.testing.expect(viewport.len > 0);
     // Should contain our text
     try std.testing.expect(std.mem.indexOf(u8, viewport, "AAAA") != null);
+}
+
+test "terminal zsh prompt sequence" {
+    const alloc = std.testing.allocator;
+    var term = try init(alloc, 80, 24);
+    defer term.deinit();
+
+    // Exact sequence from zsh prompt that was causing issues
+    term.feed("\x1b[0m\x1b[27m\x1b[24m\x1b[J\x1b[34m~proj/vanish");
+
+    // If we get here without panicking, the test passed
+    const text = try term.getPlainText();
+    defer alloc.free(@constCast(text));
+
+    try std.testing.expect(std.mem.indexOf(u8, text, "~proj/vanish") != null);
+}
+
+test "terminal clear screen detection" {
+    const alloc = std.testing.allocator;
+    var term = try init(alloc, 80, 24);
+    defer term.deinit();
+
+    // Initially not cleared
+    try std.testing.expect(!term.screen_cleared);
+
+    // Regular output doesn't set cleared
+    term.feed("Hello\n");
+    try std.testing.expect(!term.screen_cleared);
+
+    // ED 2 (clear screen) sets the flag
+    term.feed("\x1b[2J");
+    try std.testing.expect(term.screen_cleared);
+}
+
+test "terminal clear scrollback detection" {
+    const alloc = std.testing.allocator;
+    var term = try init(alloc, 80, 24);
+    defer term.deinit();
+
+    // ED 3 (clear screen + scrollback) also sets the flag
+    term.feed("\x1b[3J");
+    try std.testing.expect(term.screen_cleared);
 }

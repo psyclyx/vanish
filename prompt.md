@@ -13,11 +13,6 @@ Ongoing:
 
 Inbox:
 
-- Please test this. It seems completely broken when I try to run it. You should
-  have confidence that it works. Unit and integration testing. No BS tests.
-  Don't let breakage through, don't slow down future velocity, test exactly what
-  should be tested, as only a staff engineer could.
-
 OLD:
 
 - Can we do json instead of toml for config?
@@ -111,6 +106,134 @@ lightweight libghostty terminal session multiplexer
 ---
 
 # Progress Notes
+
+## 2026-02-07: Session 19 - UX Improvements and Clear Screen Handling
+
+Addressed 5 user requests from the inbox.
+
+### Changes Made
+
+**1. Simplified Help Text (main.zig)**
+
+Removed the confusing `<socket|name>` notation from usage. Now just shows:
+```
+vanish new [--detach] <name> <command> [args...]
+vanish attach [--primary] <name>
+```
+
+**2. Auto-attach After New (main.zig)**
+
+`vanish new` now auto-attaches to the session by default. Added `--detach` flag
+for the old behavior (create session and exit).
+
+- `vanish new mysession zsh` → creates and attaches
+- `vanish new --detach mysession zsh` → creates and exits
+
+**3. Clear Screen Handling (terminal.zig, session.zig)**
+
+If the terminal was cleared (ED 2 `\x1b[2J` or ED 3 `\x1b[3J`), scrollback is
+not sent to new clients. This prevents terminal divergence when users run
+`clear` or press Ctrl+L before others join.
+
+- Added `screen_cleared` flag to VTerminal
+- `feed()` detects clear sequences and sets the flag
+- `sendScrollback()` returns empty when flag is set
+
+**4. Default to Viewer Mode (main.zig)**
+
+`vanish attach` now defaults to viewer mode. Added `--primary` flag to take
+over as primary. This prevents accidentally hijacking someone else's session.
+
+- `vanish attach mysession` → attach as viewer
+- `vanish attach --primary mysession` → attach as primary
+
+**5. Color Difference Explanation**
+
+User noticed colors looked "great" but different in zsh. Investigation found
+their ~/.config/zsh/.zshrc sources vte.sh which sends OSC 4 sequences to set
+a custom color palette. This is correct behavior - the attached terminal receives
+these palette-setting sequences and adopts the colors.
+
+### Testing
+
+- Unit tests: 24 tests passing (added 2 clear detection tests)
+- Integration tests: 19 tests passing
+
+### Files Changed
+
+- `src/main.zig`: Help text, auto-attach, --detach, --primary flags
+- `src/terminal.zig`: screen_cleared flag, clear detection in feed()
+- `src/session.zig`: Skip scrollback when screen was cleared
+
+---
+
+## 2026-02-07: Session 18 - Critical Bug Fix (ghostty-vt panic after fork)
+
+### Issue
+
+User reported that `vanish new socket zsh` hangs and requires Ctrl+Z to exit.
+The strace showed the daemon was blocked on poll(), but actually the daemon was
+crashing with a panic and the parent was blocked waiting for a signal that never
+came.
+
+### Root Cause
+
+After fork(), the daemon initializes ghostty-vt's Terminal and processes VT
+sequences from zsh. In Debug builds, ghostty-vt hits an `unreachable` code path
+when processing certain escape sequences (like `\x1b[27m` - SGR 27 "not
+reversed"). This causes a panic.
+
+The panic handler then tries to access the parent process's memory via
+`process_vm_readv`, but the parent has already exited, causing a recursive
+panic.
+
+The specific sequence that triggers the issue:
+```
+\x1b[0m\x1b[27m\x1b[24m\x1b[J\x1b[34m~proj/vanish
+```
+
+This only happens in Debug builds. In ReleaseSafe builds, the same code path
+works correctly.
+
+### Fix
+
+1. Changed build.zig to default to ReleaseSafe instead of Debug
+2. Changed child process allocator from page_allocator to c_allocator (more
+   robust after fork, though this alone didn't fix the issue)
+3. Added reduced scrollback (1000 lines instead of 10000) to reduce memory
+   pressure
+
+### Files Changed
+
+- `build.zig`: Default optimization is now ReleaseSafe
+- `src/main.zig`: Use c_allocator instead of page_allocator in child
+- `src/terminal.zig`: Reduced max_scrollback to 1000
+
+### Answers to User Questions
+
+1. **"Shouldn't I not be able to Ctrl+Z it?"** - During the brief moment while
+   the parent process waits for the daemon to signal readiness, the parent is
+   in the foreground and can receive SIGTSTP (Ctrl+Z). This is expected. The
+   issue was that the daemon was crashing, causing the parent to wait forever.
+
+2. **"Why is it hanging?"** - The daemon was panicking with "reached unreachable
+   code" when processing zsh's escape sequences. This is a bug in ghostty-vt
+   that only manifests in Debug builds after fork(). Building with ReleaseSafe
+   avoids the issue.
+
+### Testing
+
+- Unit tests: 22 tests passing (added zsh sequence test)
+- Integration tests: 19 tests passing
+- Manual testing: zsh and bash sessions now work correctly
+
+### Technical Details
+
+The mremap failures (ENOMEM) observed in strace were red herrings - the page
+allocator correctly fell back to mmap. The actual issue was in ghostty-vt's
+VT sequence processing, not memory allocation.
+
+---
 
 ## 2026-02-07: Session 17 - Testing & Bug Fix
 

@@ -68,10 +68,8 @@ test_session_create_list() {
     echo "=== Testing session creation and listing ==="
     local socket="$TEST_DIR/test-create"
 
-    # Start a session that just sleeps
-    $VANISH new "$socket" -- sleep 10 &
-    local pid=$!
-    sleep 0.5
+    # Start a session that just sleeps (vanish new daemonizes and returns immediately)
+    $VANISH new "$socket" -- sleep 10
 
     # Check it appears in list
     local output
@@ -91,8 +89,7 @@ test_session_create_list() {
     fi
 
     # Cleanup
-    kill $pid 2>/dev/null || true
-    wait $pid 2>/dev/null || true
+    pkill -f "vanish.*test-create" 2>/dev/null || true
     rm -f "$socket"
 }
 
@@ -100,27 +97,25 @@ test_session_exits_with_child() {
     echo "=== Testing session exits when child exits ==="
     local socket="$TEST_DIR/test-exit"
 
-    # Start a session with a quick command
-    $VANISH new "$socket" -- sh -c "echo done; exit 0" &
-    local pid=$!
+    # Start a session with a quick command (vanish new daemonizes and returns immediately)
+    $VANISH new "$socket" -- sh -c "echo done; exit 0"
+    # Wait for the child process to complete
     sleep 1
 
-    # Session should be gone
+    # Session should be gone (socket cleaned up when child exits)
     if [ ! -S "$socket" ]; then
         pass "socket removed after child exits"
     else
         fail "socket still exists after child exits"
     fi
 
-    # Process should have exited
-    if ! kill -0 $pid 2>/dev/null; then
-        pass "session process exited"
+    # The daemon process should have exited too
+    if ! pgrep -f "vanish.*test-exit" > /dev/null 2>&1; then
+        pass "session daemon exited"
     else
-        fail "session process still running"
-        kill $pid 2>/dev/null || true
+        fail "session daemon still running"
+        pkill -f "vanish.*test-exit" 2>/dev/null || true
     fi
-
-    wait $pid 2>/dev/null || true
 }
 
 test_send_command() {
@@ -129,13 +124,11 @@ test_send_command() {
     local output_file="$TEST_DIR/output.txt"
 
     # Start a session that reads input and writes to file
-    # Using cat to avoid shell's read builtin complexities
-    $VANISH new "$socket" -- sh -c "head -n1 > $output_file; sleep 1" &
-    local pid=$!
-    sleep 0.5
+    # vanish new daemonizes and returns immediately
+    $VANISH new "$socket" -- sh -c "head -n1 > $output_file; sleep 5"
+    sleep 0.3
 
     # Send input with newline in one go
-    # Note: the newline character needs to be sent to complete the line
     $VANISH send "$socket" $'hello\n'
     sleep 0.5
 
@@ -147,25 +140,21 @@ test_send_command() {
             local content
             content=$(cat "$output_file" 2>/dev/null || echo "(empty)")
             fail "send test: file exists but content is '$content'"
-        elif kill -0 $pid 2>/dev/null; then
-            fail "send may not have worked (session still running, no output file)"
         else
-            fail "send test inconclusive (session exited, no output file)"
+            fail "send test: output file not created"
         fi
     fi
 
-    kill $pid 2>/dev/null || true
-    wait $pid 2>/dev/null || true
+    pkill -f "vanish.*test-send" 2>/dev/null || true
 }
 
 test_clients_command() {
     echo "=== Testing clients command ==="
     local socket="$TEST_DIR/test-clients"
 
-    # Start a session
-    $VANISH new "$socket" -- sleep 30 &
-    local pid=$!
-    sleep 0.5
+    # Start a session (vanish new daemonizes and returns immediately)
+    $VANISH new "$socket" -- sleep 30
+    sleep 0.3
 
     # List clients - note: the 'clients' command itself connects as a viewer
     # so there won't be a primary unless someone attached as primary
@@ -185,8 +174,7 @@ test_clients_command() {
         fail "clients --json doesn't show role: '$output'"
     fi
 
-    kill $pid 2>/dev/null || true
-    wait $pid 2>/dev/null || true
+    pkill -f "vanish.*test-clients" 2>/dev/null || true
 }
 
 test_session_detaches() {
@@ -194,9 +182,8 @@ test_session_detaches() {
     local socket="$TEST_DIR/test-detach"
     local marker_file="$TEST_DIR/marker.txt"
 
-    # Create a session that creates a marker file
-    $VANISH new "$socket" -- sh -c "touch $marker_file; sleep 30" &
-    local pid=$!
+    # Create a session that creates a marker file (vanish new daemonizes and returns immediately)
+    $VANISH new "$socket" -- sh -c "touch $marker_file; sleep 30"
     sleep 0.5
 
     # Session should have created the marker
@@ -206,25 +193,23 @@ test_session_detaches() {
         fail "session didn't create marker file"
     fi
 
-    # Session should still be running after we exit this test
-    if kill -0 $pid 2>/dev/null; then
-        pass "session process still running"
+    # Session daemon should still be running
+    if pgrep -f "vanish.*test-detach" > /dev/null 2>&1; then
+        pass "session daemon still running"
     else
-        fail "session process died unexpectedly"
+        fail "session daemon died unexpectedly"
     fi
 
-    kill $pid 2>/dev/null || true
-    wait $pid 2>/dev/null || true
+    pkill -f "vanish.*test-detach" 2>/dev/null || true
 }
 
 test_kick_command() {
     echo "=== Testing kick command ==="
     local socket="$TEST_DIR/test-kick"
 
-    # Start a session
-    $VANISH new "$socket" -- sleep 30 &
-    local pid=$!
-    sleep 0.5
+    # Start a session (vanish new daemonizes and returns immediately)
+    $VANISH new "$socket" -- sleep 30
+    sleep 0.3
 
     # Get client list to find the viewer's ID
     local clients_output
@@ -233,8 +218,7 @@ test_kick_command() {
         pass "got client list for kick test"
     else
         fail "couldn't get client list: '$clients_output'"
-        kill $pid 2>/dev/null || true
-        wait $pid 2>/dev/null || true
+        pkill -f "vanish.*test-kick" 2>/dev/null || true
         return
     fi
 
@@ -252,8 +236,7 @@ test_kick_command() {
         fail "kick command failed: '$kick_output'"
     fi
 
-    kill $pid 2>/dev/null || true
-    wait $pid 2>/dev/null || true
+    pkill -f "vanish.*test-kick" 2>/dev/null || true
 }
 
 test_invalid_session() {
@@ -284,9 +267,8 @@ test_json_escaping() {
     # Create a session with a name that needs escaping
     local socket="$TEST_DIR/test-json-name"
 
-    $VANISH new "$socket" -- sleep 10 &
-    local pid=$!
-    sleep 0.5
+    # vanish new daemonizes and returns immediately
+    $VANISH new "$socket" -- sleep 10
 
     # Check JSON output is valid
     local output
@@ -305,8 +287,7 @@ test_json_escaping() {
         fail "JSON list missing session name: '$output'"
     fi
 
-    kill $pid 2>/dev/null || true
-    wait $pid 2>/dev/null || true
+    pkill -f "vanish.*test-json-name" 2>/dev/null || true
 }
 
 run_tests() {

@@ -2,7 +2,13 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    // Default to ReleaseSafe because Debug builds trigger a panic in ghostty-vt
+    // when processing certain VT sequences after fork()
+    const optimize = b.option(
+        std.builtin.OptimizeMode,
+        "optimize",
+        "Prioritize performance, safety, or binary size (default: ReleaseSafe)",
+    ) orelse .ReleaseSafe;
 
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),

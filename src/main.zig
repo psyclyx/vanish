@@ -14,24 +14,20 @@ const usage =
     \\vanish - terminal session multiplexer
     \\
     \\Usage:
-    \\  vanish new <name> [--] <command> [args...]
-    \\  vanish attach [--viewer] <name>
+    \\  vanish new [--detach] <name> <command> [args...]
+    \\  vanish attach [--primary] <name>
     \\  vanish send <name> <keys>
-    \\  vanish list [--json] [directory]
+    \\  vanish list [--json]
     \\  vanish clients [--json] <name>
     \\  vanish kick <name> <client-id>
     \\
     \\Commands:
-    \\  new      Create a new session
-    \\  attach   Attach to an existing session (--viewer for read-only)
-    \\  send     Send keys to a session (for scripting)
-    \\  list     List available sessions (--json for machine-readable output)
-    \\  clients  List connected clients (--json for machine-readable output)
+    \\  new      Create session and attach (--detach to run in background)
+    \\  attach   Attach to session (viewer by default, --primary to take over)
+    \\  send     Send keys to a session
+    \\  list     List sessions
+    \\  clients  List connected clients
     \\  kick     Disconnect a client by ID
-    \\
-    \\Notes:
-    \\  <name> can be a session name (stored in $XDG_RUNTIME_DIR/vanish/)
-    \\  or a full socket path (containing /)
     \\
 ;
 
@@ -89,16 +85,32 @@ pub fn main() !void {
 
 fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
     if (args.len < 2) {
-        try writeAll(STDERR_FILENO, "Usage: vanish new <socket|name> [--] <command> [args...]\n");
+        try writeAll(STDERR_FILENO, "Usage: vanish new [--detach] <name> <command> [args...]\n");
         std.process.exit(1);
     }
 
-    const socket_path = try resolveSocketPath(alloc, args[0], cfg);
+    var detach_mode = false;
+    var arg_idx: usize = 0;
+
+    // Parse --detach flag
+    if (std.mem.eql(u8, args[0], "--detach") or std.mem.eql(u8, args[0], "-d")) {
+        detach_mode = true;
+        arg_idx = 1;
+    }
+
+    if (args.len < arg_idx + 2) {
+        try writeAll(STDERR_FILENO, "Usage: vanish new [--detach] <name> <command> [args...]\n");
+        std.process.exit(1);
+    }
+
+    const session_name = args[arg_idx];
+    const socket_path = try resolveSocketPath(alloc, session_name, cfg);
     defer alloc.free(socket_path);
 
-    var cmd_start: usize = 1;
-    if (args.len > 1 and std.mem.eql(u8, args[1], "--")) {
-        cmd_start = 2;
+    var cmd_start: usize = arg_idx + 1;
+    // Skip optional "--" separator
+    if (cmd_start < args.len and std.mem.eql(u8, args[cmd_start], "--")) {
+        cmd_start += 1;
     }
 
     if (cmd_start >= args.len) {
@@ -107,28 +119,86 @@ fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config
     }
 
     const cmd_args = args[cmd_start..];
-    try Session.run(alloc, socket_path, cmd_args);
+
+    // Create a pipe for child to signal when socket is ready
+    const pipe_fds = try posix.pipe();
+
+    // Fork to run session in background
+    const pid = try posix.fork();
+    if (pid == 0) {
+        // Child: close read end of pipe
+        posix.close(pipe_fds[0]);
+
+        // Become session leader
+        _ = posix.setsid() catch {};
+
+        // Close stdin/stdout/stderr and redirect to /dev/null
+        posix.close(0);
+        posix.close(1);
+        posix.close(2);
+        const devnull = posix.open("/dev/null", .{ .ACCMODE = .RDWR }, 0) catch std.process.exit(1);
+        _ = posix.dup2(devnull, 0) catch {};
+        _ = posix.dup2(devnull, 1) catch {};
+        _ = posix.dup2(devnull, 2) catch {};
+        if (devnull > 2) posix.close(devnull);
+
+        // Use C allocator in child process (GPA is not fork-safe, and
+        // page_allocator has mremap issues after fork that cause ghostty-vt panics)
+        const child_alloc = std.heap.c_allocator;
+
+        // Dupe the strings we need since parent's allocator is not safe to use
+        const child_socket_path = child_alloc.dupe(u8, socket_path) catch std.process.exit(1);
+        const child_cmd_args = child_alloc.alloc([]const u8, cmd_args.len) catch std.process.exit(1);
+        for (cmd_args, 0..) |arg, i| {
+            child_cmd_args[i] = child_alloc.dupe(u8, arg) catch std.process.exit(1);
+        }
+
+        // Run session, signaling when socket is ready
+        Session.runWithNotify(child_alloc, child_socket_path, child_cmd_args, pipe_fds[1]) catch std.process.exit(1);
+        std.process.exit(0);
+    }
+
+    // Parent: close write end and wait for signal from child
+    posix.close(pipe_fds[1]);
+
+    var buf: [1]u8 = undefined;
+    const n = posix.read(pipe_fds[0], &buf) catch 0;
+    posix.close(pipe_fds[0]);
+
+    if (n == 0) {
+        // Child closed pipe without writing = failed to start
+        try writeAll(STDERR_FILENO, "Session failed to start\n");
+        std.process.exit(1);
+    }
+
+    // Auto-attach unless --detach was specified
+    if (!detach_mode) {
+        const Client = @import("client.zig");
+        try Client.attach(alloc, socket_path, false, cfg);
+    }
 }
 
 fn cmdAttach(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
     if (args.len < 1) {
-        try writeAll(STDERR_FILENO, "Usage: vanish attach [--viewer] <socket|name>\n");
+        try writeAll(STDERR_FILENO, "Usage: vanish attach [--primary] <name>\n");
         std.process.exit(1);
     }
 
     var socket_arg: ?[]const u8 = null;
-    var as_viewer = false;
+    var as_primary = false;
 
     for (args) |arg| {
-        if (std.mem.eql(u8, arg, "--viewer") or std.mem.eql(u8, arg, "-v")) {
-            as_viewer = true;
+        if (std.mem.eql(u8, arg, "--primary") or std.mem.eql(u8, arg, "-p")) {
+            as_primary = true;
+        } else if (std.mem.eql(u8, arg, "--viewer") or std.mem.eql(u8, arg, "-v")) {
+            // Keep --viewer for backwards compatibility, but it's now the default
         } else if (socket_arg == null) {
             socket_arg = arg;
         }
     }
 
     if (socket_arg == null) {
-        try writeAll(STDERR_FILENO, "Usage: vanish attach [--viewer] <socket|name>\n");
+        try writeAll(STDERR_FILENO, "Usage: vanish attach [--primary] <name>\n");
         std.process.exit(1);
     }
 
@@ -136,12 +206,12 @@ fn cmdAttach(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const con
     defer alloc.free(socket_path);
 
     const Client = @import("client.zig");
-    try Client.attach(alloc, socket_path, as_viewer, cfg);
+    try Client.attach(alloc, socket_path, !as_primary, cfg);
 }
 
 fn cmdSend(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
     if (args.len < 2) {
-        try writeAll(STDERR_FILENO, "Usage: vanish send <socket|name> <keys>\n");
+        try writeAll(STDERR_FILENO, "Usage: vanish send <name> <keys>\n");
         std.process.exit(1);
     }
 
@@ -258,7 +328,7 @@ fn cmdClients(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const co
     }
 
     if (socket_arg == null) {
-        try writeAll(STDERR_FILENO, "Usage: vanish clients [--json] <socket|name>\n");
+        try writeAll(STDERR_FILENO, "Usage: vanish clients [--json] <name>\n");
         std.process.exit(1);
     }
 
@@ -377,7 +447,7 @@ fn writeClientsJson(alloc: std.mem.Allocator, payload: []const u8, count: usize)
 
 fn cmdKick(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
     if (args.len < 2) {
-        try writeAll(STDERR_FILENO, "Usage: vanish kick <socket|name> <client-id>\n");
+        try writeAll(STDERR_FILENO, "Usage: vanish kick <name> <client-id>\n");
         std.process.exit(1);
     }
 

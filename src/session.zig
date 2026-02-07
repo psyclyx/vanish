@@ -30,6 +30,10 @@ rows: u16 = 24,
 next_client_id: u32 = 1,
 
 pub fn run(alloc: std.mem.Allocator, socket_path: []const u8, argv: []const []const u8) !void {
+    return runWithNotify(alloc, socket_path, argv, null);
+}
+
+pub fn runWithNotify(alloc: std.mem.Allocator, socket_path: []const u8, argv: []const []const u8, notify_fd: ?posix.fd_t) !void {
     var pty = try Pty.open();
     errdefer pty.close();
 
@@ -46,6 +50,12 @@ pub fn run(alloc: std.mem.Allocator, socket_path: []const u8, argv: []const []co
     errdefer terminal.deinit();
 
     sig.setup();
+
+    // Notify parent that socket is ready
+    if (notify_fd) |fd| {
+        _ = posix.write(fd, "R") catch {};
+        posix.close(fd);
+    }
 
     var session = Session{
         .alloc = alloc,
@@ -360,6 +370,11 @@ fn handleClientInput(self: *Session, is_primary: bool, viewer_idx: usize) !void 
 
 fn sendScrollback(self: *Session, fd: posix.fd_t) !void {
     if (self.terminal) |*term| {
+        // Don't send pre-clear scrollback to avoid terminal divergence
+        if (term.screen_cleared) {
+            return;
+        }
+
         const scrollback = term.dumpScrollback(self.alloc) catch return;
         defer self.alloc.free(scrollback);
 
