@@ -114,8 +114,11 @@ lightweight libghostty terminal session multiplexer
 ### Next Steps
 1. **Configuration file** - TOML or similar for keybinds, leader key
 2. **Tests** - More comprehensive unit tests
-3. **Documentation** - README, man page
-4. **Send command** - `vanish send <name> <keys>` for scripting
+
+### Completed This Session
+- [x] Send command - `vanish send <name> <keys>` for scripting
+- [x] README.md - User documentation
+- [x] Updated DESIGN.md - Reflects current state
 
 ### Open Questions Resolved
 - Status bar content: session name + role (simple, useful)

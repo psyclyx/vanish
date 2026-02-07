@@ -100,14 +100,16 @@ When running apps like vim/nvim that use the alternate screen:
 ### Default Bindings (under leader)
 
 - `d` - Detach
-- `hjkl` - Scroll mode navigation (if in alternate screen mode)
-- `q` - Quit scroll mode / Return to passthrough
+- `k/j` - Scroll up/down (enters scroll mode)
+- `Ctrl+U/Ctrl+D` - Page up/down
+- `g/G` - Scroll to top/bottom
 - `?` - Show full keybinding help
 - `s` - Toggle status bar
+- `Esc` - Cancel
 
 ### Leader Key
 
-Default: `Ctrl-\` (configurable)
+Default: `Ctrl-A` (configurable)
 
 When pressed:
 1. Enter leader mode
@@ -171,49 +173,43 @@ status_bar = false
 
 ```
 # Create new session
-vanish new [socket-path] [--] command [args...]
+vanish new <name> [--] command [args...]
 
 # Attach to session
-vanish attach <socket-path>
+vanish attach [--viewer] <name>
+
+# Send keys to session (for scripting)
+vanish send <name> <keys>
 
 # List sessions
-vanish list
-
-# Send command to session
-vanish send <socket-path> <input>
+vanish list [directory]
 ```
 
-## Implementation Phases
+Session names without `/` are stored in `$XDG_RUNTIME_DIR/vanish/`.
 
-### Phase 1: Core (MVP)
+## Implementation Status
 
-- [ ] Nix build infrastructure
-- [ ] Basic session daemon (pty + ghostty-vt)
-- [ ] Socket communication
-- [ ] Single client (primary only)
-- [ ] Basic output forwarding
-- [ ] Detach/attach
+### Completed (MVP)
 
-### Phase 2: Multi-Client
+- [x] Nix build infrastructure
+- [x] Basic session daemon (pty + ghostty-vt)
+- [x] Socket communication
+- [x] Primary and viewer clients
+- [x] Terminal state preservation on connect
+- [x] Detach/attach
+- [x] Leader key handling
+- [x] Keybinding system
+- [x] Status bar
+- [x] Keybinding help overlay
+- [x] Scroll mode
+- [x] Session listing
+- [x] Send command for scripting
+- [x] Signal handling (SIGWINCH, SIGTERM)
 
-- [ ] Viewer support
-- [ ] Full screen rendering on connect
-- [ ] Differential updates
+### Future
 
-### Phase 3: UI
-
-- [ ] Leader key handling
-- [ ] Keybinding system
-- [ ] Status bar
-- [ ] Keybinding help overlay
-
-### Phase 4: Polish
-
-- [ ] Scroll mode
-- [ ] Configuration file
-- [ ] Session listing
-- [ ] Error handling refinement
-- [ ] Tests
+- [ ] Configuration file (TOML for keybinds, leader key)
+- [ ] More comprehensive tests
 
 ## Open Questions
 
