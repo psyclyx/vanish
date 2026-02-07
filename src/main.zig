@@ -4,6 +4,7 @@ const posix = std.posix;
 const Pty = @import("pty.zig");
 const Session = @import("session.zig");
 const protocol = @import("protocol.zig");
+const VTerminal = @import("terminal.zig");
 
 const STDERR_FILENO = posix.STDERR_FILENO;
 const STDOUT_FILENO = posix.STDOUT_FILENO;

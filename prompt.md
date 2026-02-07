@@ -64,7 +64,50 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
-## 2026-02-07: Initial Implementation
+## 2026-02-07: Session 2 - Core UX Features
+
+### Completed
+- [x] ghostty-vt integration (src/terminal.zig)
+  - VTerminal wrapper around ghostty's Terminal
+  - dumpScreen() uses TerminalFormatter with VT emit for screen sync
+  - Session feeds PTY output through terminal emulator
+  - New clients receive full terminal state as VT sequences
+- [x] Leader key handling (src/keybind.zig)
+  - Configurable leader key (default Ctrl+A)
+  - Keybind state machine: normal -> leader mode -> action
+  - Default bindings: d=detach, s=status, k/j=scroll, ?=help
+- [x] Signal handling (src/signal.zig)
+  - SIGWINCH for terminal resize
+  - SIGTERM/SIGINT for graceful shutdown
+  - Client forwards resize to session via protocol
+- [x] Client keybind integration
+  - Input interception for leader key
+  - Keybind hint display on bottom line
+  - Help overlay (Ctrl+A ?)
+
+### Architecture Refinements
+- Keybinds handled client-side (not session) - this is correct because:
+  - Client controls its own terminal (raw mode)
+  - Actions like detach are client-side
+  - Overlays (hint, help) are client-side rendering
+- VT screen dump preserves terminal state across client reconnect
+
+### Next Steps
+1. **Status bar** - Persistent status line (toggle with Ctrl+A s)
+2. **Scroll mode** - Navigate scrollback with hjkl
+3. **Viewer mode** - Read-only clients (input blocked)
+4. **Configuration file** - TOML or similar for keybinds, leader key
+5. **Session signal handling** - Cleanup on SIGTERM
+6. **Tests** - More comprehensive unit tests
+
+### Open Questions
+- Status bar content: session name? client count? time?
+- Scroll mode UX: how to exit? visual indicator?
+- Configuration format and location (~/.config/vanish/?)
+
+---
+
+## 2026-02-07: Session 1 - Initial Implementation
 
 ### Completed
 - [x] Nix infrastructure (shell.nix, default.nix, overlay.nix, .envrc)
@@ -82,23 +125,10 @@ lightweight libghostty terminal session multiplexer
 - Single poll loop for all I/O in session daemon
 - PTY master/slave for child process
 
-### Next Steps
-1. **ghostty-vt integration** - Add terminal emulation for state preservation
-2. **Leader key handling** - Intercept input for keybindings
-3. **Status bar** - Render at bottom of terminal
-4. **Keybinding help overlay** - Show available bindings
-5. **Viewer mode** - Read-only clients
-6. **Scroll mode** - Navigate scrollback
-7. **Configuration** - Leader key, scrollback size, etc.
-8. **Signal handling** - SIGWINCH for resize, SIGTERM for cleanup
-
-### Open Questions
-- ghostty-vt API stability - need to track upstream changes
-- Viewer resize handling - adapt rendering or use primary's size?
-- Scrollback sync between clients
-
 ### Code Quality Notes
 - Zig 0.15 has significant API changes from 0.13/0.14
 - ArrayList is now "unmanaged" - allocator passed to each function
 - Stream.writer() now requires a buffer parameter
+- CallingConvention is `.c` not `.C`
+- sigaction doesn't return error union
 - Need to handle NixOS paths (no /bin/echo, etc.)

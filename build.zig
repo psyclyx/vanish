@@ -11,6 +11,10 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
 
+    if (b.lazyDependency("ghostty", .{})) |dep| {
+        exe_mod.addImport("ghostty-vt", dep.module("ghostty-vt"));
+    }
+
     const exe = b.addExecutable(.{
         .name = "vanish",
         .root_module = exe_mod,
@@ -29,7 +33,12 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
+
+    if (b.lazyDependency("ghostty", .{})) |dep| {
+        test_mod.addImport("ghostty-vt", dep.module("ghostty-vt"));
+    }
 
     const tests = b.addTest(.{
         .root_module = test_mod,

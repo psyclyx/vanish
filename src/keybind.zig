@@ -1,0 +1,120 @@
+const std = @import("std");
+
+pub const Action = enum {
+    detach,
+    scroll_up,
+    scroll_down,
+    scroll_page_up,
+    scroll_page_down,
+    scroll_top,
+    scroll_bottom,
+    toggle_status,
+    help,
+    cancel,
+};
+
+pub const Bind = struct {
+    key: u8,
+    ctrl: bool = false,
+    action: Action,
+    desc: []const u8,
+};
+
+pub const Config = struct {
+    leader: u8 = 0x01, // Ctrl+A
+    leader_ctrl: bool = true,
+    binds: []const Bind = &default_binds,
+};
+
+const default_binds = [_]Bind{
+    .{ .key = 'd', .action = .detach, .desc = "detach" },
+    .{ .key = 0x01, .ctrl = true, .action = .detach, .desc = "detach" }, // Ctrl+A Ctrl+A
+    .{ .key = 'k', .action = .scroll_up, .desc = "scroll up" },
+    .{ .key = 'j', .action = .scroll_down, .desc = "scroll down" },
+    .{ .key = 'u', .ctrl = true, .action = .scroll_page_up, .desc = "page up" },
+    .{ .key = 'd', .ctrl = true, .action = .scroll_page_down, .desc = "page down" },
+    .{ .key = 'g', .action = .scroll_top, .desc = "scroll top" },
+    .{ .key = 'G', .action = .scroll_bottom, .desc = "scroll bottom" },
+    .{ .key = 's', .action = .toggle_status, .desc = "toggle status" },
+    .{ .key = '?', .action = .help, .desc = "help" },
+    .{ .key = 0x1b, .action = .cancel, .desc = "cancel" }, // Escape
+};
+
+pub const State = struct {
+    config: Config,
+    in_leader: bool = false,
+    show_status: bool = false,
+    scroll_offset: i32 = 0,
+
+    pub fn init(config: Config) State {
+        return .{ .config = config };
+    }
+
+    pub fn isLeaderKey(self: *const State, byte: u8, is_ctrl: bool) bool {
+        return byte == self.config.leader and is_ctrl == self.config.leader_ctrl;
+    }
+
+    pub fn processKey(self: *State, byte: u8, is_ctrl: bool) ?Action {
+        if (!self.in_leader) {
+            if (self.isLeaderKey(byte, is_ctrl)) {
+                self.in_leader = true;
+                return null;
+            }
+            return null;
+        }
+
+        self.in_leader = false;
+
+        for (self.config.binds) |bind| {
+            if (bind.key == byte and bind.ctrl == is_ctrl) {
+                return bind.action;
+            }
+        }
+
+        return .cancel;
+    }
+
+    pub fn formatHint(self: *const State, buf: []u8) ![]const u8 {
+        var fbs = std.io.fixedBufferStream(buf);
+        const writer = fbs.writer();
+
+        if (self.in_leader) {
+            try writer.writeAll("\x1b[7m");
+            try writer.writeAll(" ^A: ");
+            var first = true;
+            for (self.config.binds) |bind| {
+                if (bind.action == .cancel) continue;
+                if (!first) try writer.writeAll(" | ");
+                first = false;
+                if (bind.ctrl) {
+                    try writer.print("^{c}:{s}", .{ bind.key + 'A' - 1, bind.desc });
+                } else {
+                    try writer.print("{c}:{s}", .{ bind.key, bind.desc });
+                }
+            }
+            try writer.writeAll(" \x1b[0m");
+        }
+
+        return fbs.getWritten();
+    }
+};
+
+test "keybind basic" {
+    var state = State.init(.{});
+
+    try std.testing.expect(!state.in_leader);
+    _ = state.processKey(0x01, true); // Ctrl+A
+    try std.testing.expect(state.in_leader);
+
+    const action = state.processKey('d', false);
+    try std.testing.expect(action == .detach);
+    try std.testing.expect(!state.in_leader);
+}
+
+test "keybind cancel" {
+    var state = State.init(.{});
+
+    _ = state.processKey(0x01, true);
+    const action = state.processKey('x', false);
+    try std.testing.expect(action == .cancel);
+}

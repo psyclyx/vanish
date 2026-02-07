@@ -3,9 +3,102 @@ const posix = std.posix;
 const linux = std.os.linux;
 
 const protocol = @import("protocol.zig");
+const keybind = @import("keybind.zig");
+const sig = @import("signal.zig");
 
 const STDIN = 0;
 const STDOUT = 1;
+
+const Client = struct {
+    fd: posix.fd_t,
+    keys: keybind.State,
+    cols: u16,
+    rows: u16,
+    running: bool = true,
+    hint_visible: bool = false,
+
+    fn handleInput(self: *Client, buf: []const u8) !void {
+        var i: usize = 0;
+        while (i < buf.len) {
+            const byte = buf[i];
+            const is_ctrl = byte >= 1 and byte <= 26;
+
+            if (self.keys.processKey(byte, is_ctrl)) |action| {
+                try self.executeAction(action);
+                self.updateHint();
+            } else if (self.keys.in_leader) {
+                self.updateHint();
+            } else {
+                protocol.writeMsg(self.fd, @intFromEnum(protocol.ClientMsg.input), buf[i .. i + 1]) catch {
+                    self.running = false;
+                    return;
+                };
+            }
+            i += 1;
+        }
+    }
+
+    fn executeAction(self: *Client, action: keybind.Action) !void {
+        switch (action) {
+            .detach => {
+                protocol.writeMsg(self.fd, @intFromEnum(protocol.ClientMsg.detach), "") catch {};
+                self.running = false;
+            },
+            .toggle_status => {
+                self.keys.show_status = !self.keys.show_status;
+            },
+            .help => {
+                self.showHelp();
+            },
+            .cancel => {},
+            else => {},
+        }
+    }
+
+    fn updateHint(self: *Client) void {
+        var hint_buf: [256]u8 = undefined;
+        const hint = self.keys.formatHint(&hint_buf) catch "";
+
+        if (hint.len > 0) {
+            self.showHint(hint);
+            self.hint_visible = true;
+        } else if (self.hint_visible) {
+            self.clearHint();
+            self.hint_visible = false;
+        }
+    }
+
+    fn showHint(self: *Client, hint: []const u8) void {
+        var buf: [512]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "\x1b7\x1b[{d};1H{s}\x1b8", .{ self.rows, hint }) catch return;
+        _ = posix.write(STDOUT, msg) catch {};
+    }
+
+    fn clearHint(self: *Client) void {
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "\x1b7\x1b[{d};1H\x1b[K\x1b8", .{self.rows}) catch return;
+        _ = posix.write(STDOUT, msg) catch {};
+    }
+
+    fn showHelp(self: *Client) void {
+        _ = self;
+        const help =
+            \\
+            \\ vanish keybindings (leader: Ctrl+A)
+            \\
+            \\   d       detach from session
+            \\   s       toggle status bar
+            \\   k/j     scroll up/down
+            \\   Ctrl+U  page up
+            \\   Ctrl+D  page down
+            \\   g/G     scroll to top/bottom
+            \\   ?       show this help
+            \\   Esc     cancel
+            \\
+        ;
+        _ = posix.write(STDOUT, help) catch {};
+    }
+};
 
 pub fn attach(alloc: std.mem.Allocator, socket_path: []const u8) !void {
     _ = alloc;
@@ -58,17 +151,36 @@ pub fn attach(alloc: std.mem.Allocator, socket_path: []const u8) !void {
         if (old_termios) |t| restoreTermios(t);
     }
 
-    try runClientLoop(fd);
-}
-
-fn runClientLoop(fd: posix.fd_t) !void {
-    var poll_fds = [_]posix.pollfd{
-        .{ .fd = STDIN, .events = posix.POLL.IN, .revents = 0 },
-        .{ .fd = fd, .events = posix.POLL.IN, .revents = 0 },
+    var client = Client{
+        .fd = fd,
+        .keys = keybind.State.init(.{}),
+        .cols = size.cols,
+        .rows = size.rows,
     };
 
-    while (true) {
-        const ready = posix.poll(&poll_fds, -1) catch |err| {
+    try runClientLoop(&client);
+}
+
+fn runClientLoop(client: *Client) !void {
+    sig.setup();
+
+    var poll_fds = [_]posix.pollfd{
+        .{ .fd = STDIN, .events = posix.POLL.IN, .revents = 0 },
+        .{ .fd = client.fd, .events = posix.POLL.IN, .revents = 0 },
+    };
+
+    while (client.running) {
+        if (sig.checkTerm()) break;
+
+        if (sig.checkWinch()) {
+            const size = getTerminalSize() catch continue;
+            client.cols = size.cols;
+            client.rows = size.rows;
+            const resize = protocol.Resize{ .cols = size.cols, .rows = size.rows };
+            protocol.writeStruct(client.fd, @intFromEnum(protocol.ClientMsg.resize), resize) catch {};
+        }
+
+        const ready = posix.poll(&poll_fds, 100) catch |err| {
             if (err == error.Interrupted) continue;
             return err;
         };
@@ -79,11 +191,11 @@ fn runClientLoop(fd: posix.fd_t) !void {
             var buf: [1024]u8 = undefined;
             const n = posix.read(STDIN, &buf) catch break;
             if (n == 0) break;
-            protocol.writeMsg(fd, @intFromEnum(protocol.ClientMsg.input), buf[0..n]) catch break;
+            try client.handleInput(buf[0..n]);
         }
 
         if (poll_fds[1].revents & posix.POLL.IN != 0) {
-            const header = protocol.readHeader(fd) catch break;
+            const header = protocol.readHeader(client.fd) catch break;
 
             switch (@as(protocol.ServerMsg, @enumFromInt(header.msg_type))) {
                 .output, .full => {
@@ -92,7 +204,7 @@ fn runClientLoop(fd: posix.fd_t) !void {
                         var buf: [4096]u8 = undefined;
                         while (remaining > 0) {
                             const to_read: usize = @min(remaining, buf.len);
-                            protocol.readExact(fd, buf[0..to_read]) catch break;
+                            protocol.readExact(client.fd, buf[0..to_read]) catch break;
                             _ = posix.write(STDOUT, buf[0..to_read]) catch {};
                             remaining -= @intCast(to_read);
                         }
@@ -100,7 +212,7 @@ fn runClientLoop(fd: posix.fd_t) !void {
                 },
                 .exit => {
                     var buf: [@sizeOf(protocol.Exit)]u8 = undefined;
-                    _ = protocol.readExact(fd, &buf) catch {};
+                    _ = protocol.readExact(client.fd, &buf) catch {};
                     return;
                 },
                 else => {
@@ -108,7 +220,7 @@ fn runClientLoop(fd: posix.fd_t) !void {
                     var skip_buf: [1024]u8 = undefined;
                     while (remaining > 0) {
                         const chunk: usize = @min(remaining, skip_buf.len);
-                        protocol.readExact(fd, skip_buf[0..chunk]) catch break;
+                        protocol.readExact(client.fd, skip_buf[0..chunk]) catch break;
                         remaining -= @intCast(chunk);
                     }
                 },

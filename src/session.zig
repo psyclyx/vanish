@@ -4,6 +4,7 @@ const linux = std.os.linux;
 
 const Pty = @import("pty.zig").Pty;
 const protocol = @import("protocol.zig");
+const VTerminal = @import("terminal.zig");
 
 const Client = struct {
     fd: posix.fd_t,
@@ -18,9 +19,12 @@ alloc: std.mem.Allocator,
 pty: Pty,
 socket: posix.socket_t,
 socket_path: []const u8,
+terminal: ?VTerminal = null,
 primary: ?Client = null,
 viewers: std.ArrayList(Client) = .empty,
 running: bool = true,
+cols: u16 = 80,
+rows: u16 = 24,
 
 pub fn run(alloc: std.mem.Allocator, socket_path: []const u8, argv: []const []const u8) !void {
     var pty = try Pty.open();
@@ -35,11 +39,15 @@ pub fn run(alloc: std.mem.Allocator, socket_path: []const u8, argv: []const []co
         std.fs.deleteFileAbsolute(socket_path) catch {};
     }
 
+    var terminal = try VTerminal.init(alloc, 80, 24);
+    errdefer terminal.deinit();
+
     var session = Session{
         .alloc = alloc,
         .pty = pty,
         .socket = socket,
         .socket_path = socket_path,
+        .terminal = terminal,
     };
     defer session.deinit();
 
@@ -47,6 +55,7 @@ pub fn run(alloc: std.mem.Allocator, socket_path: []const u8, argv: []const []co
 }
 
 fn deinit(self: *Session) void {
+    if (self.terminal) |*t| t.deinit();
     if (self.primary) |c| posix.close(c.fd);
     for (self.viewers.items) |c| posix.close(c.fd);
     self.viewers.deinit(self.alloc);
@@ -162,6 +171,12 @@ fn handlePtyOutput(self: *Session) !void {
 
     const data = buf[0..n];
 
+    // Feed data through terminal emulator for state tracking
+    if (self.terminal) |*term| {
+        term.feed(data);
+    }
+
+    // Forward to all clients
     if (self.primary) |c| {
         protocol.writeMsg(c.fd, @intFromEnum(protocol.ServerMsg.output), data) catch {
             self.removePrimary();
@@ -217,6 +232,9 @@ fn handleNewConnection(self: *Session) !void {
         return;
     };
 
+    // Send current terminal state to new client
+    self.sendTerminalState(conn) catch {};
+
     const client = Client{
         .fd = conn,
         .role = hello.role,
@@ -226,12 +244,28 @@ fn handleNewConnection(self: *Session) !void {
 
     if (hello.role == .primary) {
         self.primary = client;
+        self.cols = hello.cols;
+        self.rows = hello.rows;
         self.pty.resize(.{ .rows = hello.rows, .cols = hello.cols }) catch {};
+        if (self.terminal) |*term| {
+            term.resize(hello.cols, hello.rows) catch {};
+        }
     } else {
         self.viewers.append(self.alloc, client) catch {
             posix.close(conn);
             return;
         };
+    }
+}
+
+fn sendTerminalState(self: *Session, fd: posix.fd_t) !void {
+    if (self.terminal) |*term| {
+        const screen = term.dumpScreen(self.alloc) catch return;
+        defer self.alloc.free(screen);
+
+        if (screen.len > 0) {
+            try protocol.writeMsg(fd, @intFromEnum(protocol.ServerMsg.full), screen);
+        }
     }
 }
 
@@ -271,7 +305,12 @@ fn handleClientInput(self: *Session, is_primary: bool, viewer_idx: usize) !void 
                 if (is_primary) {
                     client.cols = resize.cols;
                     client.rows = resize.rows;
+                    self.cols = resize.cols;
+                    self.rows = resize.rows;
                     self.pty.resize(.{ .rows = resize.rows, .cols = resize.cols }) catch {};
+                    if (self.terminal) |*term| {
+                        term.resize(resize.cols, resize.rows) catch {};
+                    }
                 }
             }
         },
