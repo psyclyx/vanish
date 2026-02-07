@@ -12,10 +12,36 @@ const HttpServer = @import("http.zig");
 const STDERR_FILENO = posix.STDERR_FILENO;
 const STDOUT_FILENO = posix.STDOUT_FILENO;
 
-const usage =
+const usage_header =
     \\vanish - terminal session multiplexer
     \\
     \\Usage:
+    \\  vanish [options] <command> [command-options]
+    \\
+    \\Global options:
+    \\  -c, --config <path>  Config file (default: {s})
+    \\  -v                   Verbose output
+    \\  -vv                  Debug output
+    \\  -h, --help           Show this help
+    \\
+    \\Commands:
+    \\  new          Create session and attach
+    \\  attach       Attach to existing session
+    \\  send         Send keys to a session
+    \\  list         List sessions
+    \\  clients      List connected clients
+    \\  kick         Disconnect a client
+    \\  serve        Start HTTP server for web terminal access
+    \\  otp          Generate one-time password for auth
+    \\  revoke       Revoke authentication tokens
+    \\  print-config Print effective configuration
+    \\
+    \\Run 'vanish <command> --help' for command-specific options.
+    \\
+;
+
+const usage_commands =
+    \\Command usage:
     \\  vanish new [--detach] <name> <command> [args...]
     \\  vanish attach [--primary] <name>
     \\  vanish send <name> <keys>
@@ -25,17 +51,7 @@ const usage =
     \\  vanish serve [options]
     \\  vanish otp [options]
     \\  vanish revoke [options]
-    \\
-    \\Commands:
-    \\  new      Create session and attach (--detach to run in background)
-    \\  attach   Attach to session (viewer by default, --primary to take over)
-    \\  send     Send keys to a session
-    \\  list     List sessions
-    \\  clients  List connected clients
-    \\  kick     Disconnect a client by ID
-    \\  serve    Start HTTP server for web-based terminal access
-    \\  otp      Generate one-time password for web authentication
-    \\  revoke   Revoke authentication tokens
+    \\  vanish print-config
     \\
     \\Serve options:
     \\  -b, --bind <addr>    Bind address (default: 127.0.0.1 and ::1)
@@ -57,6 +73,14 @@ const usage =
     \\
 ;
 
+pub const Verbosity = enum(u2) {
+    quiet = 0,
+    verbose = 1,
+    debug = 2,
+};
+
+var global_verbosity: Verbosity = .quiet;
+
 fn writeAll(fd: posix.fd_t, data: []const u8) !void {
     var written: usize = 0;
     while (written < data.len) {
@@ -68,49 +92,127 @@ fn writeAll(fd: posix.fd_t, data: []const u8) !void {
     }
 }
 
+fn logVerbose(comptime fmt: []const u8, args: anytype) void {
+    if (@intFromEnum(global_verbosity) >= @intFromEnum(Verbosity.verbose)) {
+        var buf: [1024]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, fmt ++ "\n", args) catch return;
+        writeAll(STDERR_FILENO, msg) catch {};
+    }
+}
+
+fn logDebug(comptime fmt: []const u8, args: anytype) void {
+    if (@intFromEnum(global_verbosity) >= @intFromEnum(Verbosity.debug)) {
+        var buf: [1024]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "[debug] " ++ fmt ++ "\n", args) catch return;
+        writeAll(STDERR_FILENO, msg) catch {};
+    }
+}
+
+fn printUsage(alloc: std.mem.Allocator) void {
+    const default_path = config.getDefaultConfigPath(alloc);
+    defer if (default_path) |p| alloc.free(p);
+
+    var buf: [2048]u8 = undefined;
+    const header = std.fmt.bufPrint(&buf, usage_header, .{default_path orelse "(none)"}) catch usage_header;
+    writeAll(STDOUT_FILENO, header) catch {};
+    writeAll(STDOUT_FILENO, usage_commands) catch {};
+}
+
 pub fn main() !void {
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
-    var cfg = config.load(alloc);
-    defer cfg.deinit();
-
     const args = try std.process.argsAlloc(alloc);
     defer std.process.argsFree(alloc, args);
 
-    if (args.len < 2) {
-        try writeAll(STDERR_FILENO, usage);
+    // Parse global options
+    var config_path: ?[]const u8 = null;
+    var arg_idx: usize = 1;
+
+    while (arg_idx < args.len) {
+        const arg = args[arg_idx];
+        if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--config")) {
+            arg_idx += 1;
+            if (arg_idx >= args.len) {
+                try writeAll(STDERR_FILENO, "Error: --config requires a path argument\n");
+                std.process.exit(1);
+            }
+            config_path = args[arg_idx];
+            arg_idx += 1;
+        } else if (std.mem.eql(u8, arg, "-vv")) {
+            global_verbosity = .debug;
+            arg_idx += 1;
+        } else if (std.mem.eql(u8, arg, "-v")) {
+            global_verbosity = .verbose;
+            arg_idx += 1;
+        } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
+            printUsage(alloc);
+            return;
+        } else if (arg.len > 0 and arg[0] == '-') {
+            // Unknown global option - might be command-specific, stop parsing
+            break;
+        } else {
+            // Not an option, must be the command
+            break;
+        }
+    }
+
+    if (arg_idx >= args.len) {
+        printUsage(alloc);
         std.process.exit(1);
     }
 
-    const cmd = args[1];
+    // Load config
+    const load_result = config.load(alloc, config_path);
+    var cfg = load_result.config;
+    defer cfg.deinit();
+    defer if (load_result.path_searched) |p| alloc.free(p);
+
+    // Log config loading
+    if (load_result.path_used) |path| {
+        logVerbose("config: loaded from {s}", .{path});
+    } else if (config_path != null) {
+        try writeAll(STDERR_FILENO, "Warning: could not load config from specified path, using defaults\n");
+    } else {
+        logVerbose("config: using defaults (no config file found)", .{});
+    }
+    logDebug("config: leader=^{c} socket_dir={s} serve.port={d}", .{
+        if (cfg.leader >= 1 and cfg.leader <= 26) @as(u8, 'A' + cfg.leader - 1) else '?',
+        cfg.socket_dir orelse "(default)",
+        cfg.serve.port,
+    });
+
+    const cmd = args[arg_idx];
+    const cmd_args = args[arg_idx + 1 ..];
 
     if (std.mem.eql(u8, cmd, "new")) {
-        try cmdNew(alloc, args[2..], &cfg);
+        try cmdNew(alloc, cmd_args, &cfg);
     } else if (std.mem.eql(u8, cmd, "attach")) {
-        try cmdAttach(alloc, args[2..], &cfg);
+        try cmdAttach(alloc, cmd_args, &cfg);
     } else if (std.mem.eql(u8, cmd, "send")) {
-        try cmdSend(alloc, args[2..], &cfg);
+        try cmdSend(alloc, cmd_args, &cfg);
     } else if (std.mem.eql(u8, cmd, "list")) {
-        try cmdList(alloc, args[2..], &cfg);
+        try cmdList(alloc, cmd_args, &cfg);
     } else if (std.mem.eql(u8, cmd, "clients")) {
-        try cmdClients(alloc, args[2..], &cfg);
+        try cmdClients(alloc, cmd_args, &cfg);
     } else if (std.mem.eql(u8, cmd, "kick")) {
-        try cmdKick(alloc, args[2..], &cfg);
+        try cmdKick(alloc, cmd_args, &cfg);
     } else if (std.mem.eql(u8, cmd, "serve")) {
-        try cmdServe(alloc, args[2..], &cfg);
+        try cmdServe(alloc, cmd_args, &cfg);
     } else if (std.mem.eql(u8, cmd, "otp")) {
-        try cmdOtp(alloc, args[2..]);
+        try cmdOtp(alloc, cmd_args);
     } else if (std.mem.eql(u8, cmd, "revoke")) {
-        try cmdRevoke(alloc, args[2..]);
+        try cmdRevoke(alloc, cmd_args);
+    } else if (std.mem.eql(u8, cmd, "print-config")) {
+        try cmdPrintConfig(&cfg);
     } else if (std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "--help")) {
-        try writeAll(STDOUT_FILENO, usage);
+        printUsage(alloc);
     } else {
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Unknown command: {s}\n", .{cmd}) catch "Unknown command\n";
         try writeAll(STDERR_FILENO, msg);
-        try writeAll(STDERR_FILENO, usage);
+        printUsage(alloc);
         std.process.exit(1);
     }
 }
@@ -761,6 +863,16 @@ fn cmdRevoke(alloc: std.mem.Allocator, args: []const []const u8) !void {
         try writeAll(STDERR_FILENO, "Specify --all, --temporary, --daemon, --indefinite, or --session\n");
         std.process.exit(1);
     }
+}
+
+fn cmdPrintConfig(cfg: *const config.Config) !void {
+    var buf: [4096]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    cfg.writeJson(stream.writer()) catch {
+        try writeAll(STDERR_FILENO, "Failed to serialize config\n");
+        std.process.exit(1);
+    };
+    try writeAll(STDOUT_FILENO, stream.getWritten());
 }
 
 fn parseDuration(s: []const u8) ?i64 {

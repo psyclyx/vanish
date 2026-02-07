@@ -29,25 +29,142 @@ pub const Config = struct {
             .binds = self.binds,
         };
     }
+
+    /// Write config as JSON to the provided writer
+    pub fn writeJson(self: *const Config, writer: anytype) !void {
+        try writer.writeAll("{\n");
+
+        // Leader key
+        try writer.writeAll("  \"leader\": \"");
+        if (self.leader_ctrl and self.leader >= 1 and self.leader <= 26) {
+            try writer.print("^{c}", .{'A' + self.leader - 1});
+        } else {
+            try writer.writeByte(self.leader);
+        }
+        try writer.writeAll("\",\n");
+
+        // Socket dir
+        try writer.writeAll("  \"socket_dir\": ");
+        if (self.socket_dir) |dir| {
+            try writer.writeByte('"');
+            try writer.writeAll(dir);
+            try writer.writeAll("\",\n");
+        } else {
+            try writer.writeAll("null,\n");
+        }
+
+        // Serve config
+        try writer.writeAll("  \"serve\": {\n");
+        try writer.writeAll("    \"bind\": ");
+        if (self.serve.bind) |bind| {
+            try writer.writeByte('"');
+            try writer.writeAll(bind);
+            try writer.writeAll("\",\n");
+        } else {
+            try writer.writeAll("null,\n");
+        }
+        try writer.print("    \"port\": {d}\n", .{self.serve.port});
+        try writer.writeAll("  },\n");
+
+        // Binds
+        try writer.writeAll("  \"binds\": {\n");
+        for (self.binds, 0..) |bind, i| {
+            try writer.writeAll("    \"");
+            if (bind.ctrl and bind.key >= 1 and bind.key <= 26) {
+                try writer.print("^{c}", .{'A' + bind.key - 1});
+            } else if (bind.key == 0x1b) {
+                try writer.writeAll("Escape");
+            } else {
+                try writer.writeByte(bind.key);
+            }
+            try writer.writeAll("\": \"");
+            try writer.writeAll(actionToString(bind.action));
+            try writer.writeByte('"');
+            if (i < self.binds.len - 1) {
+                try writer.writeByte(',');
+            }
+            try writer.writeByte('\n');
+        }
+        try writer.writeAll("  }\n");
+        try writer.writeAll("}\n");
+    }
 };
 
-pub fn load(alloc: std.mem.Allocator) Config {
-    const path = getConfigPath(alloc) orelse return .{};
-    defer alloc.free(path);
-
-    const file = std.fs.openFileAbsolute(path, .{}) catch return .{};
-    defer file.close();
-
-    const stat = file.stat() catch return .{};
-    if (stat.size > 1024 * 1024) return .{}; // 1MB limit
-
-    const content = file.readToEndAlloc(alloc, 1024 * 1024) catch return .{};
-    defer alloc.free(content);
-
-    return parse(alloc, content) catch .{};
+fn actionToString(action: keybind.Action) []const u8 {
+    return switch (action) {
+        .detach => "detach",
+        .scrollback => "scrollback",
+        .scroll_up => "scroll_up",
+        .scroll_down => "scroll_down",
+        .scroll_left => "scroll_left",
+        .scroll_right => "scroll_right",
+        .scroll_page_up => "scroll_page_up",
+        .scroll_page_down => "scroll_page_down",
+        .scroll_top => "scroll_top",
+        .scroll_bottom => "scroll_bottom",
+        .toggle_status => "toggle_status",
+        .takeover => "takeover",
+        .help => "help",
+        .cancel => "cancel",
+    };
 }
 
-fn getConfigPath(alloc: std.mem.Allocator) ?[]const u8 {
+pub const LoadResult = struct {
+    config: Config,
+    path_used: ?[]const u8, // null if defaults, otherwise the path that was loaded
+    path_searched: ?[]const u8, // the default path that would be searched
+};
+
+pub fn load(alloc: std.mem.Allocator, explicit_path: ?[]const u8) LoadResult {
+    const default_path = getDefaultConfigPath(alloc);
+
+    if (explicit_path) |path| {
+        if (loadFromPath(alloc, path)) |cfg| {
+            return .{
+                .config = cfg,
+                .path_used = path,
+                .path_searched = default_path,
+            };
+        }
+        // Explicit path failed - still return defaults but caller should check
+        return .{
+            .config = .{},
+            .path_used = null,
+            .path_searched = default_path,
+        };
+    }
+
+    if (default_path) |path| {
+        if (loadFromPath(alloc, path)) |cfg| {
+            return .{
+                .config = cfg,
+                .path_used = path,
+                .path_searched = default_path,
+            };
+        }
+    }
+
+    return .{
+        .config = .{},
+        .path_used = null,
+        .path_searched = default_path,
+    };
+}
+
+pub fn loadFromPath(alloc: std.mem.Allocator, path: []const u8) ?Config {
+    const file = std.fs.openFileAbsolute(path, .{}) catch return null;
+    defer file.close();
+
+    const stat = file.stat() catch return null;
+    if (stat.size > 1024 * 1024) return null; // 1MB limit
+
+    const content = file.readToEndAlloc(alloc, 1024 * 1024) catch return null;
+    defer alloc.free(content);
+
+    return parse(alloc, content) catch null;
+}
+
+pub fn getDefaultConfigPath(alloc: std.mem.Allocator) ?[]const u8 {
     if (std.posix.getenv("XDG_CONFIG_HOME")) |xdg| {
         return std.fmt.allocPrint(alloc, "{s}/vanish/config.json", .{xdg}) catch null;
     }
