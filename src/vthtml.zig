@@ -1,0 +1,375 @@
+const std = @import("std");
+const ghostty_vt = @import("ghostty-vt");
+const VTerminal = @import("terminal.zig");
+const paths = @import("paths.zig");
+
+/// Represents the rendered state of a single cell
+pub const Cell = struct {
+    /// UTF-8 encoded character (up to 4 bytes)
+    char: [4]u8 = .{ ' ', 0, 0, 0 },
+    char_len: u3 = 1,
+    /// Style encoded as flags + colors
+    bold: bool = false,
+    italic: bool = false,
+    underline: bool = false,
+    inverse: bool = false,
+    fg: Color = .{ .none = {} },
+    bg: Color = .{ .none = {} },
+
+    pub const Color = union(enum) {
+        none,
+        palette: u8,
+        rgb: struct { r: u8, g: u8, b: u8 },
+    };
+
+    fn eql(self: Cell, other: Cell) bool {
+        if (self.char_len != other.char_len) return false;
+        for (0..self.char_len) |i| {
+            if (self.char[i] != other.char[i]) return false;
+        }
+        if (self.bold != other.bold) return false;
+        if (self.italic != other.italic) return false;
+        if (self.underline != other.underline) return false;
+        if (self.inverse != other.inverse) return false;
+        if (!colorEql(self.fg, other.fg)) return false;
+        if (!colorEql(self.bg, other.bg)) return false;
+        return true;
+    }
+
+    fn colorEql(a: Color, b: Color) bool {
+        return switch (a) {
+            .none => b == .none,
+            .palette => |ai| switch (b) {
+                .palette => |bi| ai == bi,
+                else => false,
+            },
+            .rgb => |ar| switch (b) {
+                .rgb => |br| ar.r == br.r and ar.g == br.g and ar.b == br.b,
+                else => false,
+            },
+        };
+    }
+};
+
+/// A buffer storing the last-sent screen state for delta computation
+pub const ScreenBuffer = struct {
+    cells: []Cell,
+    cols: u16,
+    rows: u16,
+    alloc: std.mem.Allocator,
+
+    pub fn init(alloc: std.mem.Allocator, cols: u16, rows: u16) !ScreenBuffer {
+        const cells = try alloc.alloc(Cell, @as(usize, cols) * rows);
+        @memset(cells, Cell{});
+        return .{
+            .cells = cells,
+            .cols = cols,
+            .rows = rows,
+            .alloc = alloc,
+        };
+    }
+
+    pub fn deinit(self: *ScreenBuffer) void {
+        self.alloc.free(self.cells);
+    }
+
+    pub fn resize(self: *ScreenBuffer, cols: u16, rows: u16) !void {
+        self.alloc.free(self.cells);
+        self.cells = try self.alloc.alloc(Cell, @as(usize, cols) * rows);
+        @memset(self.cells, Cell{});
+        self.cols = cols;
+        self.rows = rows;
+    }
+
+    fn getCell(self: *ScreenBuffer, x: u16, y: u16) *Cell {
+        return &self.cells[@as(usize, y) * self.cols + x];
+    }
+
+    /// Copy current VTerminal state to buffer, return list of changed positions
+    pub fn updateFromVTerm(self: *ScreenBuffer, vterm: *VTerminal) ![]CellUpdate {
+        var updates: std.ArrayList(CellUpdate) = .empty;
+        errdefer updates.deinit(self.alloc);
+
+        const screen = vterm.term.screens.active;
+
+        var y: u16 = 0;
+        while (y < self.rows and y < vterm.rows) : (y += 1) {
+            const pt = ghostty_vt.point.Point{ .active = .{ .x = 0, .y = y } };
+            var row_pin = screen.pages.pin(pt) orelse continue;
+            const all_cells = row_pin.cells(.all);
+
+            var x: u16 = 0;
+            while (x < self.cols and x < vterm.cols) : (x += 1) {
+                const new_cell = if (x < all_cells.len) blk: {
+                    const vtcell = &all_cells[x];
+                    row_pin.x = x;
+                    break :blk cellFromVT(vtcell, row_pin);
+                } else Cell{};
+
+                const buf_cell = self.getCell(x, y);
+                if (!buf_cell.eql(new_cell)) {
+                    try updates.append(self.alloc, .{
+                        .x = x,
+                        .y = y,
+                        .cell = new_cell,
+                    });
+                    buf_cell.* = new_cell;
+                }
+            }
+        }
+
+        return updates.toOwnedSlice(self.alloc);
+    }
+
+    /// Get full screen as updates (for keyframes)
+    pub fn fullScreen(self: *ScreenBuffer, vterm: *VTerminal) ![]CellUpdate {
+        var updates: std.ArrayList(CellUpdate) = .empty;
+        errdefer updates.deinit(self.alloc);
+
+        const screen = vterm.term.screens.active;
+
+        var y: u16 = 0;
+        while (y < self.rows and y < vterm.rows) : (y += 1) {
+            const pt = ghostty_vt.point.Point{ .active = .{ .x = 0, .y = y } };
+            var row_pin = screen.pages.pin(pt) orelse continue;
+            const all_cells = row_pin.cells(.all);
+
+            var x: u16 = 0;
+            while (x < self.cols and x < vterm.cols) : (x += 1) {
+                const new_cell = if (x < all_cells.len) blk: {
+                    const vtcell = &all_cells[x];
+                    row_pin.x = x;
+                    break :blk cellFromVT(vtcell, row_pin);
+                } else Cell{};
+
+                try updates.append(self.alloc, .{
+                    .x = x,
+                    .y = y,
+                    .cell = new_cell,
+                });
+                self.getCell(x, y).* = new_cell;
+            }
+        }
+
+        return updates.toOwnedSlice(self.alloc);
+    }
+};
+
+pub const CellUpdate = struct {
+    x: u16,
+    y: u16,
+    cell: Cell,
+};
+
+fn cellFromVT(vtcell: *const ghostty_vt.Cell, row_pin: anytype) Cell {
+    var cell = Cell{};
+
+    // Extract character
+    switch (vtcell.content_tag) {
+        .codepoint => {
+            const cp = vtcell.content.codepoint;
+            if (cp >= 0x20) {
+                cell.char_len = @intCast(std.unicode.utf8Encode(cp, &cell.char) catch 1);
+            }
+        },
+        .codepoint_grapheme => {
+            const cp = vtcell.content.codepoint;
+            if (cp >= 0x20) {
+                cell.char_len = @intCast(std.unicode.utf8Encode(cp, &cell.char) catch 1);
+            }
+            // Note: we only capture the base codepoint, not combining chars
+            // This is a simplification - full grapheme support would need more storage
+        },
+        else => {},
+    }
+
+    // Extract style
+    const style = row_pin.style(vtcell);
+    cell.bold = style.flags.bold;
+    cell.italic = style.flags.italic;
+    cell.underline = style.flags.underline != .none;
+    cell.inverse = style.flags.inverse;
+
+    cell.fg = switch (style.fg_color) {
+        .none => .{ .none = {} },
+        .palette => |idx| .{ .palette = idx },
+        .rgb => |rgb| .{ .rgb = .{ .r = rgb.r, .g = rgb.g, .b = rgb.b } },
+    };
+    cell.bg = switch (style.bg_color) {
+        .none => .{ .none = {} },
+        .palette => |idx| .{ .palette = idx },
+        .rgb => |rgb| .{ .rgb = .{ .r = rgb.r, .g = rgb.g, .b = rgb.b } },
+    };
+
+    return cell;
+}
+
+/// Render a cell update to an HTML span element
+pub fn cellToHtml(alloc: std.mem.Allocator, update: CellUpdate) ![]u8 {
+    var html: std.ArrayList(u8) = .empty;
+    errdefer html.deinit(alloc);
+
+    // Position: using data attributes for row/col
+    try html.appendSlice(alloc, "<span data-x=\"");
+    try std.fmt.format(html.writer(alloc), "{d}", .{update.x});
+    try html.appendSlice(alloc, "\" data-y=\"");
+    try std.fmt.format(html.writer(alloc), "{d}", .{update.y});
+    try html.appendSlice(alloc, "\"");
+
+    // Style
+    var has_style = false;
+    if (update.cell.bold or update.cell.italic or update.cell.underline or
+        update.cell.inverse or update.cell.fg != .none or update.cell.bg != .none)
+    {
+        has_style = true;
+        try html.appendSlice(alloc, " style=\"");
+    }
+
+    if (update.cell.bold) try html.appendSlice(alloc, "font-weight:bold;");
+    if (update.cell.italic) try html.appendSlice(alloc, "font-style:italic;");
+    if (update.cell.underline) try html.appendSlice(alloc, "text-decoration:underline;");
+    if (update.cell.inverse) try html.appendSlice(alloc, "filter:invert(1);");
+
+    switch (update.cell.fg) {
+        .none => {},
+        .palette => |idx| {
+            try html.appendSlice(alloc, "color:");
+            try html.appendSlice(alloc, &color256ToHex(idx));
+            try html.append(alloc, ';');
+        },
+        .rgb => |rgb| {
+            var buf: [24]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "color:#{x:0>2}{x:0>2}{x:0>2};", .{ rgb.r, rgb.g, rgb.b }) catch "";
+            try html.appendSlice(alloc, s);
+        },
+    }
+
+    switch (update.cell.bg) {
+        .none => {},
+        .palette => |idx| {
+            try html.appendSlice(alloc, "background:");
+            try html.appendSlice(alloc, &color256ToHex(idx));
+            try html.append(alloc, ';');
+        },
+        .rgb => |rgb| {
+            var buf: [30]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "background:#{x:0>2}{x:0>2}{x:0>2};", .{ rgb.r, rgb.g, rgb.b }) catch "";
+            try html.appendSlice(alloc, s);
+        },
+    }
+
+    if (has_style) try html.append(alloc, '"');
+    try html.append(alloc, '>');
+
+    // Character (HTML escaped)
+    const char_slice = update.cell.char[0..update.cell.char_len];
+    for (char_slice) |c| {
+        switch (c) {
+            '<' => try html.appendSlice(alloc, "&lt;"),
+            '>' => try html.appendSlice(alloc, "&gt;"),
+            '&' => try html.appendSlice(alloc, "&amp;"),
+            ' ' => try html.appendSlice(alloc, "&nbsp;"),
+            else => try html.append(alloc, c),
+        }
+    }
+
+    try html.appendSlice(alloc, "</span>");
+    return html.toOwnedSlice(alloc);
+}
+
+/// Render multiple updates to a JSON array of HTML spans
+pub fn updatesToJson(alloc: std.mem.Allocator, updates: []const CellUpdate, cols: u16, rows: u16) ![]u8 {
+    var json: std.ArrayList(u8) = .empty;
+    errdefer json.deinit(alloc);
+
+    try json.appendSlice(alloc, "{\"cols\":");
+    try std.fmt.format(json.writer(alloc), "{d}", .{cols});
+    try json.appendSlice(alloc, ",\"rows\":");
+    try std.fmt.format(json.writer(alloc), "{d}", .{rows});
+    try json.appendSlice(alloc, ",\"cells\":[");
+
+    var first = true;
+    for (updates) |update| {
+        if (!first) try json.append(alloc, ',');
+        first = false;
+
+        const cell_html = try cellToHtml(alloc, update);
+        defer alloc.free(cell_html);
+
+        try json.append(alloc, '"');
+        try paths.appendJsonEscaped(alloc, &json, cell_html);
+        try json.append(alloc, '"');
+    }
+
+    try json.appendSlice(alloc, "]}");
+    return json.toOwnedSlice(alloc);
+}
+
+/// Convert 256-color index to hex color
+fn color256ToHex(idx: u8) [7]u8 {
+    const standard = [16][7]u8{
+        "#000000".*, "#800000".*, "#008000".*, "#808000".*,
+        "#000080".*, "#800080".*, "#008080".*, "#c0c0c0".*,
+        "#808080".*, "#ff0000".*, "#00ff00".*, "#ffff00".*,
+        "#0000ff".*, "#ff00ff".*, "#00ffff".*, "#ffffff".*,
+    };
+
+    if (idx < 16) return standard[idx];
+
+    if (idx < 232) {
+        const i = idx - 16;
+        const r: u8 = @intCast((i / 36) * 51);
+        const g: u8 = @intCast(((i / 6) % 6) * 51);
+        const b: u8 = @intCast((i % 6) * 51);
+        var buf: [7]u8 = undefined;
+        _ = std.fmt.bufPrint(&buf, "#{x:0>2}{x:0>2}{x:0>2}", .{ r, g, b }) catch return "#000000".*;
+        return buf;
+    }
+
+    const gray: u8 = @intCast((idx - 232) * 10 + 8);
+    var buf: [7]u8 = undefined;
+    _ = std.fmt.bufPrint(&buf, "#{x:0>2}{x:0>2}{x:0>2}", .{ gray, gray, gray }) catch return "#000000".*;
+    return buf;
+}
+
+test "cell equality" {
+    const a = Cell{};
+    const b = Cell{};
+    try std.testing.expect(a.eql(b));
+
+    var c = Cell{};
+    c.bold = true;
+    try std.testing.expect(!a.eql(c));
+}
+
+test "cell to html" {
+    const alloc = std.testing.allocator;
+
+    const update = CellUpdate{
+        .x = 5,
+        .y = 10,
+        .cell = .{
+            .char = .{ 'A', 0, 0, 0 },
+            .char_len = 1,
+            .bold = true,
+            .fg = .{ .palette = 1 }, // red
+        },
+    };
+
+    const html = try cellToHtml(alloc, update);
+    defer alloc.free(html);
+
+    try std.testing.expect(std.mem.indexOf(u8, html, "data-x=\"5\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "data-y=\"10\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "font-weight:bold") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, ">A</span>") != null);
+}
+
+test "screen buffer init" {
+    const alloc = std.testing.allocator;
+    var buf = try ScreenBuffer.init(alloc, 80, 24);
+    defer buf.deinit();
+
+    try std.testing.expectEqual(@as(u16, 80), buf.cols);
+    try std.testing.expectEqual(@as(u16, 24), buf.rows);
+}

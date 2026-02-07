@@ -156,18 +156,21 @@ fn eventLoop(self: *Session) !void {
         while (viewer_idx < self.viewers.items.len) {
             const fd_idx = idx + viewer_idx;
             if (fd_idx < poll_fds.items.len) {
+                // Process input before checking HUP so we don't lose messages
+                if (poll_fds.items[fd_idx].revents & posix.POLL.IN != 0) {
+                    try self.handleClientInput(false, viewer_idx);
+                }
                 if (poll_fds.items[fd_idx].revents & (posix.POLL.HUP | posix.POLL.ERR) != 0) {
                     self.removeViewer(viewer_idx);
                     continue;
-                }
-                if (poll_fds.items[fd_idx].revents & posix.POLL.IN != 0) {
-                    try self.handleClientInput(false, viewer_idx);
                 }
             }
             viewer_idx += 1;
         }
     }
 
+    // If session was killed (not just child exiting), signal the child first
+    self.pty.killChild();
     const status = self.pty.wait() catch 0;
     const exit_msg = protocol.Exit{ .code = @intCast(status) };
     if (self.primary) |c| {
@@ -363,6 +366,10 @@ fn handleClientInput(self: *Session, is_primary: bool, viewer_idx: usize) !void 
                 const kick = std.mem.bytesToValue(protocol.KickClient, &kick_buf);
                 self.kickClient(kick.id);
             }
+        },
+        .kill_session => {
+            // Terminate the session gracefully
+            self.running = false;
         },
         else => {},
     }

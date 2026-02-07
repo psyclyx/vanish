@@ -6,6 +6,8 @@ const Auth = @import("auth.zig");
 const protocol = @import("protocol.zig");
 const VTerminal = @import("terminal.zig");
 const config = @import("config.zig");
+const paths = @import("paths.zig");
+const vthtml = @import("vthtml.zig");
 
 const index_html = @embedFile("static/index.html");
 
@@ -36,7 +38,8 @@ const SseClient = struct {
     session_fd: posix.socket_t,
     session_name: []const u8,
     vterm: VTerminal,
-    last_keyframe: i64 = 0,
+    screen_buf: vthtml.ScreenBuffer,
+    last_update: i64 = 0,
     cols: u16 = 120,
     rows: u16 = 40,
 
@@ -44,6 +47,7 @@ const SseClient = struct {
         posix.close(self.http_fd);
         posix.close(self.session_fd);
         alloc.free(self.session_name);
+        self.screen_buf.deinit();
         self.vterm.deinit();
     }
 };
@@ -338,6 +342,19 @@ fn processRequest(self: *HttpServer, client_idx: usize, headers: []const u8, bod
         } else {
             try self.sendError(client, 405, "Method Not Allowed");
         }
+    } else if (std.mem.startsWith(u8, path, "/api/sessions/") and std.mem.endsWith(u8, path, "/takeover")) {
+        if (std.mem.eql(u8, method, "POST")) {
+            const name_start = "/api/sessions/".len;
+            const name_end = path.len - "/takeover".len;
+            if (name_end > name_start) {
+                const session_name = path[name_start..name_end];
+                try self.handleTakeover(client, headers, session_name);
+            } else {
+                try self.sendError(client, 400, "Invalid session name");
+            }
+        } else {
+            try self.sendError(client, 405, "Method Not Allowed");
+        }
     } else {
         try self.sendError(client, 404, "Not Found");
     }
@@ -405,7 +422,7 @@ fn handleListSessions(self: *HttpServer, client: *HttpClient, headers: []const u
     defer if (payload.session) |s| self.alloc.free(s);
 
     // Get socket directory
-    const socket_dir = getDefaultSocketDir(self.alloc, self.cfg) catch {
+    const socket_dir = paths.getDefaultSocketDir(self.alloc, self.cfg) catch {
         try self.sendJson(client, "{\"sessions\":[]}");
         return;
     };
@@ -438,7 +455,7 @@ fn handleListSessions(self: *HttpServer, client: *HttpClient, headers: []const u
         first = false;
 
         try json.appendSlice(self.alloc, "{\"name\":\"");
-        try appendJsonEscaped(self.alloc, &json, entry.name);
+        try paths.appendJsonEscaped(self.alloc, &json, entry.name);
         try json.appendSlice(self.alloc, "\"}");
     }
 
@@ -464,7 +481,7 @@ fn handleInput(self: *HttpServer, client: *HttpClient, headers: []const u8, body
     }
 
     // Connect to session
-    const socket_path = try resolveSocketPath(self.alloc, session_name, self.cfg);
+    const socket_path = try paths.resolveSocketPath(self.alloc, session_name, self.cfg);
     defer self.alloc.free(socket_path);
 
     const sock = connectToSession(socket_path) catch {
@@ -540,6 +557,86 @@ fn handleResize(self: *HttpServer, client: *HttpClient, headers: []const u8, bod
     try self.sendJson(client, "{\"ok\":true}");
 }
 
+fn handleTakeover(self: *HttpServer, client: *HttpClient, headers: []const u8, session_name: []const u8) !void {
+    const payload = self.validateAuth(headers) catch {
+        try self.sendError(client, 401, "Unauthorized");
+        return;
+    };
+    defer if (payload.session) |s| self.alloc.free(s);
+
+    // Check session scope
+    if (payload.scope == .session) {
+        if (payload.session) |allowed| {
+            if (!std.mem.eql(u8, session_name, allowed)) {
+                try self.sendError(client, 403, "Session not allowed");
+                return;
+            }
+        }
+    }
+
+    // Connect to session as viewer, then send takeover
+    const socket_path = try paths.resolveSocketPath(self.alloc, session_name, self.cfg);
+    defer self.alloc.free(socket_path);
+
+    const sock = connectToSession(socket_path) catch {
+        try self.sendError(client, 404, "Session not found");
+        return;
+    };
+    defer posix.close(sock);
+
+    // Send hello as viewer
+    var hello = protocol.Hello{ .role = .viewer, .cols = 120, .rows = 40 };
+    hello.setTerm("xterm-256color");
+    protocol.writeStruct(sock, @intFromEnum(protocol.ClientMsg.hello), hello) catch {
+        try self.sendError(client, 500, "Protocol error");
+        return;
+    };
+
+    // Read welcome
+    const welcome_hdr = protocol.readHeader(sock) catch {
+        try self.sendError(client, 500, "Protocol error");
+        return;
+    };
+
+    if (welcome_hdr.msg_type == @intFromEnum(protocol.ServerMsg.denied)) {
+        try self.sendError(client, 409, "Connection denied");
+        return;
+    }
+
+    // Skip welcome payload
+    var welcome_buf: [@sizeOf(protocol.Welcome)]u8 = undefined;
+    protocol.readExact(sock, &welcome_buf) catch {
+        try self.sendError(client, 500, "Protocol error");
+        return;
+    };
+
+    // Skip full state
+    const state_hdr = protocol.readHeader(sock) catch {
+        try self.sendError(client, 500, "Protocol error");
+        return;
+    };
+    if (state_hdr.msg_type == @intFromEnum(protocol.ServerMsg.full)) {
+        var remaining = state_hdr.len;
+        var skip_buf: [4096]u8 = undefined;
+        while (remaining > 0) {
+            const chunk: usize = @min(remaining, skip_buf.len);
+            protocol.readExact(sock, skip_buf[0..chunk]) catch break;
+            remaining -= @intCast(chunk);
+        }
+    }
+
+    // Send takeover request
+    protocol.writeMsg(sock, @intFromEnum(protocol.ClientMsg.takeover), &.{}) catch {
+        try self.sendError(client, 500, "Failed to send takeover");
+        return;
+    };
+
+    // Detach
+    protocol.writeMsg(sock, @intFromEnum(protocol.ClientMsg.detach), &.{}) catch {};
+
+    try self.sendJson(client, "{\"ok\":true}");
+}
+
 fn handleSseStream(self: *HttpServer, client_idx: usize, headers: []const u8, session_name: []const u8) !void {
     const client = &self.clients.items[client_idx];
 
@@ -560,7 +657,7 @@ fn handleSseStream(self: *HttpServer, client_idx: usize, headers: []const u8, se
     }
 
     // Connect to session as viewer
-    const socket_path = try resolveSocketPath(self.alloc, session_name, self.cfg);
+    const socket_path = try paths.resolveSocketPath(self.alloc, session_name, self.cfg);
     defer self.alloc.free(socket_path);
 
     const sess_sock = connectToSession(socket_path) catch {
@@ -585,9 +682,12 @@ fn handleSseStream(self: *HttpServer, client_idx: usize, headers: []const u8, se
     try protocol.readExact(sess_sock, &welcome_buf);
     const welcome = std.mem.bytesToValue(protocol.Welcome, &welcome_buf);
 
-    // Create VTerminal for this SSE client
+    // Create VTerminal and screen buffer for this SSE client
     var vterm = try VTerminal.init(self.alloc, welcome.session_cols, welcome.session_rows);
     errdefer vterm.deinit();
+
+    var screen_buf = try vthtml.ScreenBuffer.init(self.alloc, welcome.session_cols, welcome.session_rows);
+    errdefer screen_buf.deinit();
 
     // Send SSE headers
     const sse_headers =
@@ -608,8 +708,10 @@ fn handleSseStream(self: *HttpServer, client_idx: usize, headers: []const u8, se
 
         vterm.feed(state_data);
 
-        // Send initial keyframe
-        try self.sendSseKeyframe(client.fd, &vterm);
+        // Send initial keyframe (full screen)
+        const updates = try screen_buf.fullScreen(&vterm);
+        defer self.alloc.free(updates);
+        try self.sendSseUpdate(client.fd, updates, vterm.cols, vterm.rows, true);
     }
 
     // Move client to SSE list
@@ -621,7 +723,8 @@ fn handleSseStream(self: *HttpServer, client_idx: usize, headers: []const u8, se
         .session_fd = sess_sock,
         .session_name = owned_name,
         .vterm = vterm,
-        .last_keyframe = std.time.timestamp(),
+        .screen_buf = screen_buf,
+        .last_update = std.time.timestamp(),
         .cols = welcome.session_cols,
         .rows = welcome.session_rows,
     });
@@ -644,8 +747,14 @@ fn handleSseSessionOutput(self: *HttpServer, sse_idx: usize) !void {
             // Feed to vterm
             sse.vterm.feed(data);
 
-            // Send delta SSE event with HTML
-            try self.sendSseDelta(sse.http_fd, data);
+            // Compute delta from previous screen state and send updates
+            const updates = try sse.screen_buf.updateFromVTerm(&sse.vterm);
+            defer self.alloc.free(updates);
+
+            if (updates.len > 0) {
+                try self.sendSseUpdate(sse.http_fd, updates, sse.cols, sse.rows, false);
+            }
+            sse.last_update = std.time.timestamp();
         },
         .session_resize => {
             var resize_buf: [@sizeOf(protocol.SessionResize)]u8 = undefined;
@@ -653,12 +762,15 @@ fn handleSseSessionOutput(self: *HttpServer, sse_idx: usize) !void {
             const resize = std.mem.bytesToValue(protocol.SessionResize, &resize_buf);
 
             try sse.vterm.resize(resize.cols, resize.rows);
+            try sse.screen_buf.resize(resize.cols, resize.rows);
             sse.cols = resize.cols;
             sse.rows = resize.rows;
 
-            // Send keyframe with new size
-            try self.sendSseKeyframe(sse.http_fd, &sse.vterm);
-            sse.last_keyframe = std.time.timestamp();
+            // Send full screen after resize
+            const updates = try sse.screen_buf.fullScreen(&sse.vterm);
+            defer self.alloc.free(updates);
+            try self.sendSseUpdate(sse.http_fd, updates, sse.cols, sse.rows, true);
+            sse.last_update = std.time.timestamp();
         },
         .exit => {
             // Session ended
@@ -684,42 +796,30 @@ fn handleSseSessionOutput(self: *HttpServer, sse_idx: usize) !void {
 fn sendPeriodicKeyframes(self: *HttpServer) !void {
     const now = std.time.timestamp();
     for (self.sse_clients.items) |*sse| {
-        if (now - sse.last_keyframe >= 30) {
-            self.sendSseKeyframe(sse.http_fd, &sse.vterm) catch continue;
-            sse.last_keyframe = now;
+        if (now - sse.last_update >= 30) {
+            // Send full screen refresh periodically
+            const updates = sse.screen_buf.fullScreen(&sse.vterm) catch continue;
+            defer self.alloc.free(updates);
+            self.sendSseUpdate(sse.http_fd, updates, sse.cols, sse.rows, true) catch continue;
+            sse.last_update = now;
         }
     }
 }
 
-fn sendSseKeyframe(self: *HttpServer, fd: posix.socket_t, vterm: *VTerminal) !void {
-    const screen_html = try vtToHtml(self.alloc, vterm);
-    defer self.alloc.free(screen_html);
+fn sendSseUpdate(self: *HttpServer, fd: posix.socket_t, updates: []const vthtml.CellUpdate, cols: u16, rows: u16, is_keyframe: bool) !void {
+    const json = try vthtml.updatesToJson(self.alloc, updates, cols, rows);
+    defer self.alloc.free(json);
 
     var event: std.ArrayList(u8) = .empty;
     defer event.deinit(self.alloc);
 
-    try event.appendSlice(self.alloc, "event: keyframe\ndata: {\"cols\":");
-    try std.fmt.format(event.writer(self.alloc), "{d}", .{vterm.cols});
-    try event.appendSlice(self.alloc, ",\"rows\":");
-    try std.fmt.format(event.writer(self.alloc), "{d}", .{vterm.rows});
-    try event.appendSlice(self.alloc, ",\"html\":\"");
-    try appendJsonEscaped(self.alloc, &event, screen_html);
-    try event.appendSlice(self.alloc, "\"}\n\n");
-
-    _ = try posix.write(fd, event.items);
-}
-
-fn sendSseDelta(self: *HttpServer, fd: posix.socket_t, data: []const u8) !void {
-    // Convert VT data to HTML delta
-    const html = try vtDataToHtml(self.alloc, data);
-    defer self.alloc.free(html);
-
-    var event: std.ArrayList(u8) = .empty;
-    defer event.deinit(self.alloc);
-
-    try event.appendSlice(self.alloc, "event: delta\ndata: {\"html\":\"");
-    try appendJsonEscaped(self.alloc, &event, html);
-    try event.appendSlice(self.alloc, "\"}\n\n");
+    // Use different event type for keyframes vs deltas
+    const event_type = if (is_keyframe) "keyframe" else "delta";
+    try event.appendSlice(self.alloc, "event: ");
+    try event.appendSlice(self.alloc, event_type);
+    try event.appendSlice(self.alloc, "\ndata: ");
+    try event.appendSlice(self.alloc, json);
+    try event.appendSlice(self.alloc, "\n\n");
 
     _ = try posix.write(fd, event.items);
 }
@@ -847,254 +947,3 @@ fn connectToSession(path: []const u8) !posix.socket_t {
     return sock;
 }
 
-fn getDefaultSocketDir(alloc: std.mem.Allocator, cfg: *const config.Config) ![]const u8 {
-    if (cfg.socket_dir) |dir| {
-        return try alloc.dupe(u8, dir);
-    }
-    if (std.posix.getenv("XDG_RUNTIME_DIR")) |xdg| {
-        return try std.fmt.allocPrint(alloc, "{s}/vanish", .{xdg});
-    }
-    const uid = std.os.linux.getuid();
-    return try std.fmt.allocPrint(alloc, "/tmp/vanish-{d}", .{uid});
-}
-
-fn resolveSocketPath(alloc: std.mem.Allocator, name: []const u8, cfg: *const config.Config) ![]const u8 {
-    if (std.mem.indexOf(u8, name, "/") != null) {
-        return try alloc.dupe(u8, name);
-    }
-    const dir = try getDefaultSocketDir(alloc, cfg);
-    defer alloc.free(dir);
-    return try std.fmt.allocPrint(alloc, "{s}/{s}", .{ dir, name });
-}
-
-fn appendJsonEscaped(alloc: std.mem.Allocator, list: *std.ArrayList(u8), s: []const u8) !void {
-    for (s) |c| {
-        switch (c) {
-            '"' => try list.appendSlice(alloc, "\\\""),
-            '\\' => try list.appendSlice(alloc, "\\\\"),
-            '\n' => try list.appendSlice(alloc, "\\n"),
-            '\r' => try list.appendSlice(alloc, "\\r"),
-            '\t' => try list.appendSlice(alloc, "\\t"),
-            else => {
-                if (c < 0x20) {
-                    var buf: [6]u8 = undefined;
-                    _ = std.fmt.bufPrint(&buf, "\\u{x:0>4}", .{c}) catch continue;
-                    try list.appendSlice(alloc, &buf);
-                } else {
-                    try list.append(alloc, c);
-                }
-            },
-        }
-    }
-}
-
-/// Convert full VTerminal screen to HTML
-fn vtToHtml(alloc: std.mem.Allocator, vterm: *VTerminal) ![]u8 {
-    const screen = try vterm.dumpScreen(alloc);
-    defer alloc.free(screen);
-
-    return try vtDataToHtml(alloc, screen);
-}
-
-/// Convert VT escape sequence data to HTML with styled spans
-fn vtDataToHtml(alloc: std.mem.Allocator, data: []const u8) ![]u8 {
-    var html: std.ArrayList(u8) = .empty;
-    errdefer html.deinit(alloc);
-
-    var i: usize = 0;
-    var in_span = false;
-
-    while (i < data.len) {
-        if (data[i] == 0x1b and i + 1 < data.len and data[i + 1] == '[') {
-            // Parse CSI sequence
-            var j = i + 2;
-            while (j < data.len and (data[j] < 0x40 or data[j] > 0x7e)) : (j += 1) {}
-            if (j < data.len) {
-                const cmd = data[j];
-                const params = data[i + 2 .. j];
-
-                if (cmd == 'm') {
-                    // SGR - Select Graphic Rendition
-                    if (in_span) {
-                        try html.appendSlice(alloc, "</span>");
-                        in_span = false;
-                    }
-
-                    const style = try parseSgr(alloc, params);
-                    defer if (style) |s| alloc.free(s);
-
-                    if (style) |s| {
-                        try html.appendSlice(alloc, "<span style=\"");
-                        try html.appendSlice(alloc, s);
-                        try html.appendSlice(alloc, "\">");
-                        in_span = true;
-                    }
-                }
-                // Skip other CSI sequences (cursor movement, etc.)
-                i = j + 1;
-                continue;
-            }
-        }
-
-        // Regular character - escape for HTML
-        switch (data[i]) {
-            '<' => try html.appendSlice(alloc, "&lt;"),
-            '>' => try html.appendSlice(alloc, "&gt;"),
-            '&' => try html.appendSlice(alloc, "&amp;"),
-            '\n' => try html.appendSlice(alloc, "<br>"),
-            '\r' => {}, // Skip CR
-            else => {
-                if (data[i] >= 0x20 or data[i] == '\t') {
-                    try html.append(alloc, data[i]);
-                }
-            },
-        }
-        i += 1;
-    }
-
-    if (in_span) {
-        try html.appendSlice(alloc, "</span>");
-    }
-
-    return try html.toOwnedSlice(alloc);
-}
-
-/// Parse SGR parameters and return CSS style string
-fn parseSgr(alloc: std.mem.Allocator, params: []const u8) !?[]const u8 {
-    var styles: std.ArrayList(u8) = .empty;
-    errdefer styles.deinit(alloc);
-
-    var parts = std.mem.splitScalar(u8, params, ';');
-    while (parts.next()) |part| {
-        const code = std.fmt.parseInt(u8, part, 10) catch 0;
-
-        switch (code) {
-            0 => {
-                // Reset - return null to close span
-                styles.clearRetainingCapacity();
-            },
-            1 => try styles.appendSlice(alloc, "font-weight:bold;"),
-            3 => try styles.appendSlice(alloc, "font-style:italic;"),
-            4 => try styles.appendSlice(alloc, "text-decoration:underline;"),
-            7 => try styles.appendSlice(alloc, "filter:invert(1);"),
-            30 => try styles.appendSlice(alloc, "color:#000;"),
-            31 => try styles.appendSlice(alloc, "color:#c00;"),
-            32 => try styles.appendSlice(alloc, "color:#0c0;"),
-            33 => try styles.appendSlice(alloc, "color:#cc0;"),
-            34 => try styles.appendSlice(alloc, "color:#00c;"),
-            35 => try styles.appendSlice(alloc, "color:#c0c;"),
-            36 => try styles.appendSlice(alloc, "color:#0cc;"),
-            37 => try styles.appendSlice(alloc, "color:#ccc;"),
-            38 => {
-                // Extended foreground color
-                if (parts.next()) |mode| {
-                    const m = std.fmt.parseInt(u8, mode, 10) catch 0;
-                    if (m == 5) {
-                        // 256 color
-                        if (parts.next()) |idx| {
-                            const c = std.fmt.parseInt(u8, idx, 10) catch 0;
-                            const color = color256ToHex(c);
-                            try styles.appendSlice(alloc, "color:");
-                            try styles.appendSlice(alloc, &color);
-                            try styles.append(alloc, ';');
-                        }
-                    } else if (m == 2) {
-                        // RGB
-                        const r = if (parts.next()) |v| std.fmt.parseInt(u8, v, 10) catch 0 else 0;
-                        const g = if (parts.next()) |v| std.fmt.parseInt(u8, v, 10) catch 0 else 0;
-                        const b = if (parts.next()) |v| std.fmt.parseInt(u8, v, 10) catch 0 else 0;
-                        var buf: [16]u8 = undefined;
-                        const hex = std.fmt.bufPrint(&buf, "color:#{x:0>2}{x:0>2}{x:0>2};", .{ r, g, b }) catch continue;
-                        try styles.appendSlice(alloc, hex);
-                    }
-                }
-            },
-            40 => try styles.appendSlice(alloc, "background:#000;"),
-            41 => try styles.appendSlice(alloc, "background:#c00;"),
-            42 => try styles.appendSlice(alloc, "background:#0c0;"),
-            43 => try styles.appendSlice(alloc, "background:#cc0;"),
-            44 => try styles.appendSlice(alloc, "background:#00c;"),
-            45 => try styles.appendSlice(alloc, "background:#c0c;"),
-            46 => try styles.appendSlice(alloc, "background:#0cc;"),
-            47 => try styles.appendSlice(alloc, "background:#ccc;"),
-            48 => {
-                // Extended background color
-                if (parts.next()) |mode| {
-                    const m = std.fmt.parseInt(u8, mode, 10) catch 0;
-                    if (m == 5) {
-                        // 256 color
-                        if (parts.next()) |idx| {
-                            const c = std.fmt.parseInt(u8, idx, 10) catch 0;
-                            const color = color256ToHex(c);
-                            try styles.appendSlice(alloc, "background:");
-                            try styles.appendSlice(alloc, &color);
-                            try styles.append(alloc, ';');
-                        }
-                    } else if (m == 2) {
-                        // RGB
-                        const r = if (parts.next()) |v| std.fmt.parseInt(u8, v, 10) catch 0 else 0;
-                        const g = if (parts.next()) |v| std.fmt.parseInt(u8, v, 10) catch 0 else 0;
-                        const b = if (parts.next()) |v| std.fmt.parseInt(u8, v, 10) catch 0 else 0;
-                        var buf: [20]u8 = undefined;
-                        const hex = std.fmt.bufPrint(&buf, "background:#{x:0>2}{x:0>2}{x:0>2};", .{ r, g, b }) catch continue;
-                        try styles.appendSlice(alloc, hex);
-                    }
-                }
-            },
-            90 => try styles.appendSlice(alloc, "color:#666;"),
-            91 => try styles.appendSlice(alloc, "color:#f66;"),
-            92 => try styles.appendSlice(alloc, "color:#6f6;"),
-            93 => try styles.appendSlice(alloc, "color:#ff6;"),
-            94 => try styles.appendSlice(alloc, "color:#66f;"),
-            95 => try styles.appendSlice(alloc, "color:#f6f;"),
-            96 => try styles.appendSlice(alloc, "color:#6ff;"),
-            97 => try styles.appendSlice(alloc, "color:#fff;"),
-            else => {},
-        }
-    }
-
-    if (styles.items.len == 0) return null;
-    return try styles.toOwnedSlice(alloc);
-}
-
-/// Convert 256-color index to hex color
-fn color256ToHex(idx: u8) [7]u8 {
-    // Standard colors (0-15)
-    const standard = [16][7]u8{
-        "#000000".*,
-        "#800000".*,
-        "#008000".*,
-        "#808000".*,
-        "#000080".*,
-        "#800080".*,
-        "#008080".*,
-        "#c0c0c0".*,
-        "#808080".*,
-        "#ff0000".*,
-        "#00ff00".*,
-        "#ffff00".*,
-        "#0000ff".*,
-        "#ff00ff".*,
-        "#00ffff".*,
-        "#ffffff".*,
-    };
-
-    if (idx < 16) return standard[idx];
-
-    if (idx < 232) {
-        // Color cube (16-231)
-        const i = idx - 16;
-        const r: u8 = @intCast((i / 36) * 51);
-        const g: u8 = @intCast(((i / 6) % 6) * 51);
-        const b: u8 = @intCast((i % 6) * 51);
-        var buf: [7]u8 = undefined;
-        _ = std.fmt.bufPrint(&buf, "#{x:0>2}{x:0>2}{x:0>2}", .{ r, g, b }) catch return "#000000".*;
-        return buf;
-    }
-
-    // Grayscale (232-255)
-    const gray: u8 = @intCast((idx - 232) * 10 + 8);
-    var buf: [7]u8 = undefined;
-    _ = std.fmt.bufPrint(&buf, "#{x:0>2}{x:0>2}{x:0>2}", .{ gray, gray, gray }) catch return "#000000".*;
-    return buf;
-}

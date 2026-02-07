@@ -6,6 +6,7 @@ const Session = @import("session.zig");
 const protocol = @import("protocol.zig");
 const VTerminal = @import("terminal.zig");
 const config = @import("config.zig");
+const paths = @import("paths.zig");
 const Auth = @import("auth.zig");
 const HttpServer = @import("http.zig");
 
@@ -31,6 +32,7 @@ const usage_header =
     \\  list         List sessions
     \\  clients      List connected clients
     \\  kick         Disconnect a client
+    \\  kill         Terminate a session
     \\  serve        Start HTTP server for web terminal access
     \\  otp          Generate one-time password for auth
     \\  revoke       Revoke authentication tokens
@@ -48,6 +50,7 @@ const usage_commands =
     \\  vanish list [--json]
     \\  vanish clients [--json] <name>
     \\  vanish kick <name> <client-id>
+    \\  vanish kill <name>
     \\  vanish serve [options]
     \\  vanish otp [options]
     \\  vanish revoke [options]
@@ -106,6 +109,19 @@ fn logDebug(comptime fmt: []const u8, args: anytype) void {
         const msg = std.fmt.bufPrint(&buf, "[debug] " ++ fmt ++ "\n", args) catch return;
         writeAll(STDERR_FILENO, msg) catch {};
     }
+}
+
+fn leaderToString(key: u8) []const u8 {
+    return switch (key) {
+        0x00 => "^ ",
+        1...26 => &[_]u8{ '^', 'A' + key - 1 },
+        0x1B => "^[",
+        0x1C => "^\\",
+        0x1D => "^]",
+        0x1E => "^^",
+        0x1F => "^_",
+        else => "?",
+    };
 }
 
 fn printUsage(alloc: std.mem.Allocator) void {
@@ -174,11 +190,23 @@ pub fn main() !void {
         logVerbose("config: loaded from {s}", .{path});
     } else if (config_path != null) {
         try writeAll(STDERR_FILENO, "Warning: could not load config from specified path, using defaults\n");
+    } else if (load_result.error_type) |err| {
+        if (load_result.path_searched) |path| {
+            var buf: [512]u8 = undefined;
+            const reason = switch (err) {
+                .duplicate_key => "duplicate key in JSON (check for repeated keys in binds)",
+                .invalid_json => "invalid JSON syntax",
+                .read_failed => "could not read file",
+                .not_found => "file not found",
+            };
+            const msg = std.fmt.bufPrint(&buf, "Warning: {s}: {s}, using defaults\n", .{ path, reason }) catch "Warning: config error\n";
+            try writeAll(STDERR_FILENO, msg);
+        }
     } else {
         logVerbose("config: using defaults (no config file found)", .{});
     }
-    logDebug("config: leader=^{c} socket_dir={s} serve.port={d}", .{
-        if (cfg.leader >= 1 and cfg.leader <= 26) @as(u8, 'A' + cfg.leader - 1) else '?',
+    logDebug("config: leader={s} socket_dir={s} serve.port={d}", .{
+        leaderToString(cfg.leader),
         cfg.socket_dir orelse "(default)",
         cfg.serve.port,
     });
@@ -198,6 +226,8 @@ pub fn main() !void {
         try cmdClients(alloc, cmd_args, &cfg);
     } else if (std.mem.eql(u8, cmd, "kick")) {
         try cmdKick(alloc, cmd_args, &cfg);
+    } else if (std.mem.eql(u8, cmd, "kill")) {
+        try cmdKill(alloc, cmd_args, &cfg);
     } else if (std.mem.eql(u8, cmd, "serve")) {
         try cmdServe(alloc, cmd_args, &cfg);
     } else if (std.mem.eql(u8, cmd, "otp")) {
@@ -238,7 +268,7 @@ fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config
     }
 
     const session_name = args[arg_idx];
-    const socket_path = try resolveSocketPath(alloc, session_name, cfg);
+    const socket_path = try paths.resolveSocketPath(alloc, session_name, cfg);
     defer alloc.free(socket_path);
 
     var cmd_start: usize = arg_idx + 1;
@@ -336,7 +366,7 @@ fn cmdAttach(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const con
         std.process.exit(1);
     }
 
-    const socket_path = try resolveSocketPath(alloc, socket_arg.?, cfg);
+    const socket_path = try paths.resolveSocketPath(alloc, socket_arg.?, cfg);
     defer alloc.free(socket_path);
 
     const Client = @import("client.zig");
@@ -349,7 +379,7 @@ fn cmdSend(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const confi
         std.process.exit(1);
     }
 
-    const socket_path = try resolveSocketPath(alloc, args[0], cfg);
+    const socket_path = try paths.resolveSocketPath(alloc, args[0], cfg);
     defer alloc.free(socket_path);
 
     const keys = args[1];
@@ -370,7 +400,7 @@ fn cmdList(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const confi
     }
 
     const allocated_dir = if (explicit_dir == null) blk: {
-        break :blk getDefaultSocketDir(alloc, cfg) catch {
+        break :blk paths.getDefaultSocketDir(alloc, cfg) catch {
             if (as_json) {
                 try writeAll(STDOUT_FILENO, "{\"error\":\"Could not determine socket directory\"}\n");
             } else {
@@ -437,11 +467,11 @@ fn writeJsonList(alloc: std.mem.Allocator, sessions: []const []const u8, dir_pat
     for (sessions, 0..) |name, i| {
         if (i > 0) try out.append(alloc, ',');
         try out.appendSlice(alloc, "{\"name\":\"");
-        try appendJsonString(&out, alloc, name);
+        try paths.appendJsonEscaped(alloc, &out, name);
         try out.appendSlice(alloc, "\",\"path\":\"");
-        try appendJsonString(&out, alloc, dir_path);
+        try paths.appendJsonEscaped(alloc, &out, dir_path);
         try out.append(alloc, '/');
-        try appendJsonString(&out, alloc, name);
+        try paths.appendJsonEscaped(alloc, &out, name);
         try out.appendSlice(alloc, "\"}");
     }
 
@@ -466,7 +496,7 @@ fn cmdClients(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const co
         std.process.exit(1);
     }
 
-    const socket_path = try resolveSocketPath(alloc, socket_arg.?, cfg);
+    const socket_path = try paths.resolveSocketPath(alloc, socket_arg.?, cfg);
     defer alloc.free(socket_path);
 
     const sock = connectToSession(socket_path) catch |err| {
@@ -585,7 +615,7 @@ fn cmdKick(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const confi
         std.process.exit(1);
     }
 
-    const socket_path = try resolveSocketPath(alloc, args[0], cfg);
+    const socket_path = try paths.resolveSocketPath(alloc, args[0], cfg);
     defer alloc.free(socket_path);
 
     const client_id = std.fmt.parseInt(u32, args[1], 10) catch {
@@ -633,6 +663,54 @@ fn cmdKick(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const confi
     try writeAll(STDOUT_FILENO, "Kick request sent\n");
 }
 
+fn cmdKill(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
+    if (args.len < 1) {
+        try writeAll(STDERR_FILENO, "Usage: vanish kill <name>\n");
+        std.process.exit(1);
+    }
+
+    const socket_path = try paths.resolveSocketPath(alloc, args[0], cfg);
+    defer alloc.free(socket_path);
+
+    const sock = connectToSession(socket_path) catch |err| {
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Could not connect to session: {}\n", .{err}) catch "Could not connect\n";
+        try writeAll(STDERR_FILENO, msg);
+        std.process.exit(1);
+    };
+    defer posix.close(sock);
+
+    // Send hello as viewer
+    var hello = protocol.Hello{ .role = .viewer, .cols = 80, .rows = 24 };
+    hello.setTerm("xterm-256color");
+    try protocol.writeStruct(sock, @intFromEnum(protocol.ClientMsg.hello), hello);
+
+    // Read welcome
+    const welcome_hdr = try protocol.readHeader(sock);
+    if (welcome_hdr.msg_type == @intFromEnum(protocol.ServerMsg.denied)) {
+        try writeAll(STDERR_FILENO, "Connection denied\n");
+        std.process.exit(1);
+    }
+    var welcome_buf: [@sizeOf(protocol.Welcome)]u8 = undefined;
+    try protocol.readExact(sock, &welcome_buf);
+
+    // Skip full state if sent
+    const state_hdr = protocol.readHeader(sock) catch {
+        try writeAll(STDERR_FILENO, "Protocol error\n");
+        std.process.exit(1);
+    };
+    if (state_hdr.msg_type == @intFromEnum(protocol.ServerMsg.full)) {
+        const skip = try alloc.alloc(u8, state_hdr.len);
+        defer alloc.free(skip);
+        protocol.readExact(sock, skip) catch {};
+    }
+
+    // Send kill request
+    try protocol.writeMsg(sock, @intFromEnum(protocol.ClientMsg.kill_session), &.{});
+
+    try writeAll(STDOUT_FILENO, "Session terminated\n");
+}
+
 fn connectToSession(path: []const u8) !posix.socket_t {
     const sock = try posix.socket(posix.AF.UNIX, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
     errdefer posix.close(sock);
@@ -641,47 +719,6 @@ fn connectToSession(path: []const u8) !posix.socket_t {
     try posix.connect(sock, &addr.any, addr.getOsSockLen());
 
     return sock;
-}
-
-fn appendJsonString(out: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u8) !void {
-    for (s) |c| {
-        switch (c) {
-            '"' => try out.appendSlice(alloc, "\\\""),
-            '\\' => try out.appendSlice(alloc, "\\\\"),
-            '\n' => try out.appendSlice(alloc, "\\n"),
-            '\r' => try out.appendSlice(alloc, "\\r"),
-            '\t' => try out.appendSlice(alloc, "\\t"),
-            else => {
-                if (c < 0x20) {
-                    var buf: [6]u8 = undefined;
-                    _ = std.fmt.bufPrint(&buf, "\\u{x:0>4}", .{c}) catch continue;
-                    try out.appendSlice(alloc, &buf);
-                } else {
-                    try out.append(alloc, c);
-                }
-            },
-        }
-    }
-}
-
-fn getDefaultSocketDir(alloc: std.mem.Allocator, cfg: *const config.Config) ![]const u8 {
-    if (cfg.socket_dir) |dir| {
-        return try alloc.dupe(u8, dir);
-    }
-    if (std.posix.getenv("XDG_RUNTIME_DIR")) |xdg| {
-        return try std.fmt.allocPrint(alloc, "{s}/vanish", .{xdg});
-    }
-    const uid = std.os.linux.getuid();
-    return try std.fmt.allocPrint(alloc, "/tmp/vanish-{d}", .{uid});
-}
-
-fn resolveSocketPath(alloc: std.mem.Allocator, name_or_path: []const u8, cfg: *const config.Config) ![]const u8 {
-    if (std.mem.indexOf(u8, name_or_path, "/") != null) {
-        return try alloc.dupe(u8, name_or_path);
-    }
-    const dir = try getDefaultSocketDir(alloc, cfg);
-    defer alloc.free(dir);
-    return try std.fmt.allocPrint(alloc, "{s}/{s}", .{ dir, name_or_path });
 }
 
 fn cmdServe(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {

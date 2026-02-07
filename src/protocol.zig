@@ -15,6 +15,7 @@ pub const ClientMsg = enum(u8) {
     takeover = 0x06,
     list_clients = 0x07,
     kick_client = 0x08,
+    kill_session = 0x09,
 };
 
 pub const ServerMsg = enum(u8) {

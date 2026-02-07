@@ -4,451 +4,177 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vanish Terminal</title>
-    <script type="module" src="https://cdn.jsdelivr.net/npm/@sudodevnull/datastar@1.0.0-beta.1/dist/datastar.min.js"></script>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #eee; min-height: 100vh; }
+        .hidden { display: none !important; }
 
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: #1a1a2e;
-            color: #eee;
-            min-height: 100vh;
-        }
+        /* Auth */
+        .auth { max-width: 360px; margin: 4rem auto; padding: 2rem; background: #16213e; border-radius: 8px; }
+        .auth h2 { margin-bottom: 1.5rem; text-align: center; }
+        .auth input { width: 100%; padding: 0.75rem; margin-bottom: 1rem; background: #0f3460; border: 1px solid #1a1a2e; border-radius: 4px; color: #eee; font-family: monospace; text-align: center; letter-spacing: 2px; }
+        .auth button { width: 100%; padding: 0.75rem; background: #e94560; border: none; border-radius: 4px; color: white; cursor: pointer; }
+        .auth button:hover { background: #ff6b6b; }
 
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 1rem;
-        }
+        /* Sessions */
+        .sessions { max-width: 800px; margin: 2rem auto; padding: 1rem; }
+        .sessions h2 { margin-bottom: 1rem; }
+        .session-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; }
+        .session-card { padding: 1rem; background: #16213e; border-radius: 8px; cursor: pointer; border: 1px solid transparent; }
+        .session-card:hover { border-color: #e94560; transform: translateY(-2px); }
+        .session-card h3 { color: #e94560; font-size: 1rem; }
 
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0.5rem 1rem;
-            background: #16213e;
-            border-bottom: 1px solid #0f3460;
-        }
-
-        header h1 {
-            font-size: 1.25rem;
-            font-weight: 500;
-        }
-
-        .auth-form {
-            max-width: 400px;
-            margin: 4rem auto;
-            padding: 2rem;
-            background: #16213e;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-        }
-
-        .auth-form h2 {
-            margin-bottom: 1.5rem;
-            text-align: center;
-        }
-
-        .auth-form input {
-            width: 100%;
-            padding: 0.75rem;
-            margin-bottom: 1rem;
-            background: #0f3460;
-            border: 1px solid #1a1a2e;
-            border-radius: 4px;
-            color: #eee;
-            font-size: 1rem;
-            font-family: monospace;
-            text-align: center;
-            letter-spacing: 2px;
-        }
-
-        .auth-form input:focus {
-            outline: none;
-            border-color: #e94560;
-        }
-
-        .auth-form button {
-            width: 100%;
-            padding: 0.75rem;
-            background: #e94560;
-            border: none;
-            border-radius: 4px;
-            color: white;
-            font-size: 1rem;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-
-        .auth-form button:hover {
-            background: #ff6b6b;
-        }
-
-        .session-list {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 1rem;
-            padding: 1rem 0;
-        }
-
-        .session-card {
-            padding: 1rem;
-            background: #16213e;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-            border: 1px solid transparent;
-        }
-
-        .session-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-            border-color: #e94560;
-        }
-
-        .session-card h3 {
-            font-size: 1rem;
-            margin-bottom: 0.5rem;
-            color: #e94560;
-        }
-
-        .session-card p {
-            font-size: 0.875rem;
-            color: #888;
-        }
-
-        .terminal-container {
-            position: fixed;
-            top: 50px;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: #0c0c0c;
-            display: none;
-        }
-
-        .terminal-container.active {
-            display: block;
-        }
-
-        .terminal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0.5rem 1rem;
-            background: #1a1a2e;
-            border-bottom: 1px solid #333;
-        }
-
-        .terminal-header .session-name {
-            font-family: monospace;
-            color: #e94560;
-        }
-
-        .terminal-header button {
-            padding: 0.25rem 0.75rem;
-            background: #333;
-            border: none;
-            border-radius: 4px;
-            color: #eee;
-            cursor: pointer;
-        }
-
-        .terminal-header button:hover {
-            background: #444;
-        }
-
-        #terminal {
-            width: 100%;
-            height: calc(100% - 40px);
+        /* Terminal */
+        .terminal { position: fixed; inset: 0; background: #0c0c0c; display: flex; flex-direction: column; }
+        .terminal-header { display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 1rem; background: #1a1a2e; border-bottom: 1px solid #333; }
+        .terminal-header span { font-family: monospace; color: #e94560; }
+        .terminal-header button { padding: 0.25rem 0.75rem; background: #333; border: none; border-radius: 4px; color: #eee; cursor: pointer; }
+        #term {
+            flex: 1;
+            position: relative;
             overflow: auto;
-            background: #0c0c0c;
-            padding: 0.5rem;
-        }
-
-        #terminal-content {
-            font-family: "Cascadia Code", "Fira Code", "SF Mono", "Monaco", "Inconsolata", "Roboto Mono", monospace;
-            font-size: 14px;
-            line-height: 1.4;
-            white-space: pre;
+            font: 14px/1 "Cascadia Code", "Fira Code", "DejaVu Sans Mono", monospace;
             color: #ccc;
+            outline: none;
         }
-
-        .status {
-            position: fixed;
-            bottom: 1rem;
-            right: 1rem;
-            padding: 0.5rem 1rem;
-            background: #16213e;
-            border-radius: 4px;
-            font-size: 0.875rem;
+        #term-grid {
+            position: absolute;
+            top: 4px;
+            left: 4px;
         }
-
-        .status.connected {
-            color: #4caf50;
-        }
-
-        .status.disconnected {
-            color: #f44336;
-        }
-
-        .status.connecting {
-            color: #ff9800;
-        }
-
-        .error-message {
-            color: #f44336;
-            text-align: center;
-            padding: 1rem;
-        }
-
-        .loading {
-            text-align: center;
-            padding: 2rem;
-            color: #888;
-        }
-
-        @media (max-width: 600px) {
-            .session-list {
-                grid-template-columns: 1fr;
-            }
+        #term-grid span {
+            position: absolute;
+            white-space: pre;
         }
     </style>
 </head>
 <body>
-    <header>
-        <h1>Vanish</h1>
-        <div id="auth-status"></div>
-    </header>
+    <div id="auth" class="auth">
+        <h2>Enter OTP</h2>
+        <form action="/auth" method="POST">
+            <input type="text" name="otp" placeholder="One-time code" autocomplete="off" autofocus maxlength="32">
+            <button type="submit">Authenticate</button>
+        </form>
+    </div>
 
-    <div id="app" data-store="{
-        sessions: [],
-        currentSession: null,
-        connected: false,
-        authenticated: false,
-        error: null,
-        terminalHtml: ''
-    }">
-        <!-- Auth Form (shown when not authenticated) -->
-        <div class="auth-form" data-show="!$authenticated">
-            <h2>Enter OTP</h2>
-            <form action="/auth" method="POST">
-                <input type="text" name="otp" placeholder="Enter one-time code"
-                       autocomplete="off" autofocus maxlength="32"
-                       pattern="[a-f0-9]{32}">
-                <button type="submit">Authenticate</button>
-            </form>
-            <p class="error-message" data-show="$error" data-text="$error"></p>
-        </div>
+    <div id="sessions" class="sessions hidden">
+        <h2>Sessions</h2>
+        <div id="session-list" class="session-list"></div>
+    </div>
 
-        <!-- Session List (shown when authenticated but no session selected) -->
-        <div class="container" data-show="$authenticated && !$currentSession">
-            <h2 style="margin: 1rem 0;">Sessions</h2>
-            <div class="session-list" data-on-load="@get('/api/sessions')">
-                <div class="loading" data-show="$sessions.length === 0">
-                    Loading sessions...
-                </div>
-                <template data-for="session in $sessions">
-                    <div class="session-card" data-on-click="$currentSession = session.name; connectSession(session.name)">
-                        <h3 data-text="session.name"></h3>
-                        <p>Click to connect</p>
-                    </div>
-                </template>
+    <div id="terminal" class="terminal hidden">
+        <div class="terminal-header">
+            <span id="session-name"></span>
+            <div>
+                <button onclick="takeover()">Takeover</button>
+                <button onclick="disconnect()">Disconnect</button>
             </div>
         </div>
-
-        <!-- Terminal View (shown when connected to a session) -->
-        <div class="terminal-container" data-class-active="$currentSession">
-            <div class="terminal-header">
-                <span class="session-name" data-text="$currentSession || ''"></span>
-                <button data-on-click="disconnectSession()">Disconnect</button>
-            </div>
-            <div id="terminal" data-on-keydown="handleKeydown(event)">
-                <div id="terminal-content" data-html="$terminalHtml"></div>
-            </div>
-        </div>
-
-        <!-- Connection Status -->
-        <div class="status" data-show="$currentSession"
-             data-class-connected="$connected"
-             data-class-connecting="$currentSession && !$connected"
-             data-class-disconnected="!$currentSession && !$connected">
-            <span data-text="$connected ? 'Connected' : 'Connecting...'"></span>
+        <div id="term" tabindex="0">
+            <div id="term-grid"></div>
         </div>
     </div>
 
     <script>
-        let eventSource = null;
-        let inputBuffer = '';
-        let inputTimeout = null;
-
-        // Check if we have a valid session cookie
-        function checkAuth() {
-            fetch('/api/sessions', { credentials: 'same-origin' })
-                .then(response => {
-                    if (response.ok) {
-                        return response.json();
-                    }
-                    throw new Error('Not authenticated');
-                })
-                .then(data => {
-                    window.ds.store.authenticated = true;
-                    window.ds.store.sessions = data.sessions || [];
-                })
-                .catch(() => {
-                    window.ds.store.authenticated = false;
-                });
-        }
-
-        // Connect to session SSE stream
-        function connectSession(name) {
-            if (eventSource) {
-                eventSource.close();
-            }
-
-            window.ds.store.connected = false;
-            window.ds.store.terminalHtml = '';
-
-            eventSource = new EventSource(`/api/sessions/${encodeURIComponent(name)}/stream`);
-
-            eventSource.addEventListener('keyframe', (e) => {
-                const data = JSON.parse(e.data);
-                window.ds.store.terminalHtml = data.html;
-                window.ds.store.connected = true;
-            });
-
-            eventSource.addEventListener('delta', (e) => {
-                const data = JSON.parse(e.data);
-                // Append delta to existing content
-                window.ds.store.terminalHtml += data.html;
-                // Auto-scroll to bottom
-                const terminal = document.getElementById('terminal');
-                if (terminal) {
-                    terminal.scrollTop = terminal.scrollHeight;
-                }
-            });
-
-            eventSource.addEventListener('exit', () => {
-                disconnectSession();
-                window.ds.store.error = 'Session ended';
-            });
-
-            eventSource.onerror = () => {
-                if (eventSource.readyState === EventSource.CLOSED) {
-                    window.ds.store.connected = false;
-                }
-            };
-
-            // Focus terminal for input
-            setTimeout(() => {
-                document.getElementById('terminal')?.focus();
-            }, 100);
-        }
-
-        // Disconnect from session
-        function disconnectSession() {
-            if (eventSource) {
-                eventSource.close();
-                eventSource = null;
-            }
-            window.ds.store.currentSession = null;
-            window.ds.store.connected = false;
-            window.ds.store.terminalHtml = '';
-        }
-
-        // Handle keyboard input
-        function handleKeydown(event) {
-            if (!window.ds.store.currentSession || !window.ds.store.connected) return;
-
-            event.preventDefault();
-
-            let data = '';
-
-            // Handle special keys
-            if (event.key.length === 1) {
-                if (event.ctrlKey) {
-                    // Ctrl+key
-                    const code = event.key.toLowerCase().charCodeAt(0) - 96;
-                    if (code > 0 && code < 32) {
-                        data = String.fromCharCode(code);
-                    }
-                } else {
-                    data = event.key;
-                }
-            } else {
-                switch (event.key) {
-                    case 'Enter': data = '\r'; break;
-                    case 'Backspace': data = '\x7f'; break;
-                    case 'Tab': data = '\t'; break;
-                    case 'Escape': data = '\x1b'; break;
-                    case 'ArrowUp': data = '\x1b[A'; break;
-                    case 'ArrowDown': data = '\x1b[B'; break;
-                    case 'ArrowRight': data = '\x1b[C'; break;
-                    case 'ArrowLeft': data = '\x1b[D'; break;
-                    case 'Home': data = '\x1b[H'; break;
-                    case 'End': data = '\x1b[F'; break;
-                    case 'PageUp': data = '\x1b[5~'; break;
-                    case 'PageDown': data = '\x1b[6~'; break;
-                    case 'Delete': data = '\x1b[3~'; break;
-                    case 'Insert': data = '\x1b[2~'; break;
-                    default: return;
-                }
-            }
-
-            if (data) {
-                // Buffer input and send after short delay
-                inputBuffer += data;
-
-                if (inputTimeout) {
-                    clearTimeout(inputTimeout);
-                }
-
-                inputTimeout = setTimeout(() => {
-                    sendInput(inputBuffer);
-                    inputBuffer = '';
-                }, 10);
-            }
-        }
-
-        // Send input to session
-        function sendInput(data) {
-            const session = window.ds.store.currentSession;
-            if (!session) return;
-
-            fetch(`/api/sessions/${encodeURIComponent(session)}/input`, {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'text/plain' },
-                body: data
-            }).catch(console.error);
-        }
-
-        // Make functions available globally
-        window.connectSession = connectSession;
-        window.disconnectSession = disconnectSession;
-        window.handleKeydown = handleKeydown;
+        let sse = null;
+        let termCols = 80, termRows = 24;
+        const charWidth = 8.4, charHeight = 17;  // Approximate monospace char size
+        const cellMap = new Map();  // "x,y" -> DOM element
 
         // Check auth on load
-        document.addEventListener('DOMContentLoaded', () => {
-            // Wait for Datastar to initialize
-            setTimeout(checkAuth, 100);
-        });
+        fetch('/api/sessions').then(r => r.ok ? showSessions(r.json()) : null);
 
-        // Handle terminal focus
-        document.addEventListener('click', (e) => {
-            if (e.target.closest('#terminal')) {
-                document.getElementById('terminal')?.focus();
+        async function showSessions(dataPromise) {
+            const data = await dataPromise;
+            document.getElementById('auth').classList.add('hidden');
+            document.getElementById('sessions').classList.remove('hidden');
+            document.getElementById('session-list').innerHTML = data.sessions
+                .map(s => `<div class="session-card" onclick="connect('${s.name}')"><h3>${s.name}</h3></div>`)
+                .join('') || '<p>No sessions</p>';
+        }
+
+        function connect(name) {
+            document.getElementById('sessions').classList.add('hidden');
+            document.getElementById('terminal').classList.remove('hidden');
+            document.getElementById('session-name').textContent = name;
+
+            const term = document.getElementById('term');
+            const grid = document.getElementById('term-grid');
+            grid.innerHTML = '';
+            cellMap.clear();
+            term.focus();
+            term.onkeydown = e => handleKey(e, name);
+
+            sse = new EventSource(`/api/sessions/${encodeURIComponent(name)}/stream`);
+            sse.addEventListener('keyframe', e => handleUpdate(JSON.parse(e.data), true));
+            sse.addEventListener('delta', e => handleUpdate(JSON.parse(e.data), false));
+            sse.addEventListener('exit', disconnect);
+            sse.onerror = disconnect;
+        }
+
+        function handleUpdate(data, isKeyframe) {
+            const grid = document.getElementById('term-grid');
+
+            if (isKeyframe) {
+                // Clear existing cells if dimensions changed
+                if (data.cols !== termCols || data.rows !== termRows) {
+                    grid.innerHTML = '';
+                    cellMap.clear();
+                    termCols = data.cols;
+                    termRows = data.rows;
+                    grid.style.width = (termCols * charWidth) + 'px';
+                    grid.style.height = (termRows * charHeight) + 'px';
+                }
             }
-        });
 
-        // Keep terminal focusable
-        const terminal = document.getElementById('terminal');
-        if (terminal) {
-            terminal.tabIndex = 0;
+            // Process each cell
+            for (const cellHtml of data.cells) {
+                // Parse the span to extract position
+                const match = cellHtml.match(/data-x="(\d+)"\s+data-y="(\d+)"/);
+                if (!match) continue;
+
+                const x = parseInt(match[1], 10);
+                const y = parseInt(match[2], 10);
+                const key = `${x},${y}`;
+
+                // Create temp element to parse the HTML
+                const temp = document.createElement('div');
+                temp.innerHTML = cellHtml;
+                const newSpan = temp.firstChild;
+
+                // Position the span
+                newSpan.style.left = (x * charWidth) + 'px';
+                newSpan.style.top = (y * charHeight) + 'px';
+
+                // Replace or add
+                const existing = cellMap.get(key);
+                if (existing) {
+                    grid.replaceChild(newSpan, existing);
+                } else {
+                    grid.appendChild(newSpan);
+                }
+                cellMap.set(key, newSpan);
+            }
+        }
+
+        function disconnect() {
+            sse?.close();
+            sse = null;
+            document.getElementById('terminal').classList.add('hidden');
+            document.getElementById('sessions').classList.remove('hidden');
+        }
+
+        function takeover() {
+            const name = document.getElementById('session-name').textContent;
+            fetch(`/api/sessions/${encodeURIComponent(name)}/takeover`, { method: 'POST' });
+        }
+
+        function handleKey(e, session) {
+            e.preventDefault();
+            const key = e.key, ctrl = e.ctrlKey;
+            let data = key.length === 1 ? (ctrl ? String.fromCharCode(key.toLowerCase().charCodeAt(0) - 96) : key) :
+                { Enter: '\r', Backspace: '\x7f', Tab: '\t', Escape: '\x1b', ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D', Home: '\x1b[H', End: '\x1b[F', Delete: '\x1b[3~' }[key];
+            if (data) fetch(`/api/sessions/${encodeURIComponent(session)}/input`, { method: 'POST', body: data });
         }
     </script>
 </body>

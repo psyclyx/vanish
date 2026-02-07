@@ -36,11 +36,7 @@ pub const Config = struct {
 
         // Leader key
         try writer.writeAll("  \"leader\": \"");
-        if (self.leader_ctrl and self.leader >= 1 and self.leader <= 26) {
-            try writer.print("^{c}", .{'A' + self.leader - 1});
-        } else {
-            try writer.writeByte(self.leader);
-        }
+        try writeKeyJson(writer, self.leader, self.leader_ctrl);
         try writer.writeAll("\",\n");
 
         // Socket dir
@@ -70,13 +66,7 @@ pub const Config = struct {
         try writer.writeAll("  \"binds\": {\n");
         for (self.binds, 0..) |bind, i| {
             try writer.writeAll("    \"");
-            if (bind.ctrl and bind.key >= 1 and bind.key <= 26) {
-                try writer.print("^{c}", .{'A' + bind.key - 1});
-            } else if (bind.key == 0x1b) {
-                try writer.writeAll("Escape");
-            } else {
-                try writer.writeByte(bind.key);
-            }
+            try writeKeyJson(writer, bind.key, bind.ctrl);
             try writer.writeAll("\": \"");
             try writer.writeAll(actionToString(bind.action));
             try writer.writeByte('"');
@@ -87,6 +77,30 @@ pub const Config = struct {
         }
         try writer.writeAll("  }\n");
         try writer.writeAll("}\n");
+    }
+
+    fn writeKeyJson(writer: anytype, key: u8, ctrl: bool) !void {
+        if (ctrl) {
+            // Ctrl+A through Ctrl+Z (0x01-0x1A)
+            if (key >= 1 and key <= 26) {
+                try writer.print("^{c}", .{'A' + key - 1});
+                return;
+            }
+            // Special control characters
+            switch (key) {
+                0x00 => try writer.writeAll("^ "), // Ctrl+Space
+                0x1B => try writer.writeAll("^["), // ESC
+                0x1C => try writer.writeAll("^\\\\"), // Ctrl+\ (escaped for JSON)
+                0x1D => try writer.writeAll("^]"),
+                0x1E => try writer.writeAll("^^"),
+                0x1F => try writer.writeAll("^_"),
+                else => try writer.writeByte(key),
+            }
+        } else if (key == 0x1b) {
+            try writer.writeAll("Escape");
+        } else {
+            try writer.writeByte(key);
+        }
     }
 };
 
@@ -113,34 +127,41 @@ pub const LoadResult = struct {
     config: Config,
     path_used: ?[]const u8, // null if defaults, otherwise the path that was loaded
     path_searched: ?[]const u8, // the default path that would be searched
+    error_type: ?LoadError = null, // set if file exists but failed to load
 };
 
 pub fn load(alloc: std.mem.Allocator, explicit_path: ?[]const u8) LoadResult {
     const default_path = getDefaultConfigPath(alloc);
 
     if (explicit_path) |path| {
-        if (loadFromPath(alloc, path)) |cfg| {
-            return .{
+        switch (loadFromPath(alloc, path)) {
+            .ok => |cfg| return .{
                 .config = cfg,
                 .path_used = path,
                 .path_searched = default_path,
-            };
+            },
+            .err => |e| return .{
+                .config = .{},
+                .path_used = null,
+                .path_searched = default_path,
+                .error_type = if (e == .not_found) null else e,
+            },
         }
-        // Explicit path failed - still return defaults but caller should check
-        return .{
-            .config = .{},
-            .path_used = null,
-            .path_searched = default_path,
-        };
     }
 
     if (default_path) |path| {
-        if (loadFromPath(alloc, path)) |cfg| {
-            return .{
+        switch (loadFromPath(alloc, path)) {
+            .ok => |cfg| return .{
                 .config = cfg,
                 .path_used = path,
                 .path_searched = default_path,
-            };
+            },
+            .err => |e| return .{
+                .config = .{},
+                .path_used = null,
+                .path_searched = default_path,
+                .error_type = if (e == .not_found) null else e,
+            },
         }
     }
 
@@ -151,17 +172,20 @@ pub fn load(alloc: std.mem.Allocator, explicit_path: ?[]const u8) LoadResult {
     };
 }
 
-pub fn loadFromPath(alloc: std.mem.Allocator, path: []const u8) ?Config {
-    const file = std.fs.openFileAbsolute(path, .{}) catch return null;
+pub const LoadError = enum { not_found, read_failed, invalid_json, duplicate_key };
+pub const ParseResult = union(enum) { ok: Config, err: LoadError };
+
+pub fn loadFromPath(alloc: std.mem.Allocator, path: []const u8) ParseResult {
+    const file = std.fs.openFileAbsolute(path, .{}) catch return .{ .err = .not_found };
     defer file.close();
 
-    const stat = file.stat() catch return null;
-    if (stat.size > 1024 * 1024) return null; // 1MB limit
+    const stat = file.stat() catch return .{ .err = .read_failed };
+    if (stat.size > 1024 * 1024) return .{ .err = .read_failed }; // 1MB limit
 
-    const content = file.readToEndAlloc(alloc, 1024 * 1024) catch return null;
+    const content = file.readToEndAlloc(alloc, 1024 * 1024) catch return .{ .err = .read_failed };
     defer alloc.free(content);
 
-    return parse(alloc, content) catch null;
+    return parse(alloc, content);
 }
 
 pub fn getDefaultConfigPath(alloc: std.mem.Allocator) ?[]const u8 {
@@ -174,15 +198,20 @@ pub fn getDefaultConfigPath(alloc: std.mem.Allocator) ?[]const u8 {
     return null;
 }
 
-fn parse(alloc: std.mem.Allocator, content: []const u8) !Config {
+fn parse(alloc: std.mem.Allocator, content: []const u8) ParseResult {
     var arena = std.heap.ArenaAllocator.init(alloc);
-    errdefer arena.deinit();
     const arena_alloc = arena.allocator();
 
-    const parsed = std.json.parseFromSlice(std.json.Value, arena_alloc, content, .{}) catch return error.InvalidJson;
+    const parsed = std.json.parseFromSlice(std.json.Value, arena_alloc, content, .{}) catch |e| {
+        arena.deinit();
+        return .{ .err = if (e == error.DuplicateField) LoadError.duplicate_key else LoadError.invalid_json };
+    };
     const root = parsed.value;
 
-    if (root != .object) return error.InvalidJson;
+    if (root != .object) {
+        arena.deinit();
+        return .{ .err = .invalid_json };
+    }
 
     var config = Config{ ._arena = arena };
 
@@ -195,7 +224,10 @@ fn parse(alloc: std.mem.Allocator, content: []const u8) !Config {
 
     if (root.object.get("socket_dir")) |dir_val| {
         if (dir_val == .string) {
-            config.socket_dir = try arena_alloc.dupe(u8, dir_val.string);
+            config.socket_dir = arena_alloc.dupe(u8, dir_val.string) catch {
+                config.deinit();
+                return .{ .err = .invalid_json };
+            };
         }
     }
 
@@ -211,7 +243,10 @@ fn parse(alloc: std.mem.Allocator, content: []const u8) !Config {
         if (serve_val == .object) {
             if (serve_val.object.get("bind")) |bind_val| {
                 if (bind_val == .string) {
-                    config.serve.bind = try arena_alloc.dupe(u8, bind_val.string);
+                    config.serve.bind = arena_alloc.dupe(u8, bind_val.string) catch {
+                        config.deinit();
+                        return .{ .err = .invalid_json };
+                    };
                 }
             }
             if (serve_val.object.get("port")) |port_val| {
@@ -225,37 +260,14 @@ fn parse(alloc: std.mem.Allocator, content: []const u8) !Config {
         }
     }
 
-    return config;
+    return .{ .ok = config };
 }
 
 const LeaderKey = struct { key: u8, ctrl: bool };
 
 fn parseLeader(val: std.json.Value) ?LeaderKey {
     if (val != .string) return null;
-    const s = val.string;
-
-    // "^A" or "Ctrl+A" format
-    if (s.len == 2 and s[0] == '^') {
-        const c = std.ascii.toLower(s[1]);
-        if (c >= 'a' and c <= 'z') {
-            return .{ .key = c - 'a' + 1, .ctrl = true };
-        }
-    }
-
-    // "Ctrl+X" format
-    if (s.len >= 6 and std.ascii.startsWithIgnoreCase(s, "ctrl+")) {
-        const c = std.ascii.toLower(s[5]);
-        if (c >= 'a' and c <= 'z') {
-            return .{ .key = c - 'a' + 1, .ctrl = true };
-        }
-    }
-
-    // Single character (no ctrl)
-    if (s.len == 1) {
-        return .{ .key = s[0], .ctrl = false };
-    }
-
-    return null;
+    return parseKeyString(val.string);
 }
 
 fn parseBinds(alloc: std.mem.Allocator, obj: std.json.ObjectMap) ?[]const keybind.Bind {
@@ -286,15 +298,41 @@ fn parseBinds(alloc: std.mem.Allocator, obj: std.json.ObjectMap) ?[]const keybin
 
 fn parseKeyString(s: []const u8) ?LeaderKey {
     if (s.len == 2 and s[0] == '^') {
-        const c = std.ascii.toLower(s[1]);
-        if (c >= 'a' and c <= 'z') {
-            return .{ .key = c - 'a' + 1, .ctrl = true };
+        const c = s[1];
+        const lower = std.ascii.toLower(c);
+        if (lower >= 'a' and lower <= 'z') {
+            return .{ .key = lower - 'a' + 1, .ctrl = true };
+        }
+        // Special control characters
+        switch (c) {
+            ' ' => return .{ .key = 0x00, .ctrl = true }, // Ctrl+Space
+            '[' => return .{ .key = 0x1B, .ctrl = true },
+            '\\' => return .{ .key = 0x1C, .ctrl = true },
+            ']' => return .{ .key = 0x1D, .ctrl = true },
+            '^' => return .{ .key = 0x1E, .ctrl = true },
+            '_' => return .{ .key = 0x1F, .ctrl = true },
+            else => {},
         }
     }
     if (s.len >= 6 and std.ascii.startsWithIgnoreCase(s, "ctrl+")) {
-        const c = std.ascii.toLower(s[5]);
-        if (c >= 'a' and c <= 'z') {
-            return .{ .key = c - 'a' + 1, .ctrl = true };
+        const rest = s[5..];
+        if (rest.len == 1) {
+            const c = rest[0];
+            const lower = std.ascii.toLower(c);
+            if (lower >= 'a' and lower <= 'z') {
+                return .{ .key = lower - 'a' + 1, .ctrl = true };
+            }
+            switch (c) {
+                ' ' => return .{ .key = 0x00, .ctrl = true }, // Ctrl+Space
+                '[' => return .{ .key = 0x1B, .ctrl = true },
+                '\\' => return .{ .key = 0x1C, .ctrl = true },
+                ']' => return .{ .key = 0x1D, .ctrl = true },
+                '^' => return .{ .key = 0x1E, .ctrl = true },
+                '_' => return .{ .key = 0x1F, .ctrl = true },
+                else => {},
+            }
+        } else if (std.ascii.eqlIgnoreCase(rest, "space")) {
+            return .{ .key = 0x00, .ctrl = true }; // Ctrl+Space
         }
     }
     if (s.len == 1) {
@@ -360,13 +398,13 @@ fn actionDesc(action: keybind.Action) []const u8 {
 }
 
 test "parse leader ^B" {
-    const result = parseLeader(.{ .string = "^B" }).?;
+    const result = parseKeyString("^B").?;
     try std.testing.expectEqual(@as(u8, 0x02), result.key);
     try std.testing.expect(result.ctrl);
 }
 
 test "parse leader Ctrl+B" {
-    const result = parseLeader(.{ .string = "Ctrl+B" }).?;
+    const result = parseKeyString("Ctrl+B").?;
     try std.testing.expectEqual(@as(u8, 0x02), result.key);
     try std.testing.expect(result.ctrl);
 }
@@ -375,4 +413,42 @@ test "parse action" {
     try std.testing.expectEqual(keybind.Action.detach, parseAction("detach").?);
     try std.testing.expectEqual(keybind.Action.scroll_up, parseAction("pan_up").?);
     try std.testing.expect(parseAction("invalid") == null);
+}
+
+test "parse leader ^backslash" {
+    const result = parseKeyString("^\\").?;
+    try std.testing.expectEqual(@as(u8, 0x1C), result.key);
+    try std.testing.expect(result.ctrl);
+}
+
+test "parse leader Ctrl+backslash" {
+    const result = parseKeyString("Ctrl+\\").?;
+    try std.testing.expectEqual(@as(u8, 0x1C), result.key);
+    try std.testing.expect(result.ctrl);
+}
+
+test "parse leader ^space" {
+    const result = parseKeyString("^ ").?;
+    try std.testing.expectEqual(@as(u8, 0x00), result.key);
+    try std.testing.expect(result.ctrl);
+}
+
+test "parse leader Ctrl+Space" {
+    const result = parseKeyString("Ctrl+Space").?;
+    try std.testing.expectEqual(@as(u8, 0x00), result.key);
+    try std.testing.expect(result.ctrl);
+}
+
+test "writeKeyJson backslash" {
+    var buf: [32]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try Config.writeKeyJson(fbs.writer(), 0x1C, true);
+    try std.testing.expectEqualStrings("^\\\\", fbs.getWritten());
+}
+
+test "writeKeyJson space" {
+    var buf: [32]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try Config.writeKeyJson(fbs.writer(), 0x00, true);
+    try std.testing.expectEqualStrings("^ ", fbs.getWritten());
 }

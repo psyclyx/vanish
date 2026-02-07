@@ -94,6 +94,12 @@ pub fn wait(self: *Pty) !u32 {
     return 0;
 }
 
+pub fn killChild(self: *Pty) void {
+    if (self.child_pid) |pid| {
+        posix.kill(pid, posix.SIG.HUP) catch {};
+    }
+}
+
 fn grantpt(fd: posix.fd_t) !void {
     _ = fd;
 }
