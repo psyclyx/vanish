@@ -1,3 +1,44 @@
+CLAUDE NOTE: you are being run in a loop. pick one thing to do, and do it. it
+need not be code, but should advance the project. code, documentation, hammock
+time (with notes), etc etc. just make sure you update the log every time.
+
+# Requests:
+
+Ongoing:
+
+- Every 3 sessions, take some time to interrogate your abstractions. Is this
+  architecture sound? Is the code maintainable? What's working? What isn't?
+  What's simple, and what's complected? Think about the long term. You'll have
+  to maintain this, don't make that hard on yourself.
+
+Inbox:
+
+- Can we do json instead of toml for config?
+- I'm not sure the claudes earlier properly understood by the scrolling support.
+  I think we explicitly don't want an additional scrollback thing in the viewer.
+  However, for full-screen apps, viewers may be smaller than the primary
+  session, in height and/or width. That's what the scrolling is for - to pan
+  around a terminal larger than the bounds of the viewer. If it's smaller, we
+  can just draw it wherever is convinient - center or top-left corner are both
+  valid choices.
+- You may already have it, but can you please make sure we can take over
+  sessions from viewers? If sizes differ, we'll send a resize to the emulated
+  terminal, and switch the other session to viewer mode.
+- A command to list and disconnect users is helpful
+- It's probably already supported, but just in case - if a primary session is
+  detached from (as opposed to exiting), we want to run it in the background,
+  even if there aren't any viewers.
+- XDG_RUNTIME_DIR might be the best place for this, idk - but we will likely be
+  using this extensively on machines both from a desktop session as well as from
+  ssh. We want sessions to default to a user-specific directory, but all
+  sessions should be accessible, and we shouldn't tie this to a particular login
+  session. (In fact, I think we want these to persist even if the login session
+  that created them closed!)
+- generally, human-readable and json output is helpful for scripting. Make sure
+  we have a --json flag.
+
+The task at hand
+
 # Vanish
 
 lightweight libghostty terminal session multiplexer
@@ -64,9 +105,35 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
+## 2026-02-07: Session 5 - JSON Output for Scripting
+
+### Completed
+
+- [x] `--json` flag for `vanish list` command
+  - Machine-readable output: `{"sessions":[{"name":"foo","path":"/run/user/1000/vanish/foo"}]}`
+  - Proper JSON escaping for special characters
+  - Error case returns `{"error":"..."}` format
+  - Empty case returns `{"sessions":[]}`
+
+### Inbox Review
+
+Items remaining:
+- JSON vs TOML for config file (config not yet implemented)
+- Session takeover from viewers (allow viewer to become primary)
+- List/disconnect users command
+- Scrolling clarification addressed in previous sessions
+
+Already implemented:
+- Background sessions on detach (session keeps running when primary detaches)
+- XDG_RUNTIME_DIR default socket path
+- --json flag (done this session)
+
+---
+
 ## 2026-02-07: Session 4 - Documentation and Testing
 
 ### Completed
+
 - [x] Send command (`vanish send <name> <keys>`) for scripting
 - [x] README.md with usage, keybindings, installation
 - [x] Updated DESIGN.md to reflect current implementation
@@ -77,7 +144,9 @@ lightweight libghostty terminal session multiplexer
   - terminal: resize, scrollback dump
 
 ### Test Coverage
+
 All modules now have meaningful tests:
+
 - keybind.zig: 5 tests
 - protocol.zig: 4 tests
 - pty.zig: 2 tests
@@ -88,6 +157,7 @@ All modules now have meaningful tests:
 ## 2026-02-07: Session 3 - UX Polish and Features
 
 ### Completed
+
 - [x] Status bar (src/client.zig)
   - Toggleable with Ctrl+A s
   - Shows session name (left) and role (right)
@@ -114,6 +184,7 @@ All modules now have meaningful tests:
   - List command shows session names only in default dir
 
 ### Current Feature Set (MVP Complete)
+
 - Create sessions: `vanish new <name> -- <command>`
 - Attach to sessions: `vanish attach <name>`
 - Viewer mode: `vanish attach --viewer <name>`
@@ -128,20 +199,24 @@ All modules now have meaningful tests:
 - Graceful signal handling
 
 ### Architecture Decisions
+
 - Status bar is purely client-side rendering
 - Scroll mode dumps entire screen content
 - Session names use $XDG_RUNTIME_DIR/vanish/ by default
 
 ### Next Steps
+
 1. **Configuration file** - TOML or similar for keybinds, leader key
 2. **Tests** - More comprehensive unit tests
 
 ### Completed This Session
+
 - [x] Send command - `vanish send <name> <keys>` for scripting
 - [x] README.md - User documentation
 - [x] Updated DESIGN.md - Reflects current state
 
 ### Open Questions Resolved
+
 - Status bar content: session name + role (simple, useful)
 - Scroll mode UX: any key exits, visual indicator shown
 - Socket paths: names without / use default dir
@@ -151,6 +226,7 @@ All modules now have meaningful tests:
 ## 2026-02-07: Session 2 - Core UX Features
 
 ### Completed
+
 - [x] ghostty-vt integration (src/terminal.zig)
   - VTerminal wrapper around ghostty's Terminal
   - dumpScreen() uses TerminalFormatter with VT emit for screen sync
@@ -170,6 +246,7 @@ All modules now have meaningful tests:
   - Help overlay (Ctrl+A ?)
 
 ### Architecture Refinements
+
 - Keybinds handled client-side (not session) - this is correct because:
   - Client controls its own terminal (raw mode)
   - Actions like detach are client-side
@@ -177,6 +254,7 @@ All modules now have meaningful tests:
 - VT screen dump preserves terminal state across client reconnect
 
 ### Next Steps
+
 1. **Status bar** - Persistent status line (toggle with Ctrl+A s)
 2. **Scroll mode** - Navigate scrollback with hjkl
 3. **Viewer mode** - Read-only clients (input blocked)
@@ -185,6 +263,7 @@ All modules now have meaningful tests:
 6. **Tests** - More comprehensive unit tests
 
 ### Open Questions
+
 - Status bar content: session name? client count? time?
 - Scroll mode UX: how to exit? visual indicator?
 - Configuration format and location (~/.config/vanish/?)
@@ -194,6 +273,7 @@ All modules now have meaningful tests:
 ## 2026-02-07: Session 1 - Initial Implementation
 
 ### Completed
+
 - [x] Nix infrastructure (shell.nix, default.nix, overlay.nix, .envrc)
 - [x] Zig 0.15 build system (build.zig, build.zig.zon)
 - [x] PTY management (src/pty.zig) - open, close, resize, spawn, wait
@@ -204,12 +284,15 @@ All modules now have meaningful tests:
 - [x] Basic testing - session creation, attach, input/output working
 
 ### Architecture Decisions
-- Using direct posix syscalls rather than Zig 0.15's new Io API (simpler, more control)
+
+- Using direct posix syscalls rather than Zig 0.15's new Io API (simpler, more
+  control)
 - Binary protocol with 5-byte header (1 type + 4 len) + payload
 - Single poll loop for all I/O in session daemon
 - PTY master/slave for child process
 
 ### Code Quality Notes
+
 - Zig 0.15 has significant API changes from 0.13/0.14
 - ArrayList is now "unmanaged" - allocator passed to each function
 - Stream.writer() now requires a buffer parameter

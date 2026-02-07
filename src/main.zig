@@ -16,13 +16,13 @@ const usage =
     \\  vanish new <name> [--] <command> [args...]
     \\  vanish attach [--viewer] <name>
     \\  vanish send <name> <keys>
-    \\  vanish list [directory]
+    \\  vanish list [--json] [directory]
     \\
     \\Commands:
     \\  new      Create a new session
     \\  attach   Attach to an existing session (--viewer for read-only)
     \\  send     Send keys to a session (for scripting)
-    \\  list     List available sessions
+    \\  list     List available sessions (--json for machine-readable output)
     \\
     \\Notes:
     \\  <name> can be a session name (stored in $XDG_RUNTIME_DIR/vanish/)
@@ -142,40 +142,115 @@ fn cmdSend(alloc: std.mem.Allocator, args: []const []const u8) !void {
 }
 
 fn cmdList(alloc: std.mem.Allocator, args: []const []const u8) !void {
-    const show_full_path = args.len > 0;
-    const dir_path = if (args.len > 0) args[0] else blk: {
-        const path = getDefaultSocketDir(alloc) catch {
-            try writeAll(STDERR_FILENO, "Could not determine socket directory\n");
+    var as_json = false;
+    var explicit_dir: ?[]const u8 = null;
+
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--json") or std.mem.eql(u8, arg, "-j")) {
+            as_json = true;
+        } else {
+            explicit_dir = arg;
+        }
+    }
+
+    const allocated_dir = if (explicit_dir == null) blk: {
+        break :blk getDefaultSocketDir(alloc) catch {
+            if (as_json) {
+                try writeAll(STDOUT_FILENO, "{\"error\":\"Could not determine socket directory\"}\n");
+            } else {
+                try writeAll(STDERR_FILENO, "Could not determine socket directory\n");
+            }
             return;
         };
-        break :blk path;
-    };
+    } else null;
+    defer if (allocated_dir) |d| alloc.free(d);
+
+    const dir_path = explicit_dir orelse allocated_dir.?;
 
     var dir = std.fs.openDirAbsolute(dir_path, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) {
-            try writeAll(STDOUT_FILENO, "No sessions found\n");
+            if (as_json) {
+                try writeAll(STDOUT_FILENO, "{\"sessions\":[]}\n");
+            } else {
+                try writeAll(STDOUT_FILENO, "No sessions found\n");
+            }
             return;
         }
         return err;
     };
     defer dir.close();
 
-    var found = false;
+    var sessions: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (sessions.items) |s| alloc.free(s);
+        sessions.deinit(alloc);
+    }
+
     var iter = dir.iterate();
     while (try iter.next()) |entry| {
         if (entry.kind == .unix_domain_socket) {
-            var buf: [std.fs.max_path_bytes]u8 = undefined;
-            const msg = if (show_full_path)
-                std.fmt.bufPrint(&buf, "{s}/{s}\n", .{ dir_path, entry.name }) catch continue
-            else
-                std.fmt.bufPrint(&buf, "{s}\n", .{entry.name}) catch continue;
-            try writeAll(STDOUT_FILENO, msg);
-            found = true;
+            const name = try alloc.dupe(u8, entry.name);
+            try sessions.append(alloc, name);
         }
     }
 
-    if (!found) {
-        try writeAll(STDOUT_FILENO, "No sessions found\n");
+    if (as_json) {
+        try writeJsonList(alloc, sessions.items, dir_path);
+    } else {
+        if (sessions.items.len == 0) {
+            try writeAll(STDOUT_FILENO, "No sessions found\n");
+        } else {
+            for (sessions.items) |name| {
+                var buf: [std.fs.max_path_bytes]u8 = undefined;
+                const msg = if (explicit_dir != null)
+                    std.fmt.bufPrint(&buf, "{s}/{s}\n", .{ dir_path, name }) catch continue
+                else
+                    std.fmt.bufPrint(&buf, "{s}\n", .{name}) catch continue;
+                try writeAll(STDOUT_FILENO, msg);
+            }
+        }
+    }
+}
+
+fn writeJsonList(alloc: std.mem.Allocator, sessions: []const []const u8, dir_path: []const u8) !void {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+
+    try out.appendSlice(alloc, "{\"sessions\":[");
+
+    for (sessions, 0..) |name, i| {
+        if (i > 0) try out.append(alloc, ',');
+        try out.appendSlice(alloc, "{\"name\":\"");
+        try appendJsonString(&out, alloc, name);
+        try out.appendSlice(alloc, "\",\"path\":\"");
+        try appendJsonString(&out, alloc, dir_path);
+        try out.append(alloc, '/');
+        try appendJsonString(&out, alloc, name);
+        try out.appendSlice(alloc, "\"}");
+    }
+
+    try out.appendSlice(alloc, "]}\n");
+    try writeAll(STDOUT_FILENO, out.items);
+}
+
+fn appendJsonString(out: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u8) !void {
+    for (s) |c| {
+        switch (c) {
+            '"' => try out.appendSlice(alloc, "\\\""),
+            '\\' => try out.appendSlice(alloc, "\\\\"),
+            '\n' => try out.appendSlice(alloc, "\\n"),
+            '\r' => try out.appendSlice(alloc, "\\r"),
+            '\t' => try out.appendSlice(alloc, "\\t"),
+            else => {
+                if (c < 0x20) {
+                    var buf: [6]u8 = undefined;
+                    _ = std.fmt.bufPrint(&buf, "\\u{x:0>4}", .{c}) catch continue;
+                    try out.appendSlice(alloc, &buf);
+                } else {
+                    try out.append(alloc, c);
+                }
+            },
+        }
     }
 }
 
