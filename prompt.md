@@ -105,6 +105,49 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
+## 2026-02-07: Session 8 - Session Takeover
+
+Implemented the inbox item for session takeover:
+> You may already have it, but can you please make sure we can take over
+> sessions from viewers? If sizes differ, we'll send a resize to the emulated
+> terminal, and switch the other session to viewer mode.
+
+### Completed
+
+- [x] Protocol: Added `ClientMsg.takeover` (0x06) for viewer requesting takeover
+- [x] Protocol: Added `ServerMsg.role_change` (0x86) with `RoleChange` struct
+- [x] Session: `handleTakeover()` demotes current primary (if any) to viewer, promotes requester
+- [x] Session: Resizes terminal to new primary's size
+- [x] Client: Keybind `Ctrl+A t` sends takeover request (only for viewers)
+- [x] Client: Handles `role_change` message, updates role and status bar
+- [x] Keybind: Added `takeover` action and default bind for 't'
+- [x] Help: Updated help text to show takeover command
+- [x] Test: Added keybind test for takeover
+
+### Flow
+
+1. Viewer presses `Ctrl+A t`
+2. Client sends `ClientMsg.takeover` to session
+3. Session:
+   - If primary exists: sends `role_change(.viewer)` to old primary, moves to viewers list
+   - Removes requester from viewers list
+   - Sets requester as new primary
+   - Sends `role_change(.primary)` to new primary
+   - Resizes PTY and terminal to new primary's size
+4. Both clients update their role and re-render status bar
+
+### Inbox Items Status
+
+- [x] Session takeover from viewers
+- [ ] JSON config (config not implemented yet)
+- [ ] Viewport panning (designed in session 7, not implemented)
+- [ ] List/disconnect clients command
+- [x] Background sessions on detach (already works)
+- [x] XDG_RUNTIME_DIR default path (already works)
+- [x] --json flag for list (already works)
+
+---
+
 ## 2026-02-07: Session 7 - Viewport Panning Design (Hammock Session)
 
 Re-reading the inbox item on scrolling, I now understand the actual requirement:

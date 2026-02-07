@@ -12,6 +12,7 @@ pub const ClientMsg = enum(u8) {
     resize = 0x03,
     detach = 0x04,
     scrollback = 0x05,
+    takeover = 0x06,
 };
 
 pub const ServerMsg = enum(u8) {
@@ -20,6 +21,7 @@ pub const ServerMsg = enum(u8) {
     full = 0x83,
     exit = 0x84,
     denied = 0x85,
+    role_change = 0x86,
 };
 
 pub const DenyReason = enum(u8) {
@@ -61,6 +63,10 @@ pub const Exit = extern struct {
 
 pub const Denied = extern struct {
     reason: DenyReason,
+};
+
+pub const RoleChange = extern struct {
+    new_role: Role,
 };
 
 pub const Header = extern struct {

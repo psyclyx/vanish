@@ -64,6 +64,11 @@ const Client = struct {
             .help => {
                 self.showHelp();
             },
+            .takeover => {
+                if (self.role == .viewer) {
+                    protocol.writeMsg(self.fd, @intFromEnum(protocol.ClientMsg.takeover), "") catch {};
+                }
+            },
             .scroll_up, .scroll_down, .scroll_page_up, .scroll_page_down, .scroll_top, .scroll_bottom => {
                 self.enterScrollMode();
             },
@@ -130,6 +135,7 @@ const Client = struct {
             \\
             \\   d       detach from session
             \\   s       toggle status bar
+            \\   t       takeover (viewer becomes primary)
             \\   k/j     scroll up/down
             \\   Ctrl+U  page up
             \\   Ctrl+D  page down
@@ -332,6 +338,13 @@ fn runClientLoop(client: *Client) !void {
                     var buf: [@sizeOf(protocol.Exit)]u8 = undefined;
                     _ = protocol.readExact(client.fd, &buf) catch {};
                     return;
+                },
+                .role_change => {
+                    var buf: [@sizeOf(protocol.RoleChange)]u8 = undefined;
+                    protocol.readExact(client.fd, &buf) catch break;
+                    const role_change = std.mem.bytesToValue(protocol.RoleChange, &buf);
+                    client.role = role_change.new_role;
+                    client.renderStatusBar();
                 },
                 else => {
                     var remaining = header.len;

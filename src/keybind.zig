@@ -9,6 +9,7 @@ pub const Action = enum {
     scroll_top,
     scroll_bottom,
     toggle_status,
+    takeover,
     help,
     cancel,
 };
@@ -36,6 +37,7 @@ const default_binds = [_]Bind{
     .{ .key = 'g', .action = .scroll_top, .desc = "scroll top" },
     .{ .key = 'G', .action = .scroll_bottom, .desc = "scroll bottom" },
     .{ .key = 's', .action = .toggle_status, .desc = "toggle status" },
+    .{ .key = 't', .action = .takeover, .desc = "takeover" },
     .{ .key = '?', .action = .help, .desc = "help" },
     .{ .key = 0x1b, .action = .cancel, .desc = "cancel" }, // Escape
 };
@@ -156,4 +158,11 @@ test "keybind hint format" {
     _ = state.processKey(0x01, true);
     const hint_after = try state.formatHint(&buf);
     try std.testing.expect(hint_after.len > 0);
+}
+
+test "keybind takeover" {
+    var state = State.init(.{});
+
+    _ = state.processKey(0x01, true);
+    try std.testing.expect(state.processKey('t', false) == .takeover);
 }

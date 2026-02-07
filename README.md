@@ -9,6 +9,7 @@ Like dtach, but with terminal state preservation. Like tmux, but minimal.
 - **Terminal state preservation**: Uses ghostty-vt to track terminal state, so reconnecting shows the current screen
 - **Invisible by default**: No visible UI until you need it
 - **Primary/viewer model**: One writer per session, unlimited read-only viewers
+- **Session takeover**: Viewers can become primary (existing primary becomes viewer)
 - **Simple socket-based sessions**: Just a unix socket per session
 - **Scroll mode**: Navigate scrollback with vim-like keys
 
@@ -39,6 +40,7 @@ Leader key: `Ctrl+A`
 |-----|--------|
 | `d` | Detach from session |
 | `s` | Toggle status bar |
+| `t` | Takeover session (viewer becomes primary) |
 | `k` / `j` | Scroll up/down |
 | `Ctrl+U` / `Ctrl+D` | Page up/down |
 | `g` / `G` | Scroll to top/bottom |

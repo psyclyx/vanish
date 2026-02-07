@@ -328,6 +328,11 @@ fn handleClientInput(self: *Session, is_primary: bool, viewer_idx: usize) !void 
         .scrollback => {
             self.sendScrollback(client.fd) catch {};
         },
+        .takeover => {
+            if (!is_primary) {
+                self.handleTakeover(viewer_idx) catch {};
+            }
+        },
         else => {},
     }
 }
@@ -340,6 +345,49 @@ fn sendScrollback(self: *Session, fd: posix.fd_t) !void {
         if (scrollback.len > 0) {
             try protocol.writeMsg(fd, @intFromEnum(protocol.ServerMsg.full), scrollback);
         }
+    }
+}
+
+fn handleTakeover(self: *Session, viewer_idx: usize) !void {
+    if (viewer_idx >= self.viewers.items.len) return;
+
+    const new_primary = self.viewers.items[viewer_idx];
+
+    // Demote current primary to viewer if exists
+    if (self.primary) |old_primary| {
+        const demote = protocol.RoleChange{ .new_role = .viewer };
+        protocol.writeStruct(old_primary.fd, @intFromEnum(protocol.ServerMsg.role_change), demote) catch {
+            posix.close(old_primary.fd);
+            self.primary = null;
+        };
+        if (self.primary != null) {
+            self.viewers.append(self.alloc, old_primary) catch {
+                posix.close(old_primary.fd);
+            };
+        }
+    }
+
+    // Remove new primary from viewers list
+    _ = self.viewers.swapRemove(viewer_idx);
+
+    // Promote viewer to primary
+    self.primary = Client{
+        .fd = new_primary.fd,
+        .role = .primary,
+        .cols = new_primary.cols,
+        .rows = new_primary.rows,
+    };
+
+    // Notify new primary of role change
+    const promote = protocol.RoleChange{ .new_role = .primary };
+    try protocol.writeStruct(new_primary.fd, @intFromEnum(protocol.ServerMsg.role_change), promote);
+
+    // Resize terminal to new primary's size
+    self.cols = new_primary.cols;
+    self.rows = new_primary.rows;
+    self.pty.resize(.{ .rows = new_primary.rows, .cols = new_primary.cols }) catch {};
+    if (self.terminal) |*term| {
+        term.resize(new_primary.cols, new_primary.rows) catch {};
     }
 }
 
