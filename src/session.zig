@@ -5,6 +5,7 @@ const linux = std.os.linux;
 const Pty = @import("pty.zig").Pty;
 const protocol = @import("protocol.zig");
 const VTerminal = @import("terminal.zig");
+const sig = @import("signal.zig");
 
 const Client = struct {
     fd: posix.fd_t,
@@ -42,6 +43,8 @@ pub fn run(alloc: std.mem.Allocator, socket_path: []const u8, argv: []const []co
     var terminal = try VTerminal.init(alloc, 80, 24);
     errdefer terminal.deinit();
 
+    sig.setup();
+
     var session = Session{
         .alloc = alloc,
         .pty = pty,
@@ -69,6 +72,11 @@ fn eventLoop(self: *Session) !void {
     defer poll_fds.deinit(self.alloc);
 
     while (self.running) {
+        if (sig.checkTerm()) {
+            self.running = false;
+            break;
+        }
+
         poll_fds.clearRetainingCapacity();
 
         try poll_fds.append(self.alloc, .{
@@ -317,7 +325,21 @@ fn handleClientInput(self: *Session, is_primary: bool, viewer_idx: usize) !void 
         .detach => {
             if (is_primary) self.removePrimary() else self.removeViewer(viewer_idx);
         },
+        .scrollback => {
+            self.sendScrollback(client.fd) catch {};
+        },
         else => {},
+    }
+}
+
+fn sendScrollback(self: *Session, fd: posix.fd_t) !void {
+    if (self.terminal) |*term| {
+        const scrollback = term.dumpScrollback(self.alloc) catch return;
+        defer self.alloc.free(scrollback);
+
+        if (scrollback.len > 0) {
+            try protocol.writeMsg(fd, @intFromEnum(protocol.ServerMsg.full), scrollback);
+        }
     }
 }
 

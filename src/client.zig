@@ -14,14 +14,22 @@ const Client = struct {
     keys: keybind.State,
     cols: u16,
     rows: u16,
+    session_name: []const u8,
     running: bool = true,
     hint_visible: bool = false,
+    in_scroll_mode: bool = false,
 
     fn handleInput(self: *Client, buf: []const u8) !void {
         var i: usize = 0;
         while (i < buf.len) {
             const byte = buf[i];
             const is_ctrl = byte >= 1 and byte <= 26;
+
+            if (self.in_scroll_mode) {
+                self.exitScrollMode();
+                i += 1;
+                continue;
+            }
 
             if (self.keys.processKey(byte, is_ctrl)) |action| {
                 try self.executeAction(action);
@@ -46,13 +54,42 @@ const Client = struct {
             },
             .toggle_status => {
                 self.keys.show_status = !self.keys.show_status;
+                if (self.keys.show_status) {
+                    self.renderStatusBar();
+                } else {
+                    self.clearHint();
+                }
             },
             .help => {
                 self.showHelp();
             },
+            .scroll_up, .scroll_down, .scroll_page_up, .scroll_page_down, .scroll_top, .scroll_bottom => {
+                self.enterScrollMode();
+            },
             .cancel => {},
-            else => {},
         }
+    }
+
+    fn enterScrollMode(self: *Client) void {
+        self.in_scroll_mode = true;
+        // Request scrollback from session
+        protocol.writeMsg(self.fd, @intFromEnum(protocol.ClientMsg.scrollback), "") catch {};
+        // Show scroll mode indicator
+        self.showScrollIndicator();
+    }
+
+    fn exitScrollMode(self: *Client) void {
+        self.in_scroll_mode = false;
+        // Clear screen and request fresh terminal state
+        _ = posix.write(STDOUT, "\x1b[2J\x1b[H") catch {};
+        // Request full screen refresh
+        protocol.writeMsg(self.fd, @intFromEnum(protocol.ClientMsg.scrollback), "") catch {};
+    }
+
+    fn showScrollIndicator(self: *Client) void {
+        var buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "\x1b7\x1b[{d};1H\x1b[7m SCROLL MODE - press any key to exit \x1b[0m\x1b8", .{self.rows}) catch return;
+        _ = posix.write(STDOUT, msg) catch {};
     }
 
     fn updateHint(self: *Client) void {
@@ -63,8 +100,12 @@ const Client = struct {
             self.showHint(hint);
             self.hint_visible = true;
         } else if (self.hint_visible) {
-            self.clearHint();
             self.hint_visible = false;
+            if (self.keys.show_status) {
+                self.renderStatusBar();
+            } else {
+                self.clearHint();
+            }
         }
     }
 
@@ -97,6 +138,33 @@ const Client = struct {
             \\
         ;
         _ = posix.write(STDOUT, help) catch {};
+    }
+
+    fn renderStatusBar(self: *Client) void {
+        if (!self.keys.show_status) return;
+        if (self.hint_visible) return;
+
+        var buf: [512]u8 = undefined;
+        var fbs = std.io.fixedBufferStream(&buf);
+        const w = fbs.writer();
+
+        w.writeAll("\x1b7") catch return; // save cursor
+        w.print("\x1b[{d};1H", .{self.rows}) catch return; // move to last line
+        w.writeAll("\x1b[7m") catch return; // inverse video
+
+        w.print(" {s} ", .{self.session_name}) catch return;
+        const left_len = self.session_name.len + 2;
+
+        const right_text = " primary ";
+        const right_len = right_text.len;
+        const total_len = left_len + right_len;
+        const padding: usize = if (self.cols > total_len) self.cols - total_len else 0;
+
+        w.writeByteNTimes(' ', padding) catch return;
+        w.writeAll(right_text) catch return;
+        w.writeAll("\x1b[0m\x1b8") catch return; // reset, restore cursor
+
+        _ = posix.write(STDOUT, fbs.getWritten()) catch {};
     }
 };
 
@@ -151,11 +219,14 @@ pub fn attach(alloc: std.mem.Allocator, socket_path: []const u8) !void {
         if (old_termios) |t| restoreTermios(t);
     }
 
+    const session_name = std.fs.path.basename(socket_path);
+
     var client = Client{
         .fd = fd,
         .keys = keybind.State.init(.{}),
         .cols = size.cols,
         .rows = size.rows,
+        .session_name = session_name,
     };
 
     try runClientLoop(&client);
@@ -209,6 +280,7 @@ fn runClientLoop(client: *Client) !void {
                             remaining -= @intCast(to_read);
                         }
                     }
+                    client.renderStatusBar();
                 },
                 .exit => {
                     var buf: [@sizeOf(protocol.Exit)]u8 = undefined;

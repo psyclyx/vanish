@@ -11,6 +11,7 @@ pub const ClientMsg = enum(u8) {
     input = 0x02,
     resize = 0x03,
     detach = 0x04,
+    scrollback = 0x05,
 };
 
 pub const ServerMsg = enum(u8) {

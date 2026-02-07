@@ -59,6 +59,33 @@ pub fn dumpScreen(self: *VTerminal, alloc: std.mem.Allocator) ![]u8 {
     return output.toOwnedSlice(alloc);
 }
 
+pub fn dumpScrollback(self: *VTerminal, alloc: std.mem.Allocator) ![]u8 {
+    const screen = self.term.screens.active;
+
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(alloc);
+
+    const tl = screen.pages.getTopLeft(.screen);
+    const br = screen.pages.getBottomRight(.screen);
+
+    if (br) |bottom| {
+        const sel = ghostty_vt.Selection.init(tl, bottom, false);
+
+        const formatter: ghostty_vt.formatter.ScreenFormatter = .{
+            .screen = screen,
+            .opts = .{ .emit = .plain, .unwrap = true },
+            .content = .{ .selection = sel },
+            .extra = .none,
+            .pin_map = null,
+        };
+
+        const writer = output.writer(alloc);
+        try std.fmt.format(writer, "{f}", .{formatter});
+    }
+
+    return output.toOwnedSlice(alloc);
+}
+
 test "terminal basic" {
     const alloc = std.testing.allocator;
     var term = try init(alloc, 80, 24);

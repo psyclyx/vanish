@@ -64,6 +64,43 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
+## 2026-02-07: Session 3 - Status Bar, Scroll Mode, Session Signals
+
+### Completed
+- [x] Status bar (src/client.zig)
+  - Toggleable with Ctrl+A s
+  - Shows session name (left) and role (right)
+  - Rendered on bottom line with inverse video
+  - Hint display takes precedence over status bar
+  - Re-renders after output when visible
+- [x] Scroll mode (src/client.zig, src/terminal.zig, src/protocol.zig)
+  - Scroll actions (k/j/g/G/Ctrl+U/Ctrl+D) enter scroll mode
+  - Client requests scrollback via new `scrollback` protocol message
+  - Session dumps scrollback content using ghostty-vt
+  - User scrolls with their terminal's native scrollback
+  - Any key exits scroll mode and refreshes screen
+- [x] Session signal handling (src/session.zig)
+  - Session now handles SIGTERM/SIGINT via sig.setup()
+  - Graceful shutdown with client notification
+  - Socket cleanup on exit
+
+### Architecture Decisions
+- Status bar is purely client-side rendering
+- Scroll mode dumps entire screen content (using ghostty-vt's screen points)
+- User exits scroll mode with any key input
+
+### Next Steps
+1. **Viewer mode** - Read-only clients (input blocked, different role in protocol)
+2. **Configuration file** - TOML or similar for keybinds, leader key
+3. **Tests** - More comprehensive unit tests
+4. **Documentation** - README, man page
+
+### Open Questions Resolved
+- Status bar content: session name + role (simple, useful)
+- Scroll mode UX: any key exits, visual indicator shown
+
+---
+
 ## 2026-02-07: Session 2 - Core UX Features
 
 ### Completed
