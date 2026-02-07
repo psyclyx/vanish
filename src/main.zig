@@ -13,14 +13,18 @@ const usage =
     \\vanish - terminal session multiplexer
     \\
     \\Usage:
-    \\  vanish new <socket> [--] <command> [args...]
-    \\  vanish attach [--viewer] <socket>
+    \\  vanish new <name> [--] <command> [args...]
+    \\  vanish attach [--viewer] <name>
     \\  vanish list [directory]
     \\
     \\Commands:
     \\  new      Create a new session
     \\  attach   Attach to an existing session (--viewer for read-only)
     \\  list     List available sessions
+    \\
+    \\Notes:
+    \\  <name> can be a session name (stored in $XDG_RUNTIME_DIR/vanish/)
+    \\  or a full socket path (containing /)
     \\
 ;
 
@@ -69,11 +73,12 @@ pub fn main() !void {
 
 fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8) !void {
     if (args.len < 2) {
-        try writeAll(STDERR_FILENO, "Usage: vanish new <socket> [--] <command> [args...]\n");
+        try writeAll(STDERR_FILENO, "Usage: vanish new <socket|name> [--] <command> [args...]\n");
         std.process.exit(1);
     }
 
-    const socket_path = args[0];
+    const socket_path = try resolveSocketPath(alloc, args[0]);
+    defer alloc.free(socket_path);
 
     var cmd_start: usize = 1;
     if (args.len > 1 and std.mem.eql(u8, args[1], "--")) {
@@ -91,28 +96,31 @@ fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8) !void {
 
 fn cmdAttach(alloc: std.mem.Allocator, args: []const []const u8) !void {
     if (args.len < 1) {
-        try writeAll(STDERR_FILENO, "Usage: vanish attach [--viewer] <socket>\n");
+        try writeAll(STDERR_FILENO, "Usage: vanish attach [--viewer] <socket|name>\n");
         std.process.exit(1);
     }
 
-    var socket_path: ?[]const u8 = null;
+    var socket_arg: ?[]const u8 = null;
     var as_viewer = false;
 
     for (args) |arg| {
         if (std.mem.eql(u8, arg, "--viewer") or std.mem.eql(u8, arg, "-v")) {
             as_viewer = true;
-        } else if (socket_path == null) {
-            socket_path = arg;
+        } else if (socket_arg == null) {
+            socket_arg = arg;
         }
     }
 
-    if (socket_path == null) {
-        try writeAll(STDERR_FILENO, "Usage: vanish attach [--viewer] <socket>\n");
+    if (socket_arg == null) {
+        try writeAll(STDERR_FILENO, "Usage: vanish attach [--viewer] <socket|name>\n");
         std.process.exit(1);
     }
 
+    const socket_path = try resolveSocketPath(alloc, socket_arg.?);
+    defer alloc.free(socket_path);
+
     const Client = @import("client.zig");
-    try Client.attach(alloc, socket_path.?, as_viewer);
+    try Client.attach(alloc, socket_path, as_viewer);
 }
 
 fn cmdList(alloc: std.mem.Allocator, args: []const []const u8) !void {
@@ -155,6 +163,15 @@ fn getDefaultSocketDir(alloc: std.mem.Allocator) ![]const u8 {
     }
     const uid = std.os.linux.getuid();
     return try std.fmt.allocPrint(alloc, "/tmp/vanish-{d}", .{uid});
+}
+
+fn resolveSocketPath(alloc: std.mem.Allocator, name_or_path: []const u8) ![]const u8 {
+    if (std.mem.indexOf(u8, name_or_path, "/") != null) {
+        return try alloc.dupe(u8, name_or_path);
+    }
+    const dir = try getDefaultSocketDir(alloc);
+    defer alloc.free(dir);
+    return try std.fmt.allocPrint(alloc, "{s}/{s}", .{ dir, name_or_path });
 }
 
 test "basic" {

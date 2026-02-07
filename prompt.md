@@ -89,11 +89,15 @@ lightweight libghostty terminal session multiplexer
 - Scroll mode dumps entire screen content (using ghostty-vt's screen points)
 - User exits scroll mode with any key input
 
+- [x] Viewer mode (src/client.zig, src/main.zig)
+  - --viewer flag for attach command
+  - Viewers don't send input (blocked client-side)
+  - Status bar shows "viewer" role
+
 ### Next Steps
-1. **Viewer mode** - Read-only clients (input blocked, different role in protocol)
-2. **Configuration file** - TOML or similar for keybinds, leader key
-3. **Tests** - More comprehensive unit tests
-4. **Documentation** - README, man page
+1. **Configuration file** - TOML or similar for keybinds, leader key
+2. **Tests** - More comprehensive unit tests
+3. **Documentation** - README, man page
 
 ### Open Questions Resolved
 - Status bar content: session name + role (simple, useful)
