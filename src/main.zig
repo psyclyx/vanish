@@ -17,12 +17,16 @@ const usage =
     \\  vanish attach [--viewer] <name>
     \\  vanish send <name> <keys>
     \\  vanish list [--json] [directory]
+    \\  vanish clients [--json] <name>
+    \\  vanish kick <name> <client-id>
     \\
     \\Commands:
     \\  new      Create a new session
     \\  attach   Attach to an existing session (--viewer for read-only)
     \\  send     Send keys to a session (for scripting)
     \\  list     List available sessions (--json for machine-readable output)
+    \\  clients  List connected clients (--json for machine-readable output)
+    \\  kick     Disconnect a client by ID
     \\
     \\Notes:
     \\  <name> can be a session name (stored in $XDG_RUNTIME_DIR/vanish/)
@@ -64,6 +68,10 @@ pub fn main() !void {
         try cmdSend(alloc, args[2..]);
     } else if (std.mem.eql(u8, cmd, "list")) {
         try cmdList(alloc, args[2..]);
+    } else if (std.mem.eql(u8, cmd, "clients")) {
+        try cmdClients(alloc, args[2..]);
+    } else if (std.mem.eql(u8, cmd, "kick")) {
+        try cmdKick(alloc, args[2..]);
     } else if (std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "--help")) {
         try writeAll(STDOUT_FILENO, usage);
     } else {
@@ -231,6 +239,200 @@ fn writeJsonList(alloc: std.mem.Allocator, sessions: []const []const u8, dir_pat
 
     try out.appendSlice(alloc, "]}\n");
     try writeAll(STDOUT_FILENO, out.items);
+}
+
+fn cmdClients(alloc: std.mem.Allocator, args: []const []const u8) !void {
+    var as_json = false;
+    var socket_arg: ?[]const u8 = null;
+
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--json") or std.mem.eql(u8, arg, "-j")) {
+            as_json = true;
+        } else if (socket_arg == null) {
+            socket_arg = arg;
+        }
+    }
+
+    if (socket_arg == null) {
+        try writeAll(STDERR_FILENO, "Usage: vanish clients [--json] <socket|name>\n");
+        std.process.exit(1);
+    }
+
+    const socket_path = try resolveSocketPath(alloc, socket_arg.?);
+    defer alloc.free(socket_path);
+
+    const sock = connectToSession(socket_path) catch |err| {
+        if (as_json) {
+            try writeAll(STDOUT_FILENO, "{\"error\":\"Could not connect to session\"}\n");
+        } else {
+            var buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "Could not connect to session: {}\n", .{err}) catch "Could not connect\n";
+            try writeAll(STDERR_FILENO, msg);
+        }
+        std.process.exit(1);
+    };
+    defer posix.close(sock);
+
+    // Send hello as viewer (we're just querying)
+    var hello = protocol.Hello{ .role = .viewer, .cols = 80, .rows = 24 };
+    hello.setTerm("xterm-256color");
+    try protocol.writeStruct(sock, @intFromEnum(protocol.ClientMsg.hello), hello);
+
+    // Read welcome
+    const welcome_hdr = try protocol.readHeader(sock);
+    if (welcome_hdr.msg_type == @intFromEnum(protocol.ServerMsg.denied)) {
+        if (as_json) {
+            try writeAll(STDOUT_FILENO, "{\"error\":\"Connection denied\"}\n");
+        } else {
+            try writeAll(STDERR_FILENO, "Connection denied\n");
+        }
+        std.process.exit(1);
+    }
+    var welcome_buf: [@sizeOf(protocol.Welcome)]u8 = undefined;
+    try protocol.readExact(sock, &welcome_buf);
+
+    // Skip full state if sent
+    const state_hdr = protocol.readHeader(sock) catch {
+        if (as_json) {
+            try writeAll(STDOUT_FILENO, "{\"error\":\"Protocol error\"}\n");
+        } else {
+            try writeAll(STDERR_FILENO, "Protocol error\n");
+        }
+        std.process.exit(1);
+    };
+    if (state_hdr.msg_type == @intFromEnum(protocol.ServerMsg.full)) {
+        const skip = try alloc.alloc(u8, state_hdr.len);
+        defer alloc.free(skip);
+        protocol.readExact(sock, skip) catch {};
+    }
+
+    // Send list_clients request
+    try protocol.writeMsg(sock, @intFromEnum(protocol.ClientMsg.list_clients), &.{});
+
+    // Read client_list response
+    const list_hdr = try protocol.readHeader(sock);
+    if (list_hdr.msg_type != @intFromEnum(protocol.ServerMsg.client_list)) {
+        if (as_json) {
+            try writeAll(STDOUT_FILENO, "{\"error\":\"Unexpected response\"}\n");
+        } else {
+            try writeAll(STDERR_FILENO, "Unexpected response\n");
+        }
+        std.process.exit(1);
+    }
+
+    const payload = try protocol.readPayload(alloc, sock, list_hdr.len);
+    defer alloc.free(payload);
+
+    const client_count = list_hdr.len / @sizeOf(protocol.ClientInfo);
+
+    if (as_json) {
+        try writeClientsJson(alloc, payload, client_count);
+    } else {
+        try writeClientsText(payload, client_count);
+    }
+}
+
+fn writeClientsText(payload: []const u8, count: usize) !void {
+    if (count == 0) {
+        try writeAll(STDOUT_FILENO, "No clients connected\n");
+        return;
+    }
+
+    try writeAll(STDOUT_FILENO, "ID\tRole\tSize\n");
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const offset = i * @sizeOf(protocol.ClientInfo);
+        const info = std.mem.bytesToValue(protocol.ClientInfo, payload[offset..][0..@sizeOf(protocol.ClientInfo)]);
+        var buf: [64]u8 = undefined;
+        const role_str = if (info.role == .primary) "primary" else "viewer";
+        const msg = std.fmt.bufPrint(&buf, "{d}\t{s}\t{d}x{d}\n", .{ info.id, role_str, info.cols, info.rows }) catch continue;
+        try writeAll(STDOUT_FILENO, msg);
+    }
+}
+
+fn writeClientsJson(alloc: std.mem.Allocator, payload: []const u8, count: usize) !void {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(alloc);
+
+    try out.appendSlice(alloc, "{\"clients\":[");
+
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        if (i > 0) try out.append(alloc, ',');
+        const offset = i * @sizeOf(protocol.ClientInfo);
+        const info = std.mem.bytesToValue(protocol.ClientInfo, payload[offset..][0..@sizeOf(protocol.ClientInfo)]);
+        var buf: [128]u8 = undefined;
+        const role_str = if (info.role == .primary) "primary" else "viewer";
+        const entry = std.fmt.bufPrint(&buf, "{{\"id\":{d},\"role\":\"{s}\",\"cols\":{d},\"rows\":{d}}}", .{ info.id, role_str, info.cols, info.rows }) catch continue;
+        try out.appendSlice(alloc, entry);
+    }
+
+    try out.appendSlice(alloc, "]}\n");
+    try writeAll(STDOUT_FILENO, out.items);
+}
+
+fn cmdKick(alloc: std.mem.Allocator, args: []const []const u8) !void {
+    if (args.len < 2) {
+        try writeAll(STDERR_FILENO, "Usage: vanish kick <socket|name> <client-id>\n");
+        std.process.exit(1);
+    }
+
+    const socket_path = try resolveSocketPath(alloc, args[0]);
+    defer alloc.free(socket_path);
+
+    const client_id = std.fmt.parseInt(u32, args[1], 10) catch {
+        try writeAll(STDERR_FILENO, "Invalid client ID\n");
+        std.process.exit(1);
+    };
+
+    const sock = connectToSession(socket_path) catch |err| {
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Could not connect to session: {}\n", .{err}) catch "Could not connect\n";
+        try writeAll(STDERR_FILENO, msg);
+        std.process.exit(1);
+    };
+    defer posix.close(sock);
+
+    // Send hello as viewer
+    var hello = protocol.Hello{ .role = .viewer, .cols = 80, .rows = 24 };
+    hello.setTerm("xterm-256color");
+    try protocol.writeStruct(sock, @intFromEnum(protocol.ClientMsg.hello), hello);
+
+    // Read welcome
+    const welcome_hdr = try protocol.readHeader(sock);
+    if (welcome_hdr.msg_type == @intFromEnum(protocol.ServerMsg.denied)) {
+        try writeAll(STDERR_FILENO, "Connection denied\n");
+        std.process.exit(1);
+    }
+    var welcome_buf: [@sizeOf(protocol.Welcome)]u8 = undefined;
+    try protocol.readExact(sock, &welcome_buf);
+
+    // Skip full state if sent
+    const state_hdr = protocol.readHeader(sock) catch {
+        try writeAll(STDERR_FILENO, "Protocol error\n");
+        std.process.exit(1);
+    };
+    if (state_hdr.msg_type == @intFromEnum(protocol.ServerMsg.full)) {
+        const skip = try alloc.alloc(u8, state_hdr.len);
+        defer alloc.free(skip);
+        protocol.readExact(sock, skip) catch {};
+    }
+
+    // Send kick request
+    const kick = protocol.KickClient{ .id = client_id };
+    try protocol.writeStruct(sock, @intFromEnum(protocol.ClientMsg.kick_client), kick);
+
+    try writeAll(STDOUT_FILENO, "Kick request sent\n");
+}
+
+fn connectToSession(path: []const u8) !posix.socket_t {
+    const sock = try posix.socket(posix.AF.UNIX, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
+    errdefer posix.close(sock);
+
+    var addr = std.net.Address.initUnix(path) catch return error.PathTooLong;
+    try posix.connect(sock, &addr.any, addr.getOsSockLen());
+
+    return sock;
 }
 
 fn appendJsonString(out: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u8) !void {

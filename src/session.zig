@@ -9,6 +9,7 @@ const sig = @import("signal.zig");
 
 const Client = struct {
     fd: posix.fd_t,
+    id: u32,
     role: protocol.Role,
     cols: u16 = 80,
     rows: u16 = 24,
@@ -26,6 +27,7 @@ viewers: std.ArrayList(Client) = .empty,
 running: bool = true,
 cols: u16 = 80,
 rows: u16 = 24,
+next_client_id: u32 = 1,
 
 pub fn run(alloc: std.mem.Allocator, socket_path: []const u8, argv: []const []const u8) !void {
     var pty = try Pty.open();
@@ -245,8 +247,12 @@ fn handleNewConnection(self: *Session) !void {
     // Send current terminal state to new client
     self.sendTerminalState(conn) catch {};
 
+    const client_id = self.next_client_id;
+    self.next_client_id += 1;
+
     const client = Client{
         .fd = conn,
+        .id = client_id,
         .role = hello.role,
         .cols = hello.cols,
         .rows = hello.rows,
@@ -337,6 +343,17 @@ fn handleClientInput(self: *Session, is_primary: bool, viewer_idx: usize) !void 
                 self.handleTakeover(viewer_idx) catch {};
             }
         },
+        .list_clients => {
+            self.sendClientList(client.fd) catch {};
+        },
+        .kick_client => {
+            if (header.len == @sizeOf(protocol.KickClient)) {
+                var kick_buf: [@sizeOf(protocol.KickClient)]u8 = undefined;
+                protocol.readExact(client.fd, &kick_buf) catch return;
+                const kick = std.mem.bytesToValue(protocol.KickClient, &kick_buf);
+                self.kickClient(kick.id);
+            }
+        },
         else => {},
     }
 }
@@ -377,6 +394,7 @@ fn handleTakeover(self: *Session, viewer_idx: usize) !void {
     // Promote viewer to primary
     self.primary = Client{
         .fd = new_primary.fd,
+        .id = new_primary.id,
         .role = .primary,
         .cols = new_primary.cols,
         .rows = new_primary.rows,
@@ -392,6 +410,53 @@ fn handleTakeover(self: *Session, viewer_idx: usize) !void {
     self.pty.resize(.{ .rows = new_primary.rows, .cols = new_primary.cols }) catch {};
     if (self.terminal) |*term| {
         term.resize(new_primary.cols, new_primary.rows) catch {};
+    }
+}
+
+fn sendClientList(self: *Session, fd: posix.fd_t) !void {
+    const count: usize = (if (self.primary != null) @as(usize, 1) else 0) + self.viewers.items.len;
+    const payload_size = count * @sizeOf(protocol.ClientInfo);
+
+    var payload = try self.alloc.alloc(u8, payload_size);
+    defer self.alloc.free(payload);
+
+    var offset: usize = 0;
+    if (self.primary) |p| {
+        const info = protocol.ClientInfo{
+            .id = p.id,
+            .role = p.role,
+            .cols = p.cols,
+            .rows = p.rows,
+        };
+        @memcpy(payload[offset..][0..@sizeOf(protocol.ClientInfo)], std.mem.asBytes(&info));
+        offset += @sizeOf(protocol.ClientInfo);
+    }
+    for (self.viewers.items) |v| {
+        const info = protocol.ClientInfo{
+            .id = v.id,
+            .role = v.role,
+            .cols = v.cols,
+            .rows = v.rows,
+        };
+        @memcpy(payload[offset..][0..@sizeOf(protocol.ClientInfo)], std.mem.asBytes(&info));
+        offset += @sizeOf(protocol.ClientInfo);
+    }
+
+    try protocol.writeMsg(fd, @intFromEnum(protocol.ServerMsg.client_list), payload);
+}
+
+fn kickClient(self: *Session, target_id: u32) void {
+    if (self.primary) |p| {
+        if (p.id == target_id) {
+            self.removePrimary();
+            return;
+        }
+    }
+    for (self.viewers.items, 0..) |v, i| {
+        if (v.id == target_id) {
+            self.removeViewer(i);
+            return;
+        }
     }
 }
 

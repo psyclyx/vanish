@@ -13,6 +13,8 @@ pub const ClientMsg = enum(u8) {
     detach = 0x04,
     scrollback = 0x05,
     takeover = 0x06,
+    list_clients = 0x07,
+    kick_client = 0x08,
 };
 
 pub const ServerMsg = enum(u8) {
@@ -23,6 +25,7 @@ pub const ServerMsg = enum(u8) {
     denied = 0x85,
     role_change = 0x86,
     session_resize = 0x87,
+    client_list = 0x88,
 };
 
 pub const DenyReason = enum(u8) {
@@ -75,6 +78,17 @@ pub const RoleChange = extern struct {
 pub const SessionResize = extern struct {
     cols: u16,
     rows: u16,
+};
+
+pub const ClientInfo = extern struct {
+    id: u32,
+    role: Role,
+    cols: u16,
+    rows: u16,
+};
+
+pub const KickClient = extern struct {
+    id: u32,
 };
 
 pub const Header = extern struct {
