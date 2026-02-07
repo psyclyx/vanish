@@ -124,6 +124,7 @@ fn cmdAttach(alloc: std.mem.Allocator, args: []const []const u8) !void {
 }
 
 fn cmdList(alloc: std.mem.Allocator, args: []const []const u8) !void {
+    const show_full_path = args.len > 0;
     const dir_path = if (args.len > 0) args[0] else blk: {
         const path = getDefaultSocketDir(alloc) catch {
             try writeAll(STDERR_FILENO, "Could not determine socket directory\n");
@@ -146,7 +147,10 @@ fn cmdList(alloc: std.mem.Allocator, args: []const []const u8) !void {
     while (try iter.next()) |entry| {
         if (entry.kind == .unix_domain_socket) {
             var buf: [std.fs.max_path_bytes]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "{s}/{s}\n", .{ dir_path, entry.name }) catch continue;
+            const msg = if (show_full_path)
+                std.fmt.bufPrint(&buf, "{s}/{s}\n", .{ dir_path, entry.name }) catch continue
+            else
+                std.fmt.bufPrint(&buf, "{s}\n", .{entry.name}) catch continue;
             try writeAll(STDOUT_FILENO, msg);
             found = true;
         }
