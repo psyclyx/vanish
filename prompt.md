@@ -105,6 +105,80 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
+## 2026-02-07: Session 13 - Client List/Disconnect Commands
+
+Implemented the client list and disconnect commands from the inbox.
+
+### What Changed
+
+**Protocol (protocol.zig):**
+- Added `ClientMsg.list_clients` (0x07) - request client list
+- Added `ClientMsg.kick_client` (0x08) - request to disconnect a client
+- Added `ServerMsg.client_list` (0x88) - response with client info
+- Added `ClientInfo` struct (id, role, cols, rows)
+- Added `KickClient` struct (id)
+
+**Session (session.zig):**
+- Added `id` field to `Client` struct
+- Added `next_client_id` counter to `Session`
+- New clients now receive a unique incrementing ID
+- Added `sendClientList()` - serializes all connected clients
+- Added `kickClient()` - disconnects client by ID
+- Updated `handleClientInput` to handle new message types
+- Takeover now preserves client ID
+
+**CLI (main.zig):**
+- Added `vanish clients [--json] <name>` - list connected clients
+- Added `vanish kick <name> <client-id>` - disconnect a client by ID
+- Added `connectToSession()` helper function
+- Human-readable output: ID, Role, Size in tab-separated format
+- JSON output: `{"clients":[{"id":1,"role":"primary","cols":80,"rows":24}]}`
+
+### Usage
+
+```sh
+# List clients connected to a session
+vanish clients mysession
+# Output:
+# ID    Role    Size
+# 1     primary 120x40
+# 2     viewer  80x24
+
+# JSON output for scripting
+vanish clients --json mysession
+# Output: {"clients":[{"id":1,"role":"primary","cols":120,"rows":40},...]}
+
+# Disconnect a specific client
+vanish kick mysession 2
+# Output: Kick request sent
+```
+
+### Design Notes
+
+- Client IDs are simple incrementing u32 values
+- IDs persist across role changes (takeover preserves ID)
+- The `clients` and `kick` commands connect as a viewer, query/act, then disconnect
+- This is a lightweight approach - no special admin protocol needed
+
+### Inbox Status Update
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Session takeover | ✓ Done | Session 8 |
+| Viewport panning | ✓ Done | Sessions 10-11 |
+| JSON output (--json) | ✓ Done | Session 5, extended this session |
+| Background sessions | ✓ Works | Default behavior |
+| XDG_RUNTIME_DIR | ✓ Works | Default behavior |
+| JSON config | ○ Todo | Config not implemented at all |
+| **List/disconnect clients** | **✓ Done** | **Session 13** |
+
+### Next Priority
+
+1. Update DESIGN.md - documentation debt is growing
+2. JSON config file
+
+---
+
 ## 2026-02-07: Session 12 - Architecture Review (3-session checkpoint)
 
 This is session 12 (divisible by 3), time for another architecture review. Last
