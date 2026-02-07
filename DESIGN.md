@@ -68,6 +68,8 @@ Binary protocol over Unix socket. All multi-byte integers are little-endian.
 - `0x02` Input: raw bytes for pty
 - `0x03` Resize: `{ cols: u16, rows: u16 }`
 - `0x04` Detach: no payload
+- `0x05` Scrollback: request scrollback dump (no payload)
+- `0x06` Takeover: viewer requests to become primary (no payload)
 
 **Session → Client:**
 - `0x81` Welcome: `{ role: u8, session_id: [16]u8 }`
@@ -75,6 +77,7 @@ Binary protocol over Unix socket. All multi-byte integers are little-endian.
 - `0x83` Full: VT-encoded full terminal state (on connect/resize)
 - `0x84` Exit: `{ code: i32 }`
 - `0x85` Denied: `{ reason: u8 }` (e.g., primary already exists)
+- `0x86` RoleChange: `{ new_role: u8 }` (sent after takeover)
 
 ## Rendering Strategy
 
@@ -100,6 +103,7 @@ When running apps like vim/nvim that use the alternate screen:
 ### Default Bindings (under leader)
 
 - `d` - Detach
+- `t` - Takeover (viewer becomes primary)
 - `k/j` - Scroll up/down (enters scroll mode)
 - `Ctrl+U/Ctrl+D` - Page up/down
 - `g/G` - Scroll to top/bottom

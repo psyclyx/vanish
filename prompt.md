@@ -105,6 +105,141 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
+## 2026-02-07: Session 9 - Architecture Review (3-session checkpoint)
+
+Since this is session 9 (divisible by 3), doing an architecture review. Last review
+was session 6, before takeover was implemented.
+
+### Codebase Stats
+
+- **8 source files**, ~1,781 lines total
+- **16 tests** across 4 modules
+- Clean module boundaries, no circular dependencies
+
+### What's Working Well
+
+**1. Module Separation is Excellent**
+Each file does one thing:
+- `session.zig` (425 lines): daemon, poll loop, client management
+- `client.zig` (427 lines): user-facing terminal interaction
+- `protocol.zig` (169 lines): wire format
+- `terminal.zig` (134 lines): ghostty-vt wrapper
+- `keybind.zig` (168 lines): input state machine
+- `pty.zig` (134 lines): PTY operations
+- `signal.zig` (48 lines): signal handling
+- `main.zig` (276 lines): CLI entry
+
+No module is over 500 lines. Dependencies flow downward.
+
+**2. Protocol Remains Simple**
+- 5-byte header (1 type + 4 len) + payload
+- Client messages: 0x01-0x06
+- Server messages: 0x81-0x86
+- Easy to debug with hexdump
+
+**3. State Machines are Explicit**
+- `keybind.State`: tracks leader mode, bindings
+- `Client`: running, hint_visible, in_scroll_mode, role
+- Session: primary client + viewers list
+
+**4. No Threading**
+Single poll() loop per process. Simple to reason about.
+
+### What Needs Work
+
+**1. Scroll Mode is Wrong (Known Issue)**
+
+From session 7's design work: the current "scroll mode" dumps scrollback and exits
+on any key. The user actually wants **viewport panning** for viewers smaller than
+the session. This is designed but not implemented.
+
+Current flow (wrong):
+```
+Ctrl+A k → enter scroll mode → dump scrollback → any key exits
+```
+
+Correct flow (not yet implemented):
+```
+hjkl available to viewers → pan viewport around session's larger screen
+```
+
+**2. Client State Flags are Getting Messy**
+
+Looking at `client.zig` line 12-21:
+```zig
+running: bool = true,
+hint_visible: bool = false,
+in_scroll_mode: bool = false,
+```
+
+Plus `keys.show_status` and `keys.in_leader`. These are scattered across two
+structs. With viewport panning coming, we'll add viewport offset too.
+
+Consider consolidating into a single `Mode` enum:
+```zig
+const Mode = enum { normal, leader, scroll, help };
+```
+
+But actually... these aren't mutually exclusive. You can have status bar visible
+while in leader mode. So maybe the current approach is correct, just needs better
+organization.
+
+**Decision**: Leave as-is for now. When viewport panning is added, reassess.
+
+**3. DESIGN.md is Slightly Outdated**
+
+Session 8 added takeover, but DESIGN.md doesn't mention it. The protocol section
+is also missing:
+- 0x05 Scrollback
+- 0x06 Takeover
+- 0x86 RoleChange
+
+Should update to stay accurate.
+
+**4. No Config Yet**
+
+User wants JSON config. Need:
+- `~/.config/vanish/config.json`
+- Leader key override
+- Custom keybinds
+- Socket directory
+
+This is lower priority than viewport panning.
+
+### Inbox Items Status (Updated)
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Session takeover | ✓ Done | Session 8 |
+| JSON config | ○ Todo | Config not implemented at all |
+| Viewport panning | ○ Todo | Designed in session 7 |
+| List/disconnect clients | ○ Todo | Protocol + CLI needed |
+| Background sessions | ✓ Works | Already implemented |
+| XDG_RUNTIME_DIR | ✓ Works | Already implemented |
+| --json flag | ✓ Done | Session 5 |
+
+### Priority for Next Sessions
+
+1. **Viewport panning** - This is the most significant missing feature based on
+   user feedback. The design from session 7 is solid. Implementation needed.
+
+2. **Update DESIGN.md** - Small but keeps docs accurate.
+
+3. **Client list/disconnect** - Would be useful for admin purposes.
+
+4. **JSON config** - Nice to have, but current defaults work.
+
+### Code Health: Good
+
+The codebase is clean, well-organized, and maintainable. No major refactoring
+needed. The main gap is feature completeness (viewport panning) rather than
+architectural issues.
+
+One thing to watch: `client.zig` and `session.zig` are approaching 450 lines each.
+If they grow much larger, consider splitting. But they're not there yet.
+
+---
+
 ## 2026-02-07: Session 8 - Session Takeover
 
 Implemented the inbox item for session takeover:
