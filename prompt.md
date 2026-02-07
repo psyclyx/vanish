@@ -105,6 +105,150 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
+## 2026-02-07: Session 15 - Architecture Review (3-session checkpoint)
+
+Since session 15 is divisible by 3, performing an architecture review. Last reviews
+were sessions 9 and 12.
+
+### Codebase Stats
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| client.zig | 616 | User-facing terminal, viewport rendering |
+| session.zig | 504 | Daemon, poll loop, client management |
+| main.zig | 478 | CLI entry point |
+| terminal.zig | 279 | ghostty-vt wrapper, viewport dump |
+| protocol.zig | 191 | Wire format |
+| keybind.zig | 172 | Input state machine |
+| pty.zig | 134 | PTY operations |
+| signal.zig | 48 | Signal handling |
+| **Total** | **~2,422** | 8 source files |
+
+Tests: 18 across 5 modules (keybind, protocol, pty, terminal, main)
+
+### What's Working Well
+
+**1. Feature Completeness - Nearly Done**
+
+All inbox items except JSON config are complete:
+- ✓ Session takeover (viewer → primary)
+- ✓ Viewport panning (hjkl for smaller viewers)
+- ✓ Client list/disconnect commands
+- ✓ JSON output for scripting
+- ✓ Background sessions on detach
+- ✓ XDG_RUNTIME_DIR default paths
+
+**2. Protocol Is Stable and Complete**
+
+8 client messages (0x01-0x08), 8 server messages (0x81-0x88). The protocol hasn't
+needed changes since session 13. The 5-byte header design is simple and debuggable.
+
+**3. Module Boundaries Remain Clean**
+
+No circular dependencies. Each file has clear responsibility:
+- Protocol: wire format only
+- Terminal: VT emulation only
+- Keybind: state machine only
+- Session: server-side orchestration
+- Client: user-side interaction
+
+**4. Viewport Panning Design Was Correct**
+
+Session 7's decision to have viewers maintain a local VTerminal and do client-side
+viewport clipping was the right call. Memory overhead only when panning is needed.
+The Viewport struct (client.zig:13-111) is pure: no I/O, just offset math.
+
+### What Could Be Improved
+
+**1. main.zig Has Grown (478 lines)**
+
+main.zig grew from 276 (session 12) to 478 lines with the `clients` and `kick`
+commands. It's now larger than session.zig was at session 12. The `cmdClients()`
+and `cmdKick()` functions duplicate connection/handshake logic.
+
+**Options:**
+- Extract `connectAndQuery()` helper
+- Create `admin.zig` for admin commands
+- Leave as-is (it's still manageable)
+
+**Decision**: Leave as-is for now. 478 lines for a CLI entry point is acceptable.
+The duplicated handshake logic is straightforward enough that DRY-ing it up would
+add more complexity than it saves.
+
+**2. Old Scrollback Protocol Still Exists**
+
+`ClientMsg.scrollback` (0x05) and `sendScrollback()` in session.zig exist but
+aren't bound to any key since session 10's viewport panning refactor. hjkl now
+does viewport panning.
+
+**Options:**
+- Remove the dead code
+- Bind scrollback to Ctrl+A [ (like tmux copy mode)
+- Keep for potential future use
+
+**Decision**: Keep for now. It's not hurting anything, and the user's original
+spec mentioned scrollback dumping. We might want it for a future feature.
+
+**3. No Configuration File**
+
+The only remaining inbox item. Currently hardcoded:
+- Leader key: Ctrl+A
+- Keybinds: d/s/t/hjkl/g/G/?
+- Socket dir: XDG_RUNTIME_DIR/vanish
+
+User requested JSON config. Need to implement:
+- `~/.config/vanish/config.json`
+- Leader key override
+- Custom keybinds
+- Socket directory override
+
+### Simple vs Complected Analysis
+
+**Simple (good):**
+- Viewport struct: pure math, no side effects
+- Protocol: one-way data flow, no acks
+- Single poll() loop per process
+- Client state is explicit: running, hint_visible, role
+
+**Potentially complected:**
+- `handleOutput()` in client.zig has two paths (direct write vs VTerminal). This
+  is acceptable for performance reasons - no allocation when not panning.
+- `cmdClients()` and `cmdKick()` in main.zig share handshake code but don't share
+  it. Acceptable duplication - DRY-ing it would add indirection.
+
+### Inbox Status
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Session takeover | ✓ Done | Session 8 |
+| Viewport panning | ✓ Done | Sessions 10-11 |
+| JSON output (--json) | ✓ Done | Session 5, extended session 13 |
+| Background sessions | ✓ Works | Default behavior |
+| XDG_RUNTIME_DIR | ✓ Works | Default behavior |
+| List/disconnect clients | ✓ Done | Session 13 |
+| **JSON config** | **○ Todo** | **Last remaining inbox item** |
+
+### Next Priority
+
+1. **JSON config file** - The only remaining inbox item
+   - Parse `~/.config/vanish/config.json` if it exists
+   - Override leader key, keybinds, socket_dir
+   - Keep it simple - just a flat JSON object
+
+2. After config: consider removing dead scrollback code, or binding it
+
+### Code Health Assessment
+
+**Good.** The codebase has grown from ~1,781 (session 9) to ~2,422 lines but
+remains maintainable. No module exceeds 620 lines. Tests pass. The main gap is
+feature completeness (JSON config) rather than architectural issues.
+
+Watch list:
+- main.zig at 478 lines - don't let it grow much more
+- client.zig at 616 lines - stable, no recent growth
+
+---
+
 ## 2026-02-07: Session 14 - Documentation Update
 
 Updated DESIGN.md to address the documentation debt noted in sessions 9 and 12.
