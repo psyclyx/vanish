@@ -13,33 +13,38 @@ Ongoing:
 
 Inbox: keep this up to date
 
-New:
-
-(none)
-
 Current:
 
-- Sometimes, the cursor is in the wrong place for particularly narrow primary
-  sessions.
-- The session list isn't reactive in the web (would need SSE for session list).
-- Man page, readme. all to the point. little fluff. a tool, not a product or an
-  experience.
-- an arch pkgbuild
+- Mobile web: resizable terminal, modifier buttons (Ctrl, etc.), generally more
+  mobile-friendly without being UX slop. Target audience falls back to termux if
+  bad.
+- Web refresh: force-refresh button, and/or periodic keyframes for native
+  clients. Garbled text on connect sometimes.
+- Cursor position bug for narrow primary sessions.
+- Session list SSE (reactive in web).
+- Man page, readme. Minimal, to the point.
+- Arch PKGBUILD.
+
+Done (Session 33):
+
+- ✓ Architecture review (3-session checkpoint). Codebase stable at 5,452 lines
+  across 14 files (13 .zig + 1 .html). Analyzed new inbox items. See notes.
 
 Done (Session 32):
 
 - ✓ Fixed web terminal input - The /input and /takeover endpoints were creating
-  ephemeral socket connections per keystroke (connect as primary, handshake, skip
-  full state, send 1 byte, disconnect). This always failed when a native primary
-  existed. Now input/takeover route through the SSE client's existing persistent
-  session socket. Auto-takeover on first keypress. http.zig: 949→862 (-87 lines).
+  ephemeral socket connections per keystroke (connect as primary, handshake,
+  skip full state, send 1 byte, disconnect). This always failed when a native
+  primary existed. Now input/takeover route through the SSE client's existing
+  persistent session socket. Auto-takeover on first keypress. http.zig: 949→862
+  (-87 lines).
 
 Done (Session 31):
 
 - ✓ Extract shared utilities (paths.zig) - Moved appendJsonEscaped,
   getDefaultSocketDir, and resolveSocketPath into paths.zig. Removed ~60 lines
-  of duplication across main.zig, http.zig, and vthtml.zig. 13 source files
-  now. All tests passing.
+  of duplication across main.zig, http.zig, and vthtml.zig. 13 source files now.
+  All tests passing.
 
 Done (Session 30):
 
@@ -187,6 +192,186 @@ lightweight libghostty terminal session multiplexer with web access
 
 # Progress Notes
 
+## 2026-02-07: Session 33 - Architecture Review (3-session checkpoint)
+
+Session 33 is divisible by 3. Last review was session 30.
+
+### Codebase Stats
+
+| File         | Lines     | Purpose                              |
+| ------------ | --------- | ------------------------------------ |
+| main.zig     | 942       | CLI entry point                      |
+| http.zig     | 862       | Web server, SSE, routing             |
+| client.zig   | 620       | Native client, viewport rendering    |
+| auth.zig     | 556       | JWT/HMAC, OTP exchange               |
+| session.zig  | 526       | Daemon, poll loop, client mgmt       |
+| config.zig   | 454       | JSON config parsing, error handling  |
+| vthtml.zig   | 375       | VT→HTML rendering, delta computation |
+| terminal.zig | 335       | ghostty-vt wrapper                   |
+| protocol.zig | 192       | Wire format                          |
+| index.html   | 185       | Web frontend (vanilla JS)            |
+| keybind.zig  | 174       | Input state machine                  |
+| pty.zig      | 140       | PTY operations                       |
+| signal.zig   | 48        | Signal handling                      |
+| paths.zig    | 43        | Shared utilities                     |
+| **Total**    | **5,452** | 14 files                             |
+
+Build: Clean. Tests: All passing.
+
+### Codebase Health
+
+**Excellent.** Growth has plateaued:
+
+- Session 27: 5,411 lines
+- Session 30: 5,410 lines
+- Session 33: 5,452 lines (+42 in 3 sessions, all from index.html session 32)
+
+No file exceeds 942 lines. Module boundaries are clean. No circular
+dependencies.
+
+### What's Working Well
+
+**1. Core is done.** The multiplexer, protocol, native client, session daemon,
+auth, config - all stable and correct. No bugs reported in these areas.
+
+**2. Web input fix (session 32) was the right architecture.** Routing input
+through the SSE client's persistent session socket eliminated the ephemeral
+connection antipattern. http.zig went from 949 to 862 lines - a rare case where
+fixing a bug also reduced code.
+
+**3. Delta streaming is working.** vthtml.zig's cell-level diffing means only
+changed cells go over SSE. Memory per SSE client is ~7.5KB (24 bytes × 1920
+cells for 80×24). Keyframes sent every 30s as a safety net.
+
+**4. No duplication remaining.** The paths.zig extraction (session 31) cleaned
+up the last significant duplication.
+
+### New Inbox Analysis
+
+Three new items from the user. Let me think through each carefully.
+
+**1. Mobile-friendly web terminal**
+
+What's requested:
+- Resizable terminal
+- Modifier buttons (Ctrl, etc.) for mobile
+- Generally more mobile-friendly
+- NOT UX slop - target audience prefers termux
+
+What exists:
+- `<meta name="viewport">` is set correctly
+- Character dimensions are hardcoded: `charWidth = 8.4, charHeight = 17`
+- No touch event handling
+- No modifier buttons
+- Terminal fills viewport (`position: fixed; inset: 0`)
+- Font size is hardcoded at 14px
+
+Assessment: The hardcoded character dimensions are the biggest problem. They
+need to be measured at runtime from the actual font rendering. For mobile:
+
+- **Measure char dimensions**: Create a hidden probe element, measure actual
+  rendered character width/height. This fixes the positioning for all screen
+  sizes and fonts.
+- **Modifier buttons**: A small floating toolbar with Ctrl, Alt, Esc, Tab
+  buttons. Only shown on touch devices (or togglable). On tap, sets a modifier
+  flag for the next keypress. Clean, minimal.
+- **Font scaling**: Use viewport-relative font size or allow pinch-to-zoom.
+  Actually, the simplest approach: let the user resize text with standard
+  browser zoom. The measured char dimensions would adapt automatically.
+- **Resize support**: When the browser is resized (or on mobile orientation
+  change), send a resize to the session. Need to compute how many cols/rows fit.
+
+Implementation plan (for a future session):
+1. Measure char dimensions at runtime instead of hardcoding
+2. On window resize, compute cols/rows that fit, POST to `/resize`
+3. Add a small modifier toolbar (Ctrl, Alt, Esc, Tab) - visible on touch devices
+4. The `/resize` endpoint is stubbed but needs to actually send a resize through
+   the SSE client's session socket (same pattern as input/takeover)
+
+**2. Periodic keyframes / force refresh**
+
+What's requested:
+- Garbled text appears at top on connect sometimes
+- Periodic full refresh would help
+- Button to force a refresh
+
+What exists:
+- Web SSE clients already get 30s periodic keyframes (http.zig:712)
+- Native clients do NOT get periodic refreshes
+- On native connect, `sendTerminalState()` dumps the full screen
+
+The garbled text is likely a native client issue. When a native viewer connects,
+it receives the full terminal state via `dumpScreen()`. If the screen dump
+contains sequences that interact poorly with the viewer's terminal (e.g., the
+viewer's terminal is in a different mode), garbage can appear.
+
+Options:
+- **Native refresh keybind**: Ctrl+A r = clear screen, re-request full state.
+  Simple, no protocol change needed. Client just writes `\x1b[2J\x1b[H` to its
+  own terminal, then requests scrollback/full.
+- **Periodic native keyframes**: The session could periodically send full state.
+  But this adds complexity to the session daemon and wastes bandwidth for a rare
+  issue. Not worth it.
+- **Web refresh button**: Easy - just have the frontend close and reopen the SSE
+  connection. Or send a request that triggers a keyframe.
+
+Recommendation: Add a keybind (Ctrl+A r) for native refresh. Add a "Refresh"
+button to the web UI header. Both are simple, user-initiated, no protocol
+changes.
+
+**3. Cursor position bug (narrow primary)**
+
+This was noted before. The cursor position issue in narrow primary sessions
+likely stems from the VT emulator's cursor tracking vs the actual terminal
+width. When the primary session is narrower than expected, the cursor wraps
+differently. Need to investigate whether `dumpScreen()` correctly captures and
+restores cursor position.
+
+### Simple vs Complected Analysis
+
+**Simple (good):**
+
+- Everything from previous reviews remains simple
+- The SSE input routing through session_fd is cleaner than the old approach
+- Delta streaming: pure function, no side effects
+
+**Acceptable complexity:**
+
+- index.html at 185 lines handles auth, session list, and terminal rendering.
+  As mobile features are added, this could grow. Consider splitting JS into a
+  separate file when it exceeds ~250 lines.
+
+**Potential concern:**
+
+- The `/resize` endpoint is stubbed (`handleResize` just returns ok without
+  doing anything). This needs to actually work for mobile resize support.
+
+### Inbox Status
+
+| Item                      | Status | Notes                                  |
+| ------------------------- | ------ | -------------------------------------- |
+| Mobile web terminal       | ○ Todo | Char measurement, modifiers, resize    |
+| Web/native refresh        | ○ Todo | Keybind + button, simple               |
+| Cursor position (narrow)  | ○ Todo | Investigate dumpScreen cursor handling  |
+| Session list SSE          | ○ Todo | Would need SSE for list                |
+| Man page, readme          | ○ Todo |                                        |
+| Arch PKGBUILD             | ○ Todo |                                        |
+
+### Recommendations for Next Sessions
+
+1. **Session 34:** Web terminal resize + char measurement. Fix the hardcoded
+   `charWidth`/`charHeight`, implement actual `/resize` endpoint, compute
+   cols/rows from viewport. This is foundational for both mobile and desktop
+   resize.
+
+2. **Session 35:** Refresh keybind (Ctrl+A r) for native, Refresh button for
+   web. Both are quick wins that address user-reported garbled text.
+
+3. **Session 36 (next review):** Mobile modifier buttons. By then we'll have
+   resize working and can assess the mobile experience properly.
+
+---
+
 ## 2026-02-07: Session 32 - Fix Web Terminal Input
 
 ### The Problem
@@ -226,28 +411,28 @@ input through its `session_fd`. If no primary SSE client exists, returns 409.
 demoted.
 
 **Frontend:** Added `isPrimary` state tracking. On first keypress, if input
-returns 409 (not primary), auto-calls takeover. Added PageUp/PageDown/Insert
-key mappings.
+returns 409 (not primary), auto-calls takeover. Added PageUp/PageDown/Insert key
+mappings.
 
 ### Line Count Impact
 
-| File       | Before | After | Change |
-| ---------- | ------ | ----- | ------ |
-| http.zig   | 949    | 862   | -87    |
-| index.html | 182    | 185   | +3     |
-| **Net**    |        |       | **-84**|
+| File       | Before | After | Change  |
+| ---------- | ------ | ----- | ------- |
+| http.zig   | 949    | 862   | -87     |
+| index.html | 182    | 185   | +3      |
+| **Net**    |        |       | **-84** |
 
 Total codebase: 13 source files, ~5,270 lines (down from 5,354).
 
 ### Inbox Status
 
-| Item                | Status  | Notes                              |
-| ------------------- | ------- | ---------------------------------- |
-| Web input bug       | ✓ Done  | Session 32                         |
-| Cursor position bug | ○ Todo  | Narrow primary sessions            |
-| Session list SSE    | ○ Todo  | Would need SSE for list            |
-| Man page, readme    | ○ Todo  |                                    |
-| Arch PKGBUILD       | ○ Todo  |                                    |
+| Item                | Status | Notes                   |
+| ------------------- | ------ | ----------------------- |
+| Web input bug       | ✓ Done | Session 32              |
+| Cursor position bug | ○ Todo | Narrow primary sessions |
+| Session list SSE    | ○ Todo | Would need SSE for list |
+| Man page, readme    | ○ Todo |                         |
+| Arch PKGBUILD       | ○ Todo |                         |
 
 ### Recommendations for Next Sessions
 
@@ -296,25 +481,25 @@ Three functions extracted:
 
 ### Line Count Impact
 
-| File       | Before | After | Change |
-| ---------- | ------ | ----- | ------ |
-| main.zig   | 982    | 942   | -40    |
-| http.zig   | 988    | 949   | -39    |
-| vthtml.zig | 395    | 375   | -20    |
-| paths.zig  | -      | 43    | +43    |
-| **Net**    |        |       | **-56**|
+| File       | Before | After | Change  |
+| ---------- | ------ | ----- | ------- |
+| main.zig   | 982    | 942   | -40     |
+| http.zig   | 988    | 949   | -39     |
+| vthtml.zig | 395    | 375   | -20     |
+| paths.zig  | -      | 43    | +43     |
+| **Net**    |        |       | **-56** |
 
 Total codebase: 13 source files, ~5,354 lines (down from 5,410).
 
 ### Inbox Status
 
-| Item                | Status  | Notes                              |
-| ------------------- | ------- | ---------------------------------- |
-| Cursor position bug | ○ Todo  | Narrow primary sessions            |
-| Firefox input bug   | ○ Todo  | Keyboard events captured, no send  |
-| Session list SSE    | ○ Todo  | Would need SSE for list            |
-| Man page, readme    | ○ Todo  |                                    |
-| Arch PKGBUILD       | ○ Todo  |                                    |
+| Item                | Status | Notes                             |
+| ------------------- | ------ | --------------------------------- |
+| Cursor position bug | ○ Todo | Narrow primary sessions           |
+| Firefox input bug   | ○ Todo | Keyboard events captured, no send |
+| Session list SSE    | ○ Todo | Would need SSE for list           |
+| Man page, readme    | ○ Todo |                                   |
+| Arch PKGBUILD       | ○ Todo |                                   |
 
 ### Recommendations for Next Sessions
 
