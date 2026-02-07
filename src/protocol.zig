@@ -141,3 +141,23 @@ test "hello struct" {
     hello.setTerm("xterm-256color");
     try std.testing.expectEqualStrings("xterm-256color", hello.getTerm());
 }
+
+test "hello term truncation" {
+    var hello = Hello{
+        .role = .primary,
+        .cols = 80,
+        .rows = 24,
+    };
+    const long_term = "a" ** 100;
+    hello.setTerm(long_term);
+    try std.testing.expect(hello.getTerm().len < 64);
+}
+
+test "header size" {
+    try std.testing.expectEqual(@as(usize, 5), @sizeOf(Header));
+}
+
+test "message types" {
+    try std.testing.expectEqual(@as(u8, 0x01), @intFromEnum(ClientMsg.hello));
+    try std.testing.expectEqual(@as(u8, 0x81), @intFromEnum(ServerMsg.welcome));
+}

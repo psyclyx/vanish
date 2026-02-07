@@ -124,3 +124,11 @@ test "pty open" {
     try std.testing.expect(pty.master >= 0);
     try std.testing.expect(std.mem.startsWith(u8, &pty.slave_path, "/dev/pts/"));
 }
+
+test "pty resize" {
+    var pty = try open();
+    defer pty.close();
+
+    try pty.resize(.{ .rows = 24, .cols = 80 });
+    try pty.resize(.{ .rows = 50, .cols = 120 });
+}

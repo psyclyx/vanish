@@ -118,3 +118,42 @@ test "keybind cancel" {
     const action = state.processKey('x', false);
     try std.testing.expect(action == .cancel);
 }
+
+test "keybind escape cancels" {
+    var state = State.init(.{});
+
+    _ = state.processKey(0x01, true);
+    try std.testing.expect(state.in_leader);
+
+    const action = state.processKey(0x1b, false);
+    try std.testing.expect(action == .cancel);
+    try std.testing.expect(!state.in_leader);
+}
+
+test "keybind scroll actions" {
+    var state = State.init(.{});
+
+    _ = state.processKey(0x01, true);
+    try std.testing.expect(state.processKey('k', false) == .scroll_up);
+
+    _ = state.processKey(0x01, true);
+    try std.testing.expect(state.processKey('j', false) == .scroll_down);
+
+    _ = state.processKey(0x01, true);
+    try std.testing.expect(state.processKey('g', false) == .scroll_top);
+
+    _ = state.processKey(0x01, true);
+    try std.testing.expect(state.processKey('G', false) == .scroll_bottom);
+}
+
+test "keybind hint format" {
+    var state = State.init(.{});
+    var buf: [512]u8 = undefined;
+
+    const hint_before = try state.formatHint(&buf);
+    try std.testing.expectEqual(@as(usize, 0), hint_before.len);
+
+    _ = state.processKey(0x01, true);
+    const hint_after = try state.formatHint(&buf);
+    try std.testing.expect(hint_after.len > 0);
+}
