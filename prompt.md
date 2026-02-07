@@ -105,6 +105,201 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
+## 2026-02-07: Session 7 - Viewport Panning Design (Hammock Session)
+
+Re-reading the inbox item on scrolling, I now understand the actual requirement:
+
+> However, for full-screen apps, viewers may be smaller than the primary
+> session, in height and/or width. That's what the scrolling is for - to pan
+> around a terminal larger than the bounds of the viewer.
+
+This is NOT about scrollback history. It's about **viewport panning**: when a viewer's
+terminal is smaller than the session's terminal, the viewer needs to be able to see
+different parts of the larger screen.
+
+### Current Implementation (Wrong)
+
+The current scroll mode:
+1. User presses Ctrl+A k/j
+2. Client enters "scroll mode" and requests scrollback
+3. Session dumps plaintext scrollback content
+4. Any key exits scroll mode
+
+This is scrollback navigation, which the user explicitly says they DON'T want:
+> I think we explicitly don't want an additional scrollback thing in the viewer
+
+### Correct Design: Viewport Panning
+
+**Concept:**
+- Session terminal has size (session_cols, session_rows), e.g., 120x50
+- Viewer terminal has size (viewer_cols, viewer_rows), e.g., 80x24
+- Viewer maintains a viewport offset (vx, vy) into the session screen
+- hjkl moves the viewport, showing a different portion of the session screen
+
+**Key insight:** This is rendering logic, not protocol logic. The session already
+sends full terminal state. The viewer needs to:
+1. Know the session's terminal size (need protocol change)
+2. Track its own viewport offset
+3. Render only the visible portion
+
+**Protocol Change Needed:**
+```
+Welcome struct should include session terminal size:
+  Welcome = extern struct {
+      role: Role,
+      session_id: [16]u8,
+      session_cols: u16,  // NEW
+      session_rows: u16,  // NEW
+  };
+```
+
+Also need a new message when session resizes (when primary resizes):
+```
+ServerMsg.resize = 0x86  // Server tells viewers the new session size
+```
+
+**Client-Side Viewport Logic:**
+
+```
+Viewport = struct {
+    // Session (what we're viewing into)
+    session_cols: u16,
+    session_rows: u16,
+
+    // Local terminal (our window)
+    local_cols: u16,
+    local_rows: u16,
+
+    // Offset into session screen (top-left corner of our view)
+    offset_x: u16 = 0,
+    offset_y: u16 = 0,
+
+    fn needsPanning(self: *const Viewport) bool {
+        return self.session_cols > self.local_cols or
+               self.session_rows > self.local_rows;
+    }
+
+    fn moveUp(self: *Viewport) void {
+        if (self.offset_y > 0) self.offset_y -= 1;
+    }
+
+    fn moveDown(self: *Viewport) void {
+        const max_y = if (self.session_rows > self.local_rows)
+            self.session_rows - self.local_rows else 0;
+        if (self.offset_y < max_y) self.offset_y += 1;
+    }
+
+    // Similar for left/right
+};
+```
+
+**Rendering Approach:**
+
+Two options:
+
+1. **Server-side clipping**: Viewer tells server its size + offset, server sends
+   only the visible portion. More efficient network-wise, but complicates server.
+
+2. **Client-side clipping**: Server sends full VT output, client parses and renders
+   only the visible portion. Simpler protocol, requires VT parsing on client.
+
+I prefer option 2 because:
+- Keeps server simple (no per-client viewport state)
+- Viewers are already receiving all output anyway
+- Client already has terminal size info
+
+**However**, there's a problem: The server sends raw VT sequences. Clipping VT
+sequences client-side is complex because cursor positions, colors, and other state
+are relative to the full terminal, not our viewport.
+
+**Better approach: Server-side rendering per-client**
+
+Actually, let me reconsider. The session already has the ghostty-vt terminal with
+the full screen state. For each viewer, instead of forwarding raw PTY output, we
+could send a clipped version of the screen.
+
+But this changes the architecture significantly:
+- Currently: forward raw bytes → simple, real-time
+- Proposed: render per-client → more work, slight latency
+
+**Simplest approach: Let viewers receive full output, track state locally**
+
+Each viewer could maintain its own ghostty-vt terminal instance, same size as the
+session. When the user pans, they see a different portion of their local copy.
+
+Pros:
+- No protocol changes for output
+- Viewers stay in sync automatically
+- Panning is instant (local operation)
+
+Cons:
+- More memory on viewer (another terminal instance)
+- Need to sync terminal size
+
+This is actually elegant. The viewer becomes:
+1. Connect, receive Welcome with session size
+2. Create local VTerminal with session size
+3. Feed all output to local terminal
+4. Render viewport into local terminal
+5. hjkl adjusts viewport offset
+
+**Implementation Plan:**
+
+1. Protocol: Add session_cols/rows to Welcome
+2. Protocol: Add ServerMsg.session_resize when primary resizes
+3. Client: Maintain local VTerminal (same size as session)
+4. Client: Feed output to local terminal instead of direct stdout
+5. Client: Add Viewport struct to track offset
+6. Client: Render visible portion of local terminal
+7. Keybinds: hjkl adjust viewport when session > local size
+8. Remove current scroll mode (dump scrollback)
+
+**What about scrollback?**
+
+The user says they don't want an "additional scrollback thing." But maybe we keep
+it simple: dump scrollback to stdout and let the user's terminal handle it. That's
+what we have now for Ctrl+A k/j.
+
+Actually, re-reading again:
+> for the scrollback mode, handle it by literally just dumping n lines of
+> scrollback to the terminal - we don't want to have to deal with our own
+> scrolling, just use the terminals
+
+So the current scrollback dump approach IS correct for scrollback. But the hjkl
+bindings should be for **viewport panning**, not scrollback. We need both features.
+
+**Revised Keybinds:**
+- Ctrl+A hjkl: viewport panning (when session > viewer size)
+- Ctrl+A g/G: jump to top-left / bottom-right of session
+- Ctrl+A [ or similar: enter scrollback mode (dump scrollback, exit on key)
+
+But this might be too many modes. Let me think...
+
+Actually the prompt says:
+> consumers typically have scrolling commands available on hjkl
+
+So hjkl should be for panning. The scrollback dump could be a separate thing,
+maybe Ctrl+A [ (like tmux copy mode entry).
+
+### Decision
+
+1. **Viewport panning (hjkl)**: When session is larger than viewer, hjkl pans
+2. **Scrollback dump**: Separate keybind (Ctrl+A [) dumps scrollback to terminal
+3. **Status indicator**: When viewport != (0,0), show "[+x,+y]" in status bar
+
+### Not Doing This Session
+
+This is a significant change. I've documented the design. Implementation will be
+in a future session after validating this approach makes sense.
+
+### Questions for User
+
+- Is the "local VTerminal per viewer" approach acceptable (memory trade-off)?
+- Should viewport panning work for primary too, or just viewers?
+- Is Ctrl+A [ a good keybind for scrollback dump?
+
+---
+
 ## 2026-02-07: Session 6 - Architecture Review (Hammock Session)
 
 Per the "every 3 sessions" rule, taking time to interrogate the abstractions.
