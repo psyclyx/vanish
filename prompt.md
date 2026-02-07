@@ -105,6 +105,49 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
+## 2026-02-07: Session 14 - Documentation Update
+
+Updated DESIGN.md to address the documentation debt noted in sessions 9 and 12.
+
+### What Changed
+
+**DESIGN.md complete rewrite:**
+- Updated protocol section with all 8 client messages (0x01-0x08)
+- Updated protocol section with all 8 server messages (0x81-0x88)
+- Added Welcome struct showing session_cols/rows fields
+- Removed outdated "Scroll Mode" section (was confused with viewport panning)
+- Added new "Viewport Panning" section with correct explanation
+- Updated file structure to match actual src/ contents
+- Updated CLI interface with all current commands (clients, kick)
+- Added JSON output documentation with examples
+- Updated implementation status (all inbox items marked complete except config)
+- Removed stale "Open Questions" section (all resolved)
+- Added "Viewer parity" design principle
+
+### Inbox Status
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Session takeover | ✓ Done | Session 8 |
+| Viewport panning | ✓ Done | Sessions 10-11 |
+| JSON output (--json) | ✓ Done | Session 5, extended session 13 |
+| Background sessions | ✓ Works | Default behavior |
+| XDG_RUNTIME_DIR | ✓ Works | Default behavior |
+| List/disconnect clients | ✓ Done | Session 13 |
+| **JSON config** | **○ Todo** | Last remaining inbox item |
+
+### Next Priority
+
+1. **JSON config file** - The only remaining inbox item
+   - `~/.config/vanish/config.json`
+   - Leader key override
+   - Custom keybinds
+   - Socket directory override
+
+2. Session 15 will be the next architecture review (divisible by 3)
+
+---
+
 ## 2026-02-07: Session 13 - Client List/Disconnect Commands
 
 Implemented the client list and disconnect commands from the inbox.
