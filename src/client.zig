@@ -15,6 +15,7 @@ const Client = struct {
     cols: u16,
     rows: u16,
     session_name: []const u8,
+    role: protocol.Role,
     running: bool = true,
     hint_visible: bool = false,
     in_scroll_mode: bool = false,
@@ -36,7 +37,7 @@ const Client = struct {
                 self.updateHint();
             } else if (self.keys.in_leader) {
                 self.updateHint();
-            } else {
+            } else if (self.role == .primary) {
                 protocol.writeMsg(self.fd, @intFromEnum(protocol.ClientMsg.input), buf[i .. i + 1]) catch {
                     self.running = false;
                     return;
@@ -155,7 +156,10 @@ const Client = struct {
         w.print(" {s} ", .{self.session_name}) catch return;
         const left_len = self.session_name.len + 2;
 
-        const right_text = " primary ";
+        const right_text = switch (self.role) {
+            .primary => " primary ",
+            .viewer => " viewer ",
+        };
         const right_len = right_text.len;
         const total_len = left_len + right_len;
         const padding: usize = if (self.cols > total_len) self.cols - total_len else 0;
@@ -168,16 +172,17 @@ const Client = struct {
     }
 };
 
-pub fn attach(alloc: std.mem.Allocator, socket_path: []const u8) !void {
+pub fn attach(alloc: std.mem.Allocator, socket_path: []const u8, as_viewer: bool) !void {
     _ = alloc;
 
     const fd = try connectSocket(socket_path);
     defer posix.close(fd);
 
     const size = try getTerminalSize();
+    const role: protocol.Role = if (as_viewer) .viewer else .primary;
 
     var hello = protocol.Hello{
-        .role = .primary,
+        .role = role,
         .cols = size.cols,
         .rows = size.rows,
     };
@@ -227,6 +232,7 @@ pub fn attach(alloc: std.mem.Allocator, socket_path: []const u8) !void {
         .cols = size.cols,
         .rows = size.rows,
         .session_name = session_name,
+        .role = role,
     };
 
     try runClientLoop(&client);

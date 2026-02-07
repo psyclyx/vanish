@@ -14,12 +14,12 @@ const usage =
     \\
     \\Usage:
     \\  vanish new <socket> [--] <command> [args...]
-    \\  vanish attach <socket>
+    \\  vanish attach [--viewer] <socket>
     \\  vanish list [directory]
     \\
     \\Commands:
     \\  new      Create a new session
-    \\  attach   Attach to an existing session
+    \\  attach   Attach to an existing session (--viewer for read-only)
     \\  list     List available sessions
     \\
 ;
@@ -91,14 +91,28 @@ fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8) !void {
 
 fn cmdAttach(alloc: std.mem.Allocator, args: []const []const u8) !void {
     if (args.len < 1) {
-        try writeAll(STDERR_FILENO, "Usage: vanish attach <socket>\n");
+        try writeAll(STDERR_FILENO, "Usage: vanish attach [--viewer] <socket>\n");
         std.process.exit(1);
     }
 
-    const socket_path = args[0];
+    var socket_path: ?[]const u8 = null;
+    var as_viewer = false;
+
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--viewer") or std.mem.eql(u8, arg, "-v")) {
+            as_viewer = true;
+        } else if (socket_path == null) {
+            socket_path = arg;
+        }
+    }
+
+    if (socket_path == null) {
+        try writeAll(STDERR_FILENO, "Usage: vanish attach [--viewer] <socket>\n");
+        std.process.exit(1);
+    }
 
     const Client = @import("client.zig");
-    try Client.attach(alloc, socket_path);
+    try Client.attach(alloc, socket_path.?, as_viewer);
 }
 
 fn cmdList(alloc: std.mem.Allocator, args: []const []const u8) !void {
