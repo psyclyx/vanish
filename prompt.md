@@ -21,12 +21,18 @@ Current:
 
 - Sometimes, the cursor is in the wrong place for particularly narrow primary
   sessions.
-- Can't send input from firefox - captures keyboard events but no effect, no
-  console errors.
 - The session list isn't reactive in the web (would need SSE for session list).
 - Man page, readme. all to the point. little fluff. a tool, not a product or an
   experience.
 - an arch pkgbuild
+
+Done (Session 32):
+
+- ✓ Fixed web terminal input - The /input and /takeover endpoints were creating
+  ephemeral socket connections per keystroke (connect as primary, handshake, skip
+  full state, send 1 byte, disconnect). This always failed when a native primary
+  existed. Now input/takeover route through the SSE client's existing persistent
+  session socket. Auto-takeover on first keypress. http.zig: 949→862 (-87 lines).
 
 Done (Session 31):
 
@@ -180,6 +186,78 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-07: Session 32 - Fix Web Terminal Input
+
+### The Problem
+
+Web terminal input was completely broken. The `/input` endpoint created a new
+ephemeral socket connection per keystroke:
+
+1. Connect to session as `.primary`
+2. Exchange hello/welcome handshake
+3. Read and discard full terminal state
+4. Send 1 byte of input
+5. Immediately detach and close
+
+This failed whenever a native primary was connected (denied with 409). Even
+without a native primary, it was enormously wasteful - full protocol handshake
+per keypress. The browser's `fetch()` call silently swallowed the error
+responses.
+
+The `/takeover` endpoint had the same problem: it created an ephemeral viewer
+connection, sent takeover, then immediately disconnected. This promoted a
+throwaway connection to primary instead of the persistent SSE client.
+
+### The Fix
+
+Both `/input` and `/takeover` now operate through the SSE client's existing
+persistent session socket (`sse.session_fd`).
+
+**handleTakeover:** Finds the SSE client for the session, sends a takeover
+message through its `session_fd`. The session daemon promotes that socket (the
+SSE viewer) to primary. Sets `sse.is_primary = true`.
+
+**handleInput:** Finds the SSE client for the session that is primary, writes
+input through its `session_fd`. If no primary SSE client exists, returns 409.
+
+**handleSseSessionOutput:** Now handles `role_change` messages to track
+`is_primary` state. If a native client takes over, the SSE client is properly
+demoted.
+
+**Frontend:** Added `isPrimary` state tracking. On first keypress, if input
+returns 409 (not primary), auto-calls takeover. Added PageUp/PageDown/Insert
+key mappings.
+
+### Line Count Impact
+
+| File       | Before | After | Change |
+| ---------- | ------ | ----- | ------ |
+| http.zig   | 949    | 862   | -87    |
+| index.html | 182    | 185   | +3     |
+| **Net**    |        |       | **-84**|
+
+Total codebase: 13 source files, ~5,270 lines (down from 5,354).
+
+### Inbox Status
+
+| Item                | Status  | Notes                              |
+| ------------------- | ------- | ---------------------------------- |
+| Web input bug       | ✓ Done  | Session 32                         |
+| Cursor position bug | ○ Todo  | Narrow primary sessions            |
+| Session list SSE    | ○ Todo  | Would need SSE for list            |
+| Man page, readme    | ○ Todo  |                                    |
+| Arch PKGBUILD       | ○ Todo  |                                    |
+
+### Recommendations for Next Sessions
+
+1. **Session 33 (review):** Architecture review. Assess the web input flow
+   end-to-end, verify cursor position bug, check overall code health.
+
+2. **Session 34:** Man page and README update. The web terminal is now
+   functional - document it.
+
+---
 
 ## 2026-02-07: Session 31 - Extract Shared Utilities (paths.zig)
 
