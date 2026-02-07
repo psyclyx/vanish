@@ -22,6 +22,7 @@ pub const ServerMsg = enum(u8) {
     exit = 0x84,
     denied = 0x85,
     role_change = 0x86,
+    session_resize = 0x87,
 };
 
 pub const DenyReason = enum(u8) {
@@ -50,6 +51,8 @@ pub const Hello = extern struct {
 pub const Welcome = extern struct {
     role: Role,
     session_id: [16]u8,
+    session_cols: u16,
+    session_rows: u16,
 };
 
 pub const Resize = extern struct {
@@ -67,6 +70,11 @@ pub const Denied = extern struct {
 
 pub const RoleChange = extern struct {
     new_role: Role,
+};
+
+pub const SessionResize = extern struct {
+    cols: u16,
+    rows: u16,
 };
 
 pub const Header = extern struct {

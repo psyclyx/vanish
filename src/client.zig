@@ -9,6 +9,106 @@ const sig = @import("signal.zig");
 const STDIN = 0;
 const STDOUT = 1;
 
+const Viewport = struct {
+    session_cols: u16,
+    session_rows: u16,
+    local_cols: u16,
+    local_rows: u16,
+    offset_x: u16 = 0,
+    offset_y: u16 = 0,
+
+    fn needsPanning(self: *const Viewport) bool {
+        return self.session_cols > self.local_cols or self.session_rows > self.local_rows;
+    }
+
+    fn moveUp(self: *Viewport) void {
+        if (self.offset_y > 0) self.offset_y -= 1;
+    }
+
+    fn moveDown(self: *Viewport) void {
+        const max_y = if (self.session_rows > self.local_rows)
+            self.session_rows - self.local_rows
+        else
+            0;
+        if (self.offset_y < max_y) self.offset_y += 1;
+    }
+
+    fn moveLeft(self: *Viewport) void {
+        if (self.offset_x > 0) self.offset_x -= 1;
+    }
+
+    fn moveRight(self: *Viewport) void {
+        const max_x = if (self.session_cols > self.local_cols)
+            self.session_cols - self.local_cols
+        else
+            0;
+        if (self.offset_x < max_x) self.offset_x += 1;
+    }
+
+    fn jumpTopLeft(self: *Viewport) void {
+        self.offset_x = 0;
+        self.offset_y = 0;
+    }
+
+    fn jumpBottomRight(self: *Viewport) void {
+        self.offset_x = if (self.session_cols > self.local_cols)
+            self.session_cols - self.local_cols
+        else
+            0;
+        self.offset_y = if (self.session_rows > self.local_rows)
+            self.session_rows - self.local_rows
+        else
+            0;
+    }
+
+    fn pageUp(self: *Viewport) void {
+        const step = self.local_rows / 2;
+        if (self.offset_y >= step) {
+            self.offset_y -= step;
+        } else {
+            self.offset_y = 0;
+        }
+    }
+
+    fn pageDown(self: *Viewport) void {
+        const step = self.local_rows / 2;
+        const max_y = if (self.session_rows > self.local_rows)
+            self.session_rows - self.local_rows
+        else
+            0;
+        if (self.offset_y + step <= max_y) {
+            self.offset_y += step;
+        } else {
+            self.offset_y = max_y;
+        }
+    }
+
+    fn updateLocal(self: *Viewport, cols: u16, rows: u16) void {
+        self.local_cols = cols;
+        self.local_rows = rows;
+        self.clampOffset();
+    }
+
+    fn updateSession(self: *Viewport, cols: u16, rows: u16) void {
+        self.session_cols = cols;
+        self.session_rows = rows;
+        self.clampOffset();
+    }
+
+    fn clampOffset(self: *Viewport) void {
+        const max_x = if (self.session_cols > self.local_cols)
+            self.session_cols - self.local_cols
+        else
+            0;
+        const max_y = if (self.session_rows > self.local_rows)
+            self.session_rows - self.local_rows
+        else
+            0;
+        if (self.offset_x > max_x) self.offset_x = max_x;
+        if (self.offset_y > max_y) self.offset_y = max_y;
+    }
+};
+
 const Client = struct {
     fd: posix.fd_t,
     keys: keybind.State,
@@ -16,21 +116,15 @@ const Client = struct {
     rows: u16,
     session_name: []const u8,
     role: protocol.Role,
+    viewport: Viewport,
     running: bool = true,
     hint_visible: bool = false,
-    in_scroll_mode: bool = false,
 
     fn handleInput(self: *Client, buf: []const u8) !void {
         var i: usize = 0;
         while (i < buf.len) {
             const byte = buf[i];
             const is_ctrl = byte >= 1 and byte <= 26;
-
-            if (self.in_scroll_mode) {
-                self.exitScrollMode();
-                i += 1;
-                continue;
-            }
 
             if (self.keys.processKey(byte, is_ctrl)) |action| {
                 try self.executeAction(action);
@@ -69,33 +163,40 @@ const Client = struct {
                     protocol.writeMsg(self.fd, @intFromEnum(protocol.ClientMsg.takeover), "") catch {};
                 }
             },
-            .scroll_up, .scroll_down, .scroll_page_up, .scroll_page_down, .scroll_top, .scroll_bottom => {
-                self.enterScrollMode();
+            .scroll_up => {
+                self.viewport.moveUp();
+                self.renderStatusBar();
+            },
+            .scroll_down => {
+                self.viewport.moveDown();
+                self.renderStatusBar();
+            },
+            .scroll_left => {
+                self.viewport.moveLeft();
+                self.renderStatusBar();
+            },
+            .scroll_right => {
+                self.viewport.moveRight();
+                self.renderStatusBar();
+            },
+            .scroll_page_up => {
+                self.viewport.pageUp();
+                self.renderStatusBar();
+            },
+            .scroll_page_down => {
+                self.viewport.pageDown();
+                self.renderStatusBar();
+            },
+            .scroll_top => {
+                self.viewport.jumpTopLeft();
+                self.renderStatusBar();
+            },
+            .scroll_bottom => {
+                self.viewport.jumpBottomRight();
+                self.renderStatusBar();
             },
             .cancel => {},
         }
-    }
-
-    fn enterScrollMode(self: *Client) void {
-        self.in_scroll_mode = true;
-        // Request scrollback from session
-        protocol.writeMsg(self.fd, @intFromEnum(protocol.ClientMsg.scrollback), "") catch {};
-        // Show scroll mode indicator
-        self.showScrollIndicator();
-    }
-
-    fn exitScrollMode(self: *Client) void {
-        self.in_scroll_mode = false;
-        // Clear screen and request fresh terminal state
-        _ = posix.write(STDOUT, "\x1b[2J\x1b[H") catch {};
-        // Request full screen refresh
-        protocol.writeMsg(self.fd, @intFromEnum(protocol.ClientMsg.scrollback), "") catch {};
-    }
-
-    fn showScrollIndicator(self: *Client) void {
-        var buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "\x1b7\x1b[{d};1H\x1b[7m SCROLL MODE - press any key to exit \x1b[0m\x1b8", .{self.rows}) catch return;
-        _ = posix.write(STDOUT, msg) catch {};
     }
 
     fn updateHint(self: *Client) void {
@@ -136,10 +237,10 @@ const Client = struct {
             \\   d       detach from session
             \\   s       toggle status bar
             \\   t       takeover (viewer becomes primary)
-            \\   k/j     scroll up/down
+            \\   hjkl    pan viewport (when session > local size)
             \\   Ctrl+U  page up
             \\   Ctrl+D  page down
-            \\   g/G     scroll to top/bottom
+            \\   g/G     jump to top-left/bottom-right
             \\   ?       show this help
             \\   Esc     cancel
             \\
@@ -160,7 +261,14 @@ const Client = struct {
         w.writeAll("\x1b[7m") catch return; // inverse video
 
         w.print(" {s} ", .{self.session_name}) catch return;
-        const left_len = self.session_name.len + 2;
+        var left_len = self.session_name.len + 2;
+
+        // Show viewport offset if panning is active
+        if (self.viewport.needsPanning() and (self.viewport.offset_x > 0 or self.viewport.offset_y > 0)) {
+            const offset_len = std.fmt.count("[+{d},+{d}] ", .{ self.viewport.offset_x, self.viewport.offset_y });
+            w.print("[+{d},+{d}] ", .{ self.viewport.offset_x, self.viewport.offset_y }) catch return;
+            left_len += offset_len;
+        }
 
         const right_text = switch (self.role) {
             .primary => " primary ",
@@ -240,10 +348,16 @@ pub fn attach(alloc: std.mem.Allocator, socket_path: []const u8, as_viewer: bool
 
     const resp_header = try protocol.readHeader(fd);
 
+    var session_cols: u16 = size.cols;
+    var session_rows: u16 = size.rows;
+
     switch (@as(protocol.ServerMsg, @enumFromInt(resp_header.msg_type))) {
         .welcome => {
             var buf: [@sizeOf(protocol.Welcome)]u8 = undefined;
             try protocol.readExact(fd, &buf);
+            const welcome = std.mem.bytesToValue(protocol.Welcome, &buf);
+            session_cols = welcome.session_cols;
+            session_rows = welcome.session_rows;
         },
         .denied => {
             var buf: [@sizeOf(protocol.Denied)]u8 = undefined;
@@ -279,6 +393,12 @@ pub fn attach(alloc: std.mem.Allocator, socket_path: []const u8, as_viewer: bool
         .rows = size.rows,
         .session_name = session_name,
         .role = role,
+        .viewport = .{
+            .session_cols = session_cols,
+            .session_rows = session_rows,
+            .local_cols = size.cols,
+            .local_rows = size.rows,
+        },
     };
 
     try runClientLoop(&client);
@@ -299,6 +419,7 @@ fn runClientLoop(client: *Client) !void {
             const size = getTerminalSize() catch continue;
             client.cols = size.cols;
             client.rows = size.rows;
+            client.viewport.updateLocal(size.cols, size.rows);
             const resize = protocol.Resize{ .cols = size.cols, .rows = size.rows };
             protocol.writeStruct(client.fd, @intFromEnum(protocol.ClientMsg.resize), resize) catch {};
         }
@@ -344,6 +465,13 @@ fn runClientLoop(client: *Client) !void {
                     protocol.readExact(client.fd, &buf) catch break;
                     const role_change = std.mem.bytesToValue(protocol.RoleChange, &buf);
                     client.role = role_change.new_role;
+                    client.renderStatusBar();
+                },
+                .session_resize => {
+                    var buf: [@sizeOf(protocol.SessionResize)]u8 = undefined;
+                    protocol.readExact(client.fd, &buf) catch break;
+                    const session_resize = std.mem.bytesToValue(protocol.SessionResize, &buf);
+                    client.viewport.updateSession(session_resize.cols, session_resize.rows);
                     client.renderStatusBar();
                 },
                 else => {

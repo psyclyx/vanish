@@ -234,6 +234,8 @@ fn handleNewConnection(self: *Session) !void {
     const welcome = protocol.Welcome{
         .role = hello.role,
         .session_id = std.mem.zeroes([16]u8),
+        .session_cols = self.cols,
+        .session_rows = self.rows,
     };
     protocol.writeStruct(conn, @intFromEnum(protocol.ServerMsg.welcome), welcome) catch {
         posix.close(conn);
@@ -319,6 +321,8 @@ fn handleClientInput(self: *Session, is_primary: bool, viewer_idx: usize) !void 
                     if (self.terminal) |*term| {
                         term.resize(resize.cols, resize.rows) catch {};
                     }
+                    // Notify viewers of session resize
+                    self.notifyViewersResize();
                 }
             }
         },
@@ -388,6 +392,16 @@ fn handleTakeover(self: *Session, viewer_idx: usize) !void {
     self.pty.resize(.{ .rows = new_primary.rows, .cols = new_primary.cols }) catch {};
     if (self.terminal) |*term| {
         term.resize(new_primary.cols, new_primary.rows) catch {};
+    }
+}
+
+fn notifyViewersResize(self: *Session) void {
+    const resize_msg = protocol.SessionResize{
+        .cols = self.cols,
+        .rows = self.rows,
+    };
+    for (self.viewers.items) |c| {
+        protocol.writeStruct(c.fd, @intFromEnum(protocol.ServerMsg.session_resize), resize_msg) catch {};
     }
 }
 

@@ -105,6 +105,86 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
+## 2026-02-07: Session 10 - Viewport Panning Implementation
+
+Implemented viewport panning, the highest priority item from session 9's architecture
+review. This addresses the user's clarification about scrolling:
+
+> However, for full-screen apps, viewers may be smaller than the primary session, in
+> height and/or width. That's what the scrolling is for - to pan around a terminal
+> larger than the bounds of the viewer.
+
+### What Changed
+
+**Protocol (protocol.zig):**
+- Added `session_cols` and `session_rows` to `Welcome` struct
+- Added `ServerMsg.session_resize` (0x87)
+- Added `SessionResize` struct for notifying viewers when primary resizes
+
+**Session (session.zig):**
+- Welcome now includes session dimensions
+- Added `notifyViewersResize()` - sends `session_resize` to all viewers when primary resizes
+
+**Client (client.zig):**
+- Added `Viewport` struct with:
+  - `session_cols/rows`: size of the session terminal
+  - `local_cols/rows`: size of the client's terminal
+  - `offset_x/y`: pan offset into larger session
+  - `needsPanning()`: returns true if session > local size
+  - `moveUp/Down/Left/Right()`: single-line panning
+  - `pageUp/pageDown()`: half-page panning
+  - `jumpTopLeft/BottomRight()`: edge jumping
+  - `clampOffset()`: keeps offset within valid bounds
+- Removed `in_scroll_mode` and old scroll functions
+- Added viewport field to Client struct
+- Status bar shows `[+x,+y]` when viewport is panned
+
+**Keybinds (keybind.zig):**
+- Added `scroll_left` and `scroll_right` actions
+- Changed descriptions: "scroll" → "pan"
+- Added 'h' and 'l' bindings for horizontal panning
+
+### How It Works
+
+1. When attaching, client receives session size in Welcome
+2. Client creates Viewport with session and local dimensions
+3. If session > local size, hjkl can pan the viewport
+4. On local resize (SIGWINCH), viewport.updateLocal() adjusts offset
+5. On session resize (session_resize message), viewport.updateSession() adjusts
+6. Status bar shows `[+x,+y]` when offset is non-zero
+
+### Still Not Done (from session 7 design)
+
+The actual viewport **rendering** isn't implemented yet. Currently hjkl adjusts the
+offset, and the status bar shows it, but the terminal output isn't clipped. Full
+implementation would require:
+
+1. Client maintains local VTerminal (same size as session)
+2. Feed all output to local terminal
+3. Render only visible portion based on viewport offset
+
+This is a significant addition - decided to defer to keep this session focused on
+the protocol and state tracking foundation.
+
+### Testing
+
+- Build: ✓
+- Tests: ✓ (all 16 pass)
+
+### Inbox Status Update
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Session takeover | ✓ Done | Session 8 |
+| JSON config | ○ Todo | Config not implemented |
+| Viewport panning | ◐ Partial | Protocol + state done, rendering deferred |
+| List/disconnect clients | ○ Todo | |
+| Background sessions | ✓ Works | |
+| XDG_RUNTIME_DIR | ✓ Works | |
+| --json flag | ✓ Done | |
+
+---
+
 ## 2026-02-07: Session 9 - Architecture Review (3-session checkpoint)
 
 Since this is session 9 (divisible by 3), doing an architecture review. Last review
