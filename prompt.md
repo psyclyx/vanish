@@ -105,6 +105,80 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
+## 2026-02-07: Session 11 - Viewport Rendering Complete
+
+Completed the viewport rendering implementation that was deferred in session 10. Now
+viewers with smaller terminals can actually see the panned view, not just track the
+offset.
+
+### What Changed
+
+**terminal.zig:**
+- Added `dumpViewport(offset_x, offset_y, view_cols, view_rows)` function
+- Renders a rectangular region of the terminal to VT sequences
+- Uses ghostty-vt's Pin API to access rows and cells
+- Preserves styling (bold, italic, underline, colors)
+- Handles grapheme clusters correctly
+- Added test for viewport dump
+
+Helper functions:
+- `stylesEqual()`: compares two styles for change detection
+- `writeStyle()`: emits SGR sequences for a style
+
+**client.zig:**
+- Added `terminal` import
+- Added `alloc` and `vterm` fields to Client struct
+- Added `ensureVTerm()`: lazily creates VTerminal when panning is needed
+- Added `handleOutput()`: routes output through VTerminal when panning, else direct
+- Added `renderViewport()`: dumps visible portion using dumpViewport
+- Added `deinit()`: cleans up VTerminal
+- Updated `attach()` to pass allocator and call deinit
+- Updated output handling to use `handleOutput()` instead of direct write
+- Pan actions (hjkl, etc.) now call `renderViewport()` to refresh display
+
+### How It Works (Full Flow)
+
+1. Client attaches, receives session size in Welcome
+2. If session > local terminal size, `needsPanning()` returns true
+3. First output arrives, `handleOutput()` calls `ensureVTerm()`
+4. VTerminal is created at session dimensions
+5. Output is fed to VTerminal via `feed()`
+6. `renderViewport()` renders visible portion via `dumpViewport()`
+7. User presses hjkl to pan → offset changes → `renderViewport()` called
+8. Display updates to show different portion of the larger terminal
+
+### Design Notes
+
+- VTerminal is only allocated when panning is actually needed
+- Direct stdout writes used when session <= local size (no overhead)
+- Each pan action re-renders the entire visible region (simple, works)
+- The client's terminal is cleared and redrawn on each viewport render
+
+### Testing
+
+- Build: ✓
+- Tests: ✓ (17 tests now, added viewport dump test)
+
+### Inbox Status Update
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Session takeover | ✓ Done | Session 8 |
+| JSON config | ○ Todo | Config not implemented |
+| **Viewport panning** | **✓ Done** | **Session 10-11** |
+| List/disconnect clients | ○ Todo | |
+| Background sessions | ✓ Works | |
+| XDG_RUNTIME_DIR | ✓ Works | |
+| --json flag | ✓ Done | |
+
+### Next Priority
+
+Session 12 will be the next architecture review (divisible by 3). After that:
+1. Client list/disconnect command
+2. JSON config file
+
+---
+
 ## 2026-02-07: Session 10 - Viewport Panning Implementation
 
 Implemented viewport panning, the highest priority item from session 9's architecture

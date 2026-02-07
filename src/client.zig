@@ -5,6 +5,7 @@ const linux = std.os.linux;
 const protocol = @import("protocol.zig");
 const keybind = @import("keybind.zig");
 const sig = @import("signal.zig");
+const terminal = @import("terminal.zig");
 
 const STDIN = 0;
 const STDOUT = 1;
@@ -117,6 +118,8 @@ const Client = struct {
     session_name: []const u8,
     role: protocol.Role,
     viewport: Viewport,
+    alloc: std.mem.Allocator,
+    vterm: ?*terminal.VTerminal = null,
     running: bool = true,
     hint_visible: bool = false,
 
@@ -165,34 +168,42 @@ const Client = struct {
             },
             .scroll_up => {
                 self.viewport.moveUp();
+                self.renderViewport();
                 self.renderStatusBar();
             },
             .scroll_down => {
                 self.viewport.moveDown();
+                self.renderViewport();
                 self.renderStatusBar();
             },
             .scroll_left => {
                 self.viewport.moveLeft();
+                self.renderViewport();
                 self.renderStatusBar();
             },
             .scroll_right => {
                 self.viewport.moveRight();
+                self.renderViewport();
                 self.renderStatusBar();
             },
             .scroll_page_up => {
                 self.viewport.pageUp();
+                self.renderViewport();
                 self.renderStatusBar();
             },
             .scroll_page_down => {
                 self.viewport.pageDown();
+                self.renderViewport();
                 self.renderStatusBar();
             },
             .scroll_top => {
                 self.viewport.jumpTopLeft();
+                self.renderViewport();
                 self.renderStatusBar();
             },
             .scroll_bottom => {
                 self.viewport.jumpBottomRight();
+                self.renderViewport();
                 self.renderStatusBar();
             },
             .cancel => {},
@@ -284,6 +295,55 @@ const Client = struct {
 
         _ = posix.write(STDOUT, fbs.getWritten()) catch {};
     }
+
+    fn ensureVTerm(self: *Client) !void {
+        if (self.vterm != null) return;
+        if (!self.viewport.needsPanning()) return;
+
+        const vt = try self.alloc.create(terminal.VTerminal);
+        vt.* = try terminal.VTerminal.init(
+            self.alloc,
+            self.viewport.session_cols,
+            self.viewport.session_rows,
+        );
+        self.vterm = vt;
+    }
+
+    fn handleOutput(self: *Client, data: []const u8) void {
+        if (self.viewport.needsPanning()) {
+            self.ensureVTerm() catch {
+                // Fallback: write directly
+                _ = posix.write(STDOUT, data) catch {};
+                return;
+            };
+            if (self.vterm) |vt| {
+                vt.feed(data);
+                self.renderViewport();
+            }
+        } else {
+            _ = posix.write(STDOUT, data) catch {};
+        }
+    }
+
+    fn renderViewport(self: *Client) void {
+        const vt = self.vterm orelse return;
+        const dump = vt.dumpViewport(
+            self.alloc,
+            self.viewport.offset_x,
+            self.viewport.offset_y,
+            self.viewport.local_cols,
+            self.viewport.local_rows,
+        ) catch return;
+        defer self.alloc.free(dump);
+        _ = posix.write(STDOUT, dump) catch {};
+    }
+
+    fn deinit(self: *Client) void {
+        if (self.vterm) |vt| {
+            vt.deinit();
+            self.alloc.destroy(vt);
+        }
+    }
 };
 
 pub fn send(socket_path: []const u8, keys: []const u8) !void {
@@ -327,7 +387,6 @@ pub fn send(socket_path: []const u8, keys: []const u8) !void {
 }
 
 pub fn attach(alloc: std.mem.Allocator, socket_path: []const u8, as_viewer: bool) !void {
-    _ = alloc;
 
     const fd = try connectSocket(socket_path);
     defer posix.close(fd);
@@ -399,7 +458,9 @@ pub fn attach(alloc: std.mem.Allocator, socket_path: []const u8, as_viewer: bool
             .local_cols = size.cols,
             .local_rows = size.rows,
         },
+        .alloc = alloc,
     };
+    defer client.deinit();
 
     try runClientLoop(&client);
 }
@@ -449,7 +510,7 @@ fn runClientLoop(client: *Client) !void {
                         while (remaining > 0) {
                             const to_read: usize = @min(remaining, buf.len);
                             protocol.readExact(client.fd, buf[0..to_read]) catch break;
-                            _ = posix.write(STDOUT, buf[0..to_read]) catch {};
+                            client.handleOutput(buf[0..to_read]);
                             remaining -= @intCast(to_read);
                         }
                     }

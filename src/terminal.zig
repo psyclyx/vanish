@@ -59,6 +59,134 @@ pub fn dumpScreen(self: *VTerminal, alloc: std.mem.Allocator) ![]u8 {
     return output.toOwnedSlice(alloc);
 }
 
+pub fn dumpViewport(
+    self: *VTerminal,
+    alloc: std.mem.Allocator,
+    offset_x: u16,
+    offset_y: u16,
+    view_cols: u16,
+    view_rows: u16,
+) ![]u8 {
+    const screen = self.term.screens.active;
+
+    var output: std.ArrayList(u8) = .empty;
+    errdefer output.deinit(alloc);
+
+    const writer = output.writer(alloc);
+
+    // Clear screen and reset cursor
+    try writer.writeAll("\x1b[2J\x1b[H");
+
+    // Calculate visible region bounds
+    const end_x: u16 = @min(offset_x + view_cols, self.cols);
+    const end_y: u16 = @min(offset_y + view_rows, self.rows);
+
+    // Render each visible row
+    var out_row: u16 = 1;
+    var y = offset_y;
+    while (y < end_y) : (y += 1) {
+        const pt = ghostty_vt.point.Point{ .active = .{ .x = 0, .y = y } };
+        var row_pin = screen.pages.pin(pt) orelse continue;
+
+        // Move cursor to output row
+        try std.fmt.format(writer, "\x1b[{d};1H", .{out_row});
+
+        // Get all cells in this row
+        const all_cells = row_pin.cells(.all);
+
+        // Render cells in the visible column range
+        var last_style: ?ghostty_vt.Style = null;
+        var x = offset_x;
+        while (x < end_x) : (x += 1) {
+            if (x >= all_cells.len) {
+                try writer.writeByte(' ');
+                continue;
+            }
+            const cell = &all_cells[x];
+
+            // Update pin x for style lookup
+            row_pin.x = x;
+
+            // Apply cell styling if changed
+            const cell_style = row_pin.style(cell);
+            if (last_style == null or !stylesEqual(last_style.?, cell_style)) {
+                try writeStyle(writer, cell_style);
+                last_style = cell_style;
+            }
+
+            // Write the character
+            switch (cell.content_tag) {
+                .codepoint => {
+                    const cp = cell.content.codepoint;
+                    if (cp >= 0x20) {
+                        var buf: [4]u8 = undefined;
+                        const len = std.unicode.utf8Encode(cp, &buf) catch continue;
+                        try writer.writeAll(buf[0..len]);
+                    } else {
+                        try writer.writeByte(' ');
+                    }
+                },
+                .codepoint_grapheme => {
+                    if (row_pin.grapheme(cell)) |cps| {
+                        // First codepoint is in the cell itself
+                        const first_cp = cell.content.codepoint;
+                        if (first_cp >= 0x20) {
+                            var buf: [4]u8 = undefined;
+                            const len = std.unicode.utf8Encode(first_cp, &buf) catch continue;
+                            try writer.writeAll(buf[0..len]);
+                        }
+                        // Extra codepoints
+                        for (cps) |cp| {
+                            var buf: [4]u8 = undefined;
+                            const len = std.unicode.utf8Encode(cp, &buf) catch continue;
+                            try writer.writeAll(buf[0..len]);
+                        }
+                    } else {
+                        try writer.writeByte(' ');
+                    }
+                },
+                else => try writer.writeByte(' '),
+            }
+        }
+
+        // Reset style at end of each row
+        try writer.writeAll("\x1b[0m");
+        out_row += 1;
+    }
+
+    return output.toOwnedSlice(alloc);
+}
+
+fn stylesEqual(a: ghostty_vt.Style, b: ghostty_vt.Style) bool {
+    return a.flags.bold == b.flags.bold and
+        a.flags.italic == b.flags.italic and
+        a.flags.underline == b.flags.underline and
+        a.fg_color.eql(b.fg_color) and
+        a.bg_color.eql(b.bg_color);
+}
+
+fn writeStyle(writer: anytype, s: ghostty_vt.Style) !void {
+    try writer.writeAll("\x1b[0m"); // reset first
+
+    if (s.flags.bold) try writer.writeAll("\x1b[1m");
+    if (s.flags.italic) try writer.writeAll("\x1b[3m");
+    if (s.flags.underline != .none) try writer.writeAll("\x1b[4m");
+
+    // Foreground color
+    switch (s.fg_color) {
+        .none => {},
+        .palette => |idx| try std.fmt.format(writer, "\x1b[38;5;{d}m", .{idx}),
+        .rgb => |rgb| try std.fmt.format(writer, "\x1b[38;2;{d};{d};{d}m", .{ rgb.r, rgb.g, rgb.b }),
+    }
+
+    // Background color
+    switch (s.bg_color) {
+        .none => {},
+        .palette => |idx| try std.fmt.format(writer, "\x1b[48;5;{d}m", .{idx}),
+        .rgb => |rgb| try std.fmt.format(writer, "\x1b[48;2;{d};{d};{d}m", .{ rgb.r, rgb.g, rgb.b }),
+    }
+}
+
 pub fn dumpScrollback(self: *VTerminal, alloc: std.mem.Allocator) ![]u8 {
     const screen = self.term.screens.active;
 
@@ -131,4 +259,21 @@ test "terminal scrollback" {
     defer alloc.free(scrollback);
 
     try std.testing.expect(scrollback.len > 0);
+}
+
+test "terminal viewport dump" {
+    const alloc = std.testing.allocator;
+    var term = try init(alloc, 120, 50);
+    defer term.deinit();
+
+    // Fill some content
+    term.feed("AAAA\x1b[2;1HBBBB\x1b[3;1HCCCC");
+
+    // Dump a viewport from (0,0) with size 80x24
+    const viewport = try term.dumpViewport(alloc, 0, 0, 80, 24);
+    defer alloc.free(viewport);
+
+    try std.testing.expect(viewport.len > 0);
+    // Should contain our text
+    try std.testing.expect(std.mem.indexOf(u8, viewport, "AAAA") != null);
 }
