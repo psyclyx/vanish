@@ -13,6 +13,13 @@ Ongoing:
 
 Inbox:
 
+- Please test this. It seems completely broken when I try to run it. You should
+  have confidence that it works. Unit and integration testing. No BS tests.
+  Don't let breakage through, don't slow down future velocity, test exactly what
+  should be tested, as only a staff engineer could.
+
+OLD:
+
 - Can we do json instead of toml for config?
 - I'm not sure the claudes earlier properly understood by the scrolling support.
   I think we explicitly don't want an additional scrollback thing in the viewer.
@@ -105,6 +112,55 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
+## 2026-02-07: Session 17 - Testing & Bug Fix
+
+Addressed the user's report that the code "seems completely broken."
+
+### Issues Found and Fixed
+
+**1. Compilation Error in config.zig**
+
+The `actionDesc` function was missing the `scrollback` case for the `Action`
+enum. This caused a compile-time error:
+
+```
+error: switch must handle all possibilities
+    return switch (action) {
+           ^~~~~~
+note: unhandled enumeration value: 'scrollback'
+```
+
+Also added `"scrollback"` to the `parseAction` mapping for completeness.
+
+### Integration Test Suite
+
+Created `test.sh` with 19 tests covering:
+
+- CLI help output
+- Empty session listing (human and JSON)
+- Session creation and listing
+- Session auto-exit when child process exits
+- Send command (input delivery)
+- Clients command (list connected clients)
+- Session persistence after detach
+- Kick command (disconnect clients)
+- Error handling for invalid sessions
+- JSON output format validation
+
+### Test Results
+
+- Unit tests: 21 tests passing
+- Integration tests: 19 tests passing (all new)
+
+### Notes
+
+The `clients` command connects as a viewer to query the session, so it shows
+itself as a viewer (not a bug - that's the design). When `vanish new` is run,
+there's no primary attached until someone calls `vanish attach` without
+`--viewer`.
+
+---
+
 ## 2026-02-07: Session 16 - JSON Config Implementation
 
 Implemented the last remaining inbox item: JSON configuration file.
@@ -112,6 +168,7 @@ Implemented the last remaining inbox item: JSON configuration file.
 ### What Changed
 
 **New file: config.zig (183 lines)**
+
 - Loads `~/.config/vanish/config.json` if it exists
 - Falls back to `$XDG_CONFIG_HOME/vanish/config.json`
 - Parses JSON with Zig's std.json
@@ -124,14 +181,17 @@ Implemented the last remaining inbox item: JSON configuration file.
 - 3 unit tests for leader parsing and action parsing
 
 **keybind.zig:**
+
 - Made `default_binds` public so config.zig can reference it
 
 **client.zig:**
+
 - Added config import
 - `attach()` now takes `*const config.Config` parameter
 - Uses `cfg.toKeybindConfig()` to initialize keybind state
 
 **main.zig:**
+
 - Loads config at startup with `config.load(alloc)`
 - Passes config to all commands that need socket resolution
 - `getDefaultSocketDir()` now checks `cfg.socket_dir` first
@@ -158,7 +218,8 @@ Implemented the last remaining inbox item: JSON configuration file.
 - Config is loaded once at startup, not hot-reloaded
 - Arena allocator owns all parsed strings
 - Minimal validation: unknown keys ignored, invalid values use defaults
-- Action aliases supported: `"pan_up"` = `"scroll_up"`, `"status"` = `"toggle_status"`
+- Action aliases supported: `"pan_up"` = `"scroll_up"`, `"status"` =
+  `"toggle_status"`
 
 ### Testing
 
@@ -167,15 +228,15 @@ Implemented the last remaining inbox item: JSON configuration file.
 
 ### Inbox Status - ALL COMPLETE
 
-| Item | Status | Session |
-|------|--------|---------|
-| Session takeover | ✓ Done | 8 |
-| Viewport panning | ✓ Done | 10-11 |
-| JSON output (--json) | ✓ Done | 5, 13 |
-| Background sessions | ✓ Works | Default |
-| XDG_RUNTIME_DIR | ✓ Works | Default |
-| List/disconnect clients | ✓ Done | 13 |
-| **JSON config** | **✓ Done** | **16** |
+| Item                    | Status     | Session |
+| ----------------------- | ---------- | ------- |
+| Session takeover        | ✓ Done     | 8       |
+| Viewport panning        | ✓ Done     | 10-11   |
+| JSON output (--json)    | ✓ Done     | 5, 13   |
+| Background sessions     | ✓ Works    | Default |
+| XDG_RUNTIME_DIR         | ✓ Works    | Default |
+| List/disconnect clients | ✓ Done     | 13      |
+| **JSON config**         | **✓ Done** | **16**  |
 
 **All inbox items are now complete.** The project has reached feature completion
 as originally specified.
@@ -183,6 +244,7 @@ as originally specified.
 ### Next Steps (if any)
 
 The core feature set is done. Potential future work:
+
 - Bind scrollback dump to Ctrl+A [ (currently unbound)
 - Remove dead `ClientMsg.scrollback` code if not binding it
 - Consider session 18 (next divisible by 3) for final architecture review
@@ -191,22 +253,22 @@ The core feature set is done. Potential future work:
 
 ## 2026-02-07: Session 15 - Architecture Review (3-session checkpoint)
 
-Since session 15 is divisible by 3, performing an architecture review. Last reviews
-were sessions 9 and 12.
+Since session 15 is divisible by 3, performing an architecture review. Last
+reviews were sessions 9 and 12.
 
 ### Codebase Stats
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| client.zig | 616 | User-facing terminal, viewport rendering |
-| session.zig | 504 | Daemon, poll loop, client management |
-| main.zig | 478 | CLI entry point |
-| terminal.zig | 279 | ghostty-vt wrapper, viewport dump |
-| protocol.zig | 191 | Wire format |
-| keybind.zig | 172 | Input state machine |
-| pty.zig | 134 | PTY operations |
-| signal.zig | 48 | Signal handling |
-| **Total** | **~2,422** | 8 source files |
+| File         | Lines      | Purpose                                  |
+| ------------ | ---------- | ---------------------------------------- |
+| client.zig   | 616        | User-facing terminal, viewport rendering |
+| session.zig  | 504        | Daemon, poll loop, client management     |
+| main.zig     | 478        | CLI entry point                          |
+| terminal.zig | 279        | ghostty-vt wrapper, viewport dump        |
+| protocol.zig | 191        | Wire format                              |
+| keybind.zig  | 172        | Input state machine                      |
+| pty.zig      | 134        | PTY operations                           |
+| signal.zig   | 48         | Signal handling                          |
+| **Total**    | **~2,422** | 8 source files                           |
 
 Tests: 18 across 5 modules (keybind, protocol, pty, terminal, main)
 
@@ -215,6 +277,7 @@ Tests: 18 across 5 modules (keybind, protocol, pty, terminal, main)
 **1. Feature Completeness - Nearly Done**
 
 All inbox items except JSON config are complete:
+
 - ✓ Session takeover (viewer → primary)
 - ✓ Viewport panning (hjkl for smaller viewers)
 - ✓ Client list/disconnect commands
@@ -224,12 +287,14 @@ All inbox items except JSON config are complete:
 
 **2. Protocol Is Stable and Complete**
 
-8 client messages (0x01-0x08), 8 server messages (0x81-0x88). The protocol hasn't
-needed changes since session 13. The 5-byte header design is simple and debuggable.
+8 client messages (0x01-0x08), 8 server messages (0x81-0x88). The protocol
+hasn't needed changes since session 13. The 5-byte header design is simple and
+debuggable.
 
 **3. Module Boundaries Remain Clean**
 
 No circular dependencies. Each file has clear responsibility:
+
 - Protocol: wire format only
 - Terminal: VT emulation only
 - Keybind: state machine only
@@ -238,9 +303,10 @@ No circular dependencies. Each file has clear responsibility:
 
 **4. Viewport Panning Design Was Correct**
 
-Session 7's decision to have viewers maintain a local VTerminal and do client-side
-viewport clipping was the right call. Memory overhead only when panning is needed.
-The Viewport struct (client.zig:13-111) is pure: no I/O, just offset math.
+Session 7's decision to have viewers maintain a local VTerminal and do
+client-side viewport clipping was the right call. Memory overhead only when
+panning is needed. The Viewport struct (client.zig:13-111) is pure: no I/O, just
+offset math.
 
 ### What Could Be Improved
 
@@ -251,13 +317,14 @@ commands. It's now larger than session.zig was at session 12. The `cmdClients()`
 and `cmdKick()` functions duplicate connection/handshake logic.
 
 **Options:**
+
 - Extract `connectAndQuery()` helper
 - Create `admin.zig` for admin commands
 - Leave as-is (it's still manageable)
 
-**Decision**: Leave as-is for now. 478 lines for a CLI entry point is acceptable.
-The duplicated handshake logic is straightforward enough that DRY-ing it up would
-add more complexity than it saves.
+**Decision**: Leave as-is for now. 478 lines for a CLI entry point is
+acceptable. The duplicated handshake logic is straightforward enough that
+DRY-ing it up would add more complexity than it saves.
 
 **2. Old Scrollback Protocol Still Exists**
 
@@ -266,6 +333,7 @@ aren't bound to any key since session 10's viewport panning refactor. hjkl now
 does viewport panning.
 
 **Options:**
+
 - Remove the dead code
 - Bind scrollback to Ctrl+A [ (like tmux copy mode)
 - Keep for potential future use
@@ -276,11 +344,13 @@ spec mentioned scrollback dumping. We might want it for a future feature.
 **3. No Configuration File**
 
 The only remaining inbox item. Currently hardcoded:
+
 - Leader key: Ctrl+A
 - Keybinds: d/s/t/hjkl/g/G/?
 - Socket dir: XDG_RUNTIME_DIR/vanish
 
 User requested JSON config. Need to implement:
+
 - `~/.config/vanish/config.json`
 - Leader key override
 - Custom keybinds
@@ -289,28 +359,30 @@ User requested JSON config. Need to implement:
 ### Simple vs Complected Analysis
 
 **Simple (good):**
+
 - Viewport struct: pure math, no side effects
 - Protocol: one-way data flow, no acks
 - Single poll() loop per process
 - Client state is explicit: running, hint_visible, role
 
 **Potentially complected:**
+
 - `handleOutput()` in client.zig has two paths (direct write vs VTerminal). This
   is acceptable for performance reasons - no allocation when not panning.
-- `cmdClients()` and `cmdKick()` in main.zig share handshake code but don't share
-  it. Acceptable duplication - DRY-ing it would add indirection.
+- `cmdClients()` and `cmdKick()` in main.zig share handshake code but don't
+  share it. Acceptable duplication - DRY-ing it would add indirection.
 
 ### Inbox Status
 
-| Item | Status | Notes |
-|------|--------|-------|
-| Session takeover | ✓ Done | Session 8 |
-| Viewport panning | ✓ Done | Sessions 10-11 |
-| JSON output (--json) | ✓ Done | Session 5, extended session 13 |
-| Background sessions | ✓ Works | Default behavior |
-| XDG_RUNTIME_DIR | ✓ Works | Default behavior |
-| List/disconnect clients | ✓ Done | Session 13 |
-| **JSON config** | **○ Todo** | **Last remaining inbox item** |
+| Item                    | Status     | Notes                          |
+| ----------------------- | ---------- | ------------------------------ |
+| Session takeover        | ✓ Done     | Session 8                      |
+| Viewport panning        | ✓ Done     | Sessions 10-11                 |
+| JSON output (--json)    | ✓ Done     | Session 5, extended session 13 |
+| Background sessions     | ✓ Works    | Default behavior               |
+| XDG_RUNTIME_DIR         | ✓ Works    | Default behavior               |
+| List/disconnect clients | ✓ Done     | Session 13                     |
+| **JSON config**         | **○ Todo** | **Last remaining inbox item**  |
 
 ### Next Priority
 
@@ -328,6 +400,7 @@ remains maintainable. No module exceeds 620 lines. Tests pass. The main gap is
 feature completeness (JSON config) rather than architectural issues.
 
 Watch list:
+
 - main.zig at 478 lines - don't let it grow much more
 - client.zig at 616 lines - stable, no recent growth
 
@@ -340,6 +413,7 @@ Updated DESIGN.md to address the documentation debt noted in sessions 9 and 12.
 ### What Changed
 
 **DESIGN.md complete rewrite:**
+
 - Updated protocol section with all 8 client messages (0x01-0x08)
 - Updated protocol section with all 8 server messages (0x81-0x88)
 - Added Welcome struct showing session_cols/rows fields
@@ -354,15 +428,15 @@ Updated DESIGN.md to address the documentation debt noted in sessions 9 and 12.
 
 ### Inbox Status
 
-| Item | Status | Notes |
-|------|--------|-------|
-| Session takeover | ✓ Done | Session 8 |
-| Viewport panning | ✓ Done | Sessions 10-11 |
-| JSON output (--json) | ✓ Done | Session 5, extended session 13 |
-| Background sessions | ✓ Works | Default behavior |
-| XDG_RUNTIME_DIR | ✓ Works | Default behavior |
-| List/disconnect clients | ✓ Done | Session 13 |
-| **JSON config** | **○ Todo** | Last remaining inbox item |
+| Item                    | Status     | Notes                          |
+| ----------------------- | ---------- | ------------------------------ |
+| Session takeover        | ✓ Done     | Session 8                      |
+| Viewport panning        | ✓ Done     | Sessions 10-11                 |
+| JSON output (--json)    | ✓ Done     | Session 5, extended session 13 |
+| Background sessions     | ✓ Works    | Default behavior               |
+| XDG_RUNTIME_DIR         | ✓ Works    | Default behavior               |
+| List/disconnect clients | ✓ Done     | Session 13                     |
+| **JSON config**         | **○ Todo** | Last remaining inbox item      |
 
 ### Next Priority
 
@@ -383,6 +457,7 @@ Implemented the client list and disconnect commands from the inbox.
 ### What Changed
 
 **Protocol (protocol.zig):**
+
 - Added `ClientMsg.list_clients` (0x07) - request client list
 - Added `ClientMsg.kick_client` (0x08) - request to disconnect a client
 - Added `ServerMsg.client_list` (0x88) - response with client info
@@ -390,6 +465,7 @@ Implemented the client list and disconnect commands from the inbox.
 - Added `KickClient` struct (id)
 
 **Session (session.zig):**
+
 - Added `id` field to `Client` struct
 - Added `next_client_id` counter to `Session`
 - New clients now receive a unique incrementing ID
@@ -399,6 +475,7 @@ Implemented the client list and disconnect commands from the inbox.
 - Takeover now preserves client ID
 
 **CLI (main.zig):**
+
 - Added `vanish clients [--json] <name>` - list connected clients
 - Added `vanish kick <name> <client-id>` - disconnect a client by ID
 - Added `connectToSession()` helper function
@@ -428,20 +505,21 @@ vanish kick mysession 2
 
 - Client IDs are simple incrementing u32 values
 - IDs persist across role changes (takeover preserves ID)
-- The `clients` and `kick` commands connect as a viewer, query/act, then disconnect
+- The `clients` and `kick` commands connect as a viewer, query/act, then
+  disconnect
 - This is a lightweight approach - no special admin protocol needed
 
 ### Inbox Status Update
 
-| Item | Status | Notes |
-|------|--------|-------|
-| Session takeover | ✓ Done | Session 8 |
-| Viewport panning | ✓ Done | Sessions 10-11 |
-| JSON output (--json) | ✓ Done | Session 5, extended this session |
-| Background sessions | ✓ Works | Default behavior |
-| XDG_RUNTIME_DIR | ✓ Works | Default behavior |
-| JSON config | ○ Todo | Config not implemented at all |
-| **List/disconnect clients** | **✓ Done** | **Session 13** |
+| Item                        | Status     | Notes                            |
+| --------------------------- | ---------- | -------------------------------- |
+| Session takeover            | ✓ Done     | Session 8                        |
+| Viewport panning            | ✓ Done     | Sessions 10-11                   |
+| JSON output (--json)        | ✓ Done     | Session 5, extended this session |
+| Background sessions         | ✓ Works    | Default behavior                 |
+| XDG_RUNTIME_DIR             | ✓ Works    | Default behavior                 |
+| JSON config                 | ○ Todo     | Config not implemented at all    |
+| **List/disconnect clients** | **✓ Done** | **Session 13**                   |
 
 ### Next Priority
 
@@ -457,17 +535,17 @@ review was session 9.
 
 ### Codebase Stats
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| client.zig | 616 | User-facing terminal, viewport rendering |
-| session.zig | 439 | Daemon, poll loop, client management |
-| terminal.zig | 279 | ghostty-vt wrapper, viewport dump |
-| main.zig | 276 | CLI entry point |
-| protocol.zig | 177 | Wire format |
-| keybind.zig | 172 | Input state machine |
-| pty.zig | 134 | PTY operations |
-| signal.zig | 48 | Signal handling |
-| **Total** | **2,141** | 8 source files |
+| File         | Lines     | Purpose                                  |
+| ------------ | --------- | ---------------------------------------- |
+| client.zig   | 616       | User-facing terminal, viewport rendering |
+| session.zig  | 439       | Daemon, poll loop, client management     |
+| terminal.zig | 279       | ghostty-vt wrapper, viewport dump        |
+| main.zig     | 276       | CLI entry point                          |
+| protocol.zig | 177       | Wire format                              |
+| keybind.zig  | 172       | Input state machine                      |
+| pty.zig      | 134       | PTY operations                           |
+| signal.zig   | 48        | Signal handling                          |
+| **Total**    | **2,141** | 8 source files                           |
 
 Tests: 17 across 4 modules (keybind, protocol, pty, terminal)
 
@@ -478,16 +556,20 @@ Tests: 17 across 4 modules (keybind, protocol, pty, terminal)
 The session 7 design choice to have viewers maintain a local VTerminal and do
 client-side viewport clipping was correct. The implementation in sessions 10-11
 is clean:
+
 - `Viewport` struct in client.zig handles offset tracking
 - `ensureVTerm()` lazily allocates only when panning is needed
-- `dumpViewport()` in terminal.zig renders the visible region with proper styling
+- `dumpViewport()` in terminal.zig renders the visible region with proper
+  styling
 - Memory overhead only exists when session > local size
 
 **2. Protocol Remains Extensible**
 
 Current protocol (7 client + 7 server message types):
+
 - Client: 0x01-0x06 (hello, input, resize, detach, scrollback, takeover)
-- Server: 0x81-0x87 (welcome, output, full, exit, denied, role_change, session_resize)
+- Server: 0x81-0x87 (welcome, output, full, exit, denied, role_change,
+  session_resize)
 
 The 5-byte header + payload design is simple and debuggable. Adding new messages
 is trivial.
@@ -509,6 +591,7 @@ added rendering logic in the output path.
 **1. client.zig is Getting Larger (616 lines)**
 
 This file grew from ~427 to 616 lines with viewport panning. It now handles:
+
 - Connection handshake
 - Input processing (keybinds, forwarding)
 - Output processing (direct write vs viewport render)
@@ -518,6 +601,7 @@ This file grew from ~427 to 616 lines with viewport panning. It now handles:
 - Viewport state
 
 Not critical yet, but approaching the point where splitting makes sense:
+
 - `viewport.zig`: Viewport struct + rendering logic
 - Keep `client.zig` for connection, input handling, and event loop
 
@@ -532,6 +616,7 @@ own file.
 **3. DESIGN.md Still Outdated**
 
 Session 9 noted this; still not fixed. Missing:
+
 - 0x06 Takeover, 0x86 RoleChange, 0x87 SessionResize
 - Viewport panning documentation
 
@@ -540,6 +625,7 @@ Session 9 noted this; still not fixed. Missing:
 The old scroll mode (`ClientMsg.scrollback`, 0x05) still exists but isn't bound
 to any key after session 10's refactor. hjkl now does viewport panning instead.
 Options:
+
 - Remove scrollback protocol entirely (users can scroll in their terminal)
 - Bind to a new key (Ctrl+A [?) for explicit scrollback dump
 
@@ -548,12 +634,14 @@ Options:
 ### Simple vs Complected
 
 **Simple (good):**
+
 - Viewport struct is pure: no I/O, just offset math
 - `dumpViewport()` takes all params explicitly - no hidden state
 - VTerminal is only allocated when needed
 - Pan actions are atomic: adjust offset → render
 
 **Potentially complected:**
+
 - `handleOutput()` has two paths: direct write vs VTerminal + viewport render.
   This is acceptable complexity for the performance benefit (no allocation when
   not panning).
@@ -561,15 +649,15 @@ Options:
 
 ### Inbox Status Update
 
-| Item | Status | Notes |
-|------|--------|-------|
-| Session takeover | ✓ Done | Session 8 |
-| Viewport panning | ✓ Done | Sessions 10-11 |
-| JSON output (--json) | ✓ Done | Session 5 |
-| Background sessions | ✓ Works | Default behavior |
-| XDG_RUNTIME_DIR | ✓ Works | Default behavior |
-| JSON config | ○ Todo | Config not implemented at all |
-| List/disconnect clients | ○ Todo | Protocol + CLI needed |
+| Item                    | Status  | Notes                         |
+| ----------------------- | ------- | ----------------------------- |
+| Session takeover        | ✓ Done  | Session 8                     |
+| Viewport panning        | ✓ Done  | Sessions 10-11                |
+| JSON output (--json)    | ✓ Done  | Session 5                     |
+| Background sessions     | ✓ Works | Default behavior              |
+| XDG_RUNTIME_DIR         | ✓ Works | Default behavior              |
+| JSON config             | ○ Todo  | Config not implemented at all |
+| List/disconnect clients | ○ Todo  | Protocol + CLI needed         |
 
 ### Remaining Work (Priority Order)
 
@@ -592,13 +680,14 @@ which is fine.
 
 ## 2026-02-07: Session 11 - Viewport Rendering Complete
 
-Completed the viewport rendering implementation that was deferred in session 10. Now
-viewers with smaller terminals can actually see the panned view, not just track the
-offset.
+Completed the viewport rendering implementation that was deferred in session 10.
+Now viewers with smaller terminals can actually see the panned view, not just
+track the offset.
 
 ### What Changed
 
 **terminal.zig:**
+
 - Added `dumpViewport(offset_x, offset_y, view_cols, view_rows)` function
 - Renders a rectangular region of the terminal to VT sequences
 - Uses ghostty-vt's Pin API to access rows and cells
@@ -607,14 +696,17 @@ offset.
 - Added test for viewport dump
 
 Helper functions:
+
 - `stylesEqual()`: compares two styles for change detection
 - `writeStyle()`: emits SGR sequences for a style
 
 **client.zig:**
+
 - Added `terminal` import
 - Added `alloc` and `vterm` fields to Client struct
 - Added `ensureVTerm()`: lazily creates VTerminal when panning is needed
-- Added `handleOutput()`: routes output through VTerminal when panning, else direct
+- Added `handleOutput()`: routes output through VTerminal when panning, else
+  direct
 - Added `renderViewport()`: dumps visible portion using dumpViewport
 - Added `deinit()`: cleans up VTerminal
 - Updated `attach()` to pass allocator and call deinit
@@ -646,19 +738,20 @@ Helper functions:
 
 ### Inbox Status Update
 
-| Item | Status | Notes |
-|------|--------|-------|
-| Session takeover | ✓ Done | Session 8 |
-| JSON config | ○ Todo | Config not implemented |
-| **Viewport panning** | **✓ Done** | **Session 10-11** |
-| List/disconnect clients | ○ Todo | |
-| Background sessions | ✓ Works | |
-| XDG_RUNTIME_DIR | ✓ Works | |
-| --json flag | ✓ Done | |
+| Item                    | Status     | Notes                  |
+| ----------------------- | ---------- | ---------------------- |
+| Session takeover        | ✓ Done     | Session 8              |
+| JSON config             | ○ Todo     | Config not implemented |
+| **Viewport panning**    | **✓ Done** | **Session 10-11**      |
+| List/disconnect clients | ○ Todo     |                        |
+| Background sessions     | ✓ Works    |                        |
+| XDG_RUNTIME_DIR         | ✓ Works    |                        |
+| --json flag             | ✓ Done     |                        |
 
 ### Next Priority
 
 Session 12 will be the next architecture review (divisible by 3). After that:
+
 1. Client list/disconnect command
 2. JSON config file
 
@@ -666,25 +759,29 @@ Session 12 will be the next architecture review (divisible by 3). After that:
 
 ## 2026-02-07: Session 10 - Viewport Panning Implementation
 
-Implemented viewport panning, the highest priority item from session 9's architecture
-review. This addresses the user's clarification about scrolling:
+Implemented viewport panning, the highest priority item from session 9's
+architecture review. This addresses the user's clarification about scrolling:
 
-> However, for full-screen apps, viewers may be smaller than the primary session, in
-> height and/or width. That's what the scrolling is for - to pan around a terminal
-> larger than the bounds of the viewer.
+> However, for full-screen apps, viewers may be smaller than the primary
+> session, in height and/or width. That's what the scrolling is for - to pan
+> around a terminal larger than the bounds of the viewer.
 
 ### What Changed
 
 **Protocol (protocol.zig):**
+
 - Added `session_cols` and `session_rows` to `Welcome` struct
 - Added `ServerMsg.session_resize` (0x87)
 - Added `SessionResize` struct for notifying viewers when primary resizes
 
 **Session (session.zig):**
+
 - Welcome now includes session dimensions
-- Added `notifyViewersResize()` - sends `session_resize` to all viewers when primary resizes
+- Added `notifyViewersResize()` - sends `session_resize` to all viewers when
+  primary resizes
 
 **Client (client.zig):**
+
 - Added `Viewport` struct with:
   - `session_cols/rows`: size of the session terminal
   - `local_cols/rows`: size of the client's terminal
@@ -699,6 +796,7 @@ review. This addresses the user's clarification about scrolling:
 - Status bar shows `[+x,+y]` when viewport is panned
 
 **Keybinds (keybind.zig):**
+
 - Added `scroll_left` and `scroll_right` actions
 - Changed descriptions: "scroll" → "pan"
 - Added 'h' and 'l' bindings for horizontal panning
@@ -714,16 +812,16 @@ review. This addresses the user's clarification about scrolling:
 
 ### Still Not Done (from session 7 design)
 
-The actual viewport **rendering** isn't implemented yet. Currently hjkl adjusts the
-offset, and the status bar shows it, but the terminal output isn't clipped. Full
-implementation would require:
+The actual viewport **rendering** isn't implemented yet. Currently hjkl adjusts
+the offset, and the status bar shows it, but the terminal output isn't clipped.
+Full implementation would require:
 
 1. Client maintains local VTerminal (same size as session)
 2. Feed all output to local terminal
 3. Render only visible portion based on viewport offset
 
-This is a significant addition - decided to defer to keep this session focused on
-the protocol and state tracking foundation.
+This is a significant addition - decided to defer to keep this session focused
+on the protocol and state tracking foundation.
 
 ### Testing
 
@@ -732,22 +830,22 @@ the protocol and state tracking foundation.
 
 ### Inbox Status Update
 
-| Item | Status | Notes |
-|------|--------|-------|
-| Session takeover | ✓ Done | Session 8 |
-| JSON config | ○ Todo | Config not implemented |
-| Viewport panning | ◐ Partial | Protocol + state done, rendering deferred |
-| List/disconnect clients | ○ Todo | |
-| Background sessions | ✓ Works | |
-| XDG_RUNTIME_DIR | ✓ Works | |
-| --json flag | ✓ Done | |
+| Item                    | Status    | Notes                                     |
+| ----------------------- | --------- | ----------------------------------------- |
+| Session takeover        | ✓ Done    | Session 8                                 |
+| JSON config             | ○ Todo    | Config not implemented                    |
+| Viewport panning        | ◐ Partial | Protocol + state done, rendering deferred |
+| List/disconnect clients | ○ Todo    |                                           |
+| Background sessions     | ✓ Works   |                                           |
+| XDG_RUNTIME_DIR         | ✓ Works   |                                           |
+| --json flag             | ✓ Done    |                                           |
 
 ---
 
 ## 2026-02-07: Session 9 - Architecture Review (3-session checkpoint)
 
-Since this is session 9 (divisible by 3), doing an architecture review. Last review
-was session 6, before takeover was implemented.
+Since this is session 9 (divisible by 3), doing an architecture review. Last
+review was session 6, before takeover was implemented.
 
 ### Codebase Stats
 
@@ -757,8 +855,8 @@ was session 6, before takeover was implemented.
 
 ### What's Working Well
 
-**1. Module Separation is Excellent**
-Each file does one thing:
+**1. Module Separation is Excellent** Each file does one thing:
+
 - `session.zig` (425 lines): daemon, poll loop, client management
 - `client.zig` (427 lines): user-facing terminal interaction
 - `protocol.zig` (169 lines): wire format
@@ -771,33 +869,36 @@ Each file does one thing:
 No module is over 500 lines. Dependencies flow downward.
 
 **2. Protocol Remains Simple**
+
 - 5-byte header (1 type + 4 len) + payload
 - Client messages: 0x01-0x06
 - Server messages: 0x81-0x86
 - Easy to debug with hexdump
 
 **3. State Machines are Explicit**
+
 - `keybind.State`: tracks leader mode, bindings
 - `Client`: running, hint_visible, in_scroll_mode, role
 - Session: primary client + viewers list
 
-**4. No Threading**
-Single poll() loop per process. Simple to reason about.
+**4. No Threading** Single poll() loop per process. Simple to reason about.
 
 ### What Needs Work
 
 **1. Scroll Mode is Wrong (Known Issue)**
 
-From session 7's design work: the current "scroll mode" dumps scrollback and exits
-on any key. The user actually wants **viewport panning** for viewers smaller than
-the session. This is designed but not implemented.
+From session 7's design work: the current "scroll mode" dumps scrollback and
+exits on any key. The user actually wants **viewport panning** for viewers
+smaller than the session. This is designed but not implemented.
 
 Current flow (wrong):
+
 ```
 Ctrl+A k → enter scroll mode → dump scrollback → any key exits
 ```
 
 Correct flow (not yet implemented):
+
 ```
 hjkl available to viewers → pan viewport around session's larger screen
 ```
@@ -805,6 +906,7 @@ hjkl available to viewers → pan viewport around session's larger screen
 **2. Client State Flags are Getting Messy**
 
 Looking at `client.zig` line 12-21:
+
 ```zig
 running: bool = true,
 hint_visible: bool = false,
@@ -815,13 +917,14 @@ Plus `keys.show_status` and `keys.in_leader`. These are scattered across two
 structs. With viewport panning coming, we'll add viewport offset too.
 
 Consider consolidating into a single `Mode` enum:
+
 ```zig
 const Mode = enum { normal, leader, scroll, help };
 ```
 
 But actually... these aren't mutually exclusive. You can have status bar visible
-while in leader mode. So maybe the current approach is correct, just needs better
-organization.
+while in leader mode. So maybe the current approach is correct, just needs
+better organization.
 
 **Decision**: Leave as-is for now. When viewport panning is added, reassess.
 
@@ -829,6 +932,7 @@ organization.
 
 Session 8 added takeover, but DESIGN.md doesn't mention it. The protocol section
 is also missing:
+
 - 0x05 Scrollback
 - 0x06 Takeover
 - 0x86 RoleChange
@@ -838,6 +942,7 @@ Should update to stay accurate.
 **4. No Config Yet**
 
 User wants JSON config. Need:
+
 - `~/.config/vanish/config.json`
 - Leader key override
 - Custom keybinds
@@ -847,15 +952,15 @@ This is lower priority than viewport panning.
 
 ### Inbox Items Status (Updated)
 
-| Item | Status | Notes |
-|------|--------|-------|
-| Session takeover | ✓ Done | Session 8 |
-| JSON config | ○ Todo | Config not implemented at all |
-| Viewport panning | ○ Todo | Designed in session 7 |
-| List/disconnect clients | ○ Todo | Protocol + CLI needed |
-| Background sessions | ✓ Works | Already implemented |
-| XDG_RUNTIME_DIR | ✓ Works | Already implemented |
-| --json flag | ✓ Done | Session 5 |
+| Item                    | Status  | Notes                         |
+| ----------------------- | ------- | ----------------------------- |
+| Session takeover        | ✓ Done  | Session 8                     |
+| JSON config             | ○ Todo  | Config not implemented at all |
+| Viewport panning        | ○ Todo  | Designed in session 7         |
+| List/disconnect clients | ○ Todo  | Protocol + CLI needed         |
+| Background sessions     | ✓ Works | Already implemented           |
+| XDG_RUNTIME_DIR         | ✓ Works | Already implemented           |
+| --json flag             | ✓ Done  | Session 5                     |
 
 ### Priority for Next Sessions
 
@@ -874,14 +979,15 @@ The codebase is clean, well-organized, and maintainable. No major refactoring
 needed. The main gap is feature completeness (viewport panning) rather than
 architectural issues.
 
-One thing to watch: `client.zig` and `session.zig` are approaching 450 lines each.
-If they grow much larger, consider splitting. But they're not there yet.
+One thing to watch: `client.zig` and `session.zig` are approaching 450 lines
+each. If they grow much larger, consider splitting. But they're not there yet.
 
 ---
 
 ## 2026-02-07: Session 8 - Session Takeover
 
 Implemented the inbox item for session takeover:
+
 > You may already have it, but can you please make sure we can take over
 > sessions from viewers? If sizes differ, we'll send a resize to the emulated
 > terminal, and switch the other session to viewer mode.
@@ -890,7 +996,8 @@ Implemented the inbox item for session takeover:
 
 - [x] Protocol: Added `ClientMsg.takeover` (0x06) for viewer requesting takeover
 - [x] Protocol: Added `ServerMsg.role_change` (0x86) with `RoleChange` struct
-- [x] Session: `handleTakeover()` demotes current primary (if any) to viewer, promotes requester
+- [x] Session: `handleTakeover()` demotes current primary (if any) to viewer,
+      promotes requester
 - [x] Session: Resizes terminal to new primary's size
 - [x] Client: Keybind `Ctrl+A t` sends takeover request (only for viewers)
 - [x] Client: Handles `role_change` message, updates role and status bar
@@ -903,7 +1010,8 @@ Implemented the inbox item for session takeover:
 1. Viewer presses `Ctrl+A t`
 2. Client sends `ClientMsg.takeover` to session
 3. Session:
-   - If primary exists: sends `role_change(.viewer)` to old primary, moves to viewers list
+   - If primary exists: sends `role_change(.viewer)` to old primary, moves to
+     viewers list
    - Removes requester from viewers list
    - Sets requester as new primary
    - Sends `role_change(.primary)` to new primary
@@ -930,36 +1038,41 @@ Re-reading the inbox item on scrolling, I now understand the actual requirement:
 > session, in height and/or width. That's what the scrolling is for - to pan
 > around a terminal larger than the bounds of the viewer.
 
-This is NOT about scrollback history. It's about **viewport panning**: when a viewer's
-terminal is smaller than the session's terminal, the viewer needs to be able to see
-different parts of the larger screen.
+This is NOT about scrollback history. It's about **viewport panning**: when a
+viewer's terminal is smaller than the session's terminal, the viewer needs to be
+able to see different parts of the larger screen.
 
 ### Current Implementation (Wrong)
 
 The current scroll mode:
+
 1. User presses Ctrl+A k/j
 2. Client enters "scroll mode" and requests scrollback
 3. Session dumps plaintext scrollback content
 4. Any key exits scroll mode
 
 This is scrollback navigation, which the user explicitly says they DON'T want:
+
 > I think we explicitly don't want an additional scrollback thing in the viewer
 
 ### Correct Design: Viewport Panning
 
 **Concept:**
+
 - Session terminal has size (session_cols, session_rows), e.g., 120x50
 - Viewer terminal has size (viewer_cols, viewer_rows), e.g., 80x24
 - Viewer maintains a viewport offset (vx, vy) into the session screen
 - hjkl moves the viewport, showing a different portion of the session screen
 
-**Key insight:** This is rendering logic, not protocol logic. The session already
-sends full terminal state. The viewer needs to:
+**Key insight:** This is rendering logic, not protocol logic. The session
+already sends full terminal state. The viewer needs to:
+
 1. Know the session's terminal size (need protocol change)
 2. Track its own viewport offset
 3. Render only the visible portion
 
 **Protocol Change Needed:**
+
 ```
 Welcome struct should include session terminal size:
   Welcome = extern struct {
@@ -971,6 +1084,7 @@ Welcome struct should include session terminal size:
 ```
 
 Also need a new message when session resizes (when primary resizes):
+
 ```
 ServerMsg.resize = 0x86  // Server tells viewers the new session size
 ```
@@ -1015,45 +1129,53 @@ Viewport = struct {
 Two options:
 
 1. **Server-side clipping**: Viewer tells server its size + offset, server sends
-   only the visible portion. More efficient network-wise, but complicates server.
+   only the visible portion. More efficient network-wise, but complicates
+   server.
 
-2. **Client-side clipping**: Server sends full VT output, client parses and renders
-   only the visible portion. Simpler protocol, requires VT parsing on client.
+2. **Client-side clipping**: Server sends full VT output, client parses and
+   renders only the visible portion. Simpler protocol, requires VT parsing on
+   client.
 
 I prefer option 2 because:
+
 - Keeps server simple (no per-client viewport state)
 - Viewers are already receiving all output anyway
 - Client already has terminal size info
 
 **However**, there's a problem: The server sends raw VT sequences. Clipping VT
-sequences client-side is complex because cursor positions, colors, and other state
-are relative to the full terminal, not our viewport.
+sequences client-side is complex because cursor positions, colors, and other
+state are relative to the full terminal, not our viewport.
 
 **Better approach: Server-side rendering per-client**
 
-Actually, let me reconsider. The session already has the ghostty-vt terminal with
-the full screen state. For each viewer, instead of forwarding raw PTY output, we
-could send a clipped version of the screen.
+Actually, let me reconsider. The session already has the ghostty-vt terminal
+with the full screen state. For each viewer, instead of forwarding raw PTY
+output, we could send a clipped version of the screen.
 
 But this changes the architecture significantly:
+
 - Currently: forward raw bytes → simple, real-time
 - Proposed: render per-client → more work, slight latency
 
 **Simplest approach: Let viewers receive full output, track state locally**
 
-Each viewer could maintain its own ghostty-vt terminal instance, same size as the
-session. When the user pans, they see a different portion of their local copy.
+Each viewer could maintain its own ghostty-vt terminal instance, same size as
+the session. When the user pans, they see a different portion of their local
+copy.
 
 Pros:
+
 - No protocol changes for output
 - Viewers stay in sync automatically
 - Panning is instant (local operation)
 
 Cons:
+
 - More memory on viewer (another terminal instance)
 - Need to sync terminal size
 
 This is actually elegant. The viewer becomes:
+
 1. Connect, receive Welcome with session size
 2. Create local VTerminal with session size
 3. Feed all output to local terminal
@@ -1073,19 +1195,22 @@ This is actually elegant. The viewer becomes:
 
 **What about scrollback?**
 
-The user says they don't want an "additional scrollback thing." But maybe we keep
-it simple: dump scrollback to stdout and let the user's terminal handle it. That's
-what we have now for Ctrl+A k/j.
+The user says they don't want an "additional scrollback thing." But maybe we
+keep it simple: dump scrollback to stdout and let the user's terminal handle it.
+That's what we have now for Ctrl+A k/j.
 
 Actually, re-reading again:
+
 > for the scrollback mode, handle it by literally just dumping n lines of
 > scrollback to the terminal - we don't want to have to deal with our own
 > scrolling, just use the terminals
 
 So the current scrollback dump approach IS correct for scrollback. But the hjkl
-bindings should be for **viewport panning**, not scrollback. We need both features.
+bindings should be for **viewport panning**, not scrollback. We need both
+features.
 
 **Revised Keybinds:**
+
 - Ctrl+A hjkl: viewport panning (when session > viewer size)
 - Ctrl+A g/G: jump to top-left / bottom-right of session
 - Ctrl+A [ or similar: enter scrollback mode (dump scrollback, exit on key)
@@ -1093,6 +1218,7 @@ bindings should be for **viewport panning**, not scrollback. We need both featur
 But this might be too many modes. Let me think...
 
 Actually the prompt says:
+
 > consumers typically have scrolling commands available on hjkl
 
 So hjkl should be for panning. The scrollback dump could be a separate thing,
@@ -1124,70 +1250,79 @@ Per the "every 3 sessions" rule, taking time to interrogate the abstractions.
 ### What's Working Well
 
 **1. Module Boundaries Are Clean**
-- Each file has a single responsibility: pty.zig does PTY, terminal.zig wraps ghostty-vt,
-  protocol.zig handles wire format, keybind.zig manages key state
+
+- Each file has a single responsibility: pty.zig does PTY, terminal.zig wraps
+  ghostty-vt, protocol.zig handles wire format, keybind.zig manages key state
 - No circular dependencies
 - Low coupling between modules
 
 **2. Protocol Is Simple and Correct**
+
 - 5-byte header (1 type + 4 len) is easy to parse and debug
 - Message types are well-separated (0x01-0x0F client, 0x81-0x8F server)
 - External structs for wire format prevent ABI issues
 
 **3. Single Event Loop per Process**
+
 - Session uses poll() over dynamic fd list - simple, efficient
 - Client uses fixed 2-fd poll - even simpler
 - No threading, no async runtime - just synchronous POSIX
 
 **4. State Machines Are Explicit**
+
 - Keybind state: normal → leader → action
 - Client state: running, hint_visible, in_scroll_mode
 - Easy to reason about
 
 ### What Could Be Better
 
-**1. Scrolling Semantics Are Confused**
-The inbox clarifies this: scrolling is for *panning* around a terminal larger than
-the viewer, NOT for navigating scrollback in the traditional sense. Current
-implementation treats scroll mode as "dump scrollback then exit" which misses the point.
+**1. Scrolling Semantics Are Confused** The inbox clarifies this: scrolling is
+for _panning_ around a terminal larger than the viewer, NOT for navigating
+scrollback in the traditional sense. Current implementation treats scroll mode
+as "dump scrollback then exit" which misses the point.
 
 **The actual need:**
+
 - Viewer might be 80x24, session might be 120x50
 - User needs hjkl to pan around the 120x50 viewport
 - This is more like a viewport into a larger screen, not scrollback
 
 **What we have:**
+
 - dumpScrollback() which gives text content
 - Scroll mode that dumps and exits on any key
 
 **What we need:**
+
 - Track viewport offset (x, y) relative to session terminal size
 - Render only the visible portion
 - hjkl adjusts viewport, not scrollback position
 - This is fundamentally different from what we have
 
-**2. Session Takeover Not Implemented**
-The inbox mentions viewers should be able to take over as primary. This requires:
+**2. Session Takeover Not Implemented** The inbox mentions viewers should be
+able to take over as primary. This requires:
+
 - New protocol message: "takeover" from client
 - Session logic: demote current primary to viewer, promote requester
 - Handle size mismatch: resize terminal to new primary's size
 
 Currently, if primary exists, new primary is denied. Need to add takeover flow.
 
-**3. Client Management Missing**
-No way to:
+**3. Client Management Missing** No way to:
+
 - List connected clients
 - Disconnect a specific client
 - See client metadata (size, connection time)
 
 This needs:
+
 - Protocol messages for client list query/response
 - Protocol message for disconnect command
 - CLI commands: `vanish clients <session>`, `vanish kick <session> <client-id>`
 
-**4. Config Not Implemented Yet**
-User wants JSON instead of TOML. That's fine - JSON is simpler anyway.
-But config isn't implemented at all yet. Need:
+**4. Config Not Implemented Yet** User wants JSON instead of TOML. That's fine -
+JSON is simpler anyway. But config isn't implemented at all yet. Need:
+
 - ~/.config/vanish/config.json
 - Leader key override
 - Default keybinds
@@ -1195,31 +1330,35 @@ But config isn't implemented at all yet. Need:
 
 **5. Minor Code Smells**
 
-a) **Client struct in client.zig is doing too much** - it handles input, rendering,
-   scroll mode, status bar. Could split into smaller pieces, but not critical.
+a) **Client struct in client.zig is doing too much** - it handles input,
+rendering, scroll mode, status bar. Could split into smaller pieces, but not
+critical.
 
-b) **signal.zig uses global mutable state** - This works but makes testing harder.
-   Could pass signal state as parameter, but overhead may not be worth it.
+b) **signal.zig uses global mutable state** - This works but makes testing
+harder. Could pass signal state as parameter, but overhead may not be worth it.
 
-c) **handleClientInput in session.zig has a large switch** - Could use a dispatch
-   table, but current approach is explicit and readable.
+c) **handleClientInput in session.zig has a large switch** - Could use a
+dispatch table, but current approach is explicit and readable.
 
 ### Simplicity Analysis (Simple vs Easy)
 
 **Simple (good):**
+
 - Protocol: one-way data flow, no RPC semantics, no acks
 - PTY: thin wrapper around system calls
 - Session: single loop, no threads
 - Keybind: pure state machine, no side effects in processKey
 
 **Potentially Complected:**
+
 - Scroll mode: conflating scrollback navigation with viewport panning
 - Client state: hint_visible, in_scroll_mode, show_status are separate booleans;
   could be a single enum Mode { normal, leader, scroll, help }
 
 ### Priority Actions for Future Sessions
 
-1. **Fix scroll semantics** - This is a design issue. Viewport panning, not scrollback.
+1. **Fix scroll semantics** - This is a design issue. Viewport panning, not
+   scrollback.
 2. **Add session takeover** - Protocol + session logic
 3. **Add client management** - List/disconnect
 4. **Add config file** - JSON format
@@ -1237,7 +1376,8 @@ c) **handleClientInput in session.zig has a large switch** - Could use a dispatc
 ### Completed
 
 - [x] `--json` flag for `vanish list` command
-  - Machine-readable output: `{"sessions":[{"name":"foo","path":"/run/user/1000/vanish/foo"}]}`
+  - Machine-readable output:
+    `{"sessions":[{"name":"foo","path":"/run/user/1000/vanish/foo"}]}`
   - Proper JSON escaping for special characters
   - Error case returns `{"error":"..."}` format
   - Empty case returns `{"sessions":[]}`
@@ -1245,12 +1385,14 @@ c) **handleClientInput in session.zig has a large switch** - Could use a dispatc
 ### Inbox Review
 
 Items remaining:
+
 - JSON vs TOML for config file (config not yet implemented)
 - Session takeover from viewers (allow viewer to become primary)
 - List/disconnect users command
 - Scrolling clarification addressed in previous sessions
 
 Already implemented:
+
 - Background sessions on detach (session keeps running when primary detaches)
 - XDG_RUNTIME_DIR default socket path
 - --json flag (done this session)

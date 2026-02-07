@@ -168,6 +168,7 @@ fn parseKeyString(s: []const u8) ?LeaderKey {
 fn parseAction(s: []const u8) ?keybind.Action {
     const map = .{
         .{ "detach", keybind.Action.detach },
+        .{ "scrollback", keybind.Action.scrollback },
         .{ "scroll_up", keybind.Action.scroll_up },
         .{ "scroll_down", keybind.Action.scroll_down },
         .{ "scroll_left", keybind.Action.scroll_left },
@@ -201,6 +202,7 @@ fn parseAction(s: []const u8) ?keybind.Action {
 fn actionDesc(action: keybind.Action) []const u8 {
     return switch (action) {
         .detach => "detach",
+        .scrollback => "scrollback",
         .scroll_up => "pan up",
         .scroll_down => "pan down",
         .scroll_left => "pan left",

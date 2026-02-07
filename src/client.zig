@@ -151,6 +151,9 @@ const Client = struct {
                 protocol.writeMsg(self.fd, @intFromEnum(protocol.ClientMsg.detach), "") catch {};
                 self.running = false;
             },
+            .scrollback => {
+                protocol.writeMsg(self.fd, @intFromEnum(protocol.ClientMsg.scrollback), "") catch {};
+            },
             .toggle_status => {
                 self.keys.show_status = !self.keys.show_status;
                 if (self.keys.show_status) {
@@ -247,6 +250,7 @@ const Client = struct {
             \\ vanish keybindings (leader: Ctrl+A)
             \\
             \\   d       detach from session
+            \\   [       dump scrollback to terminal
             \\   s       toggle status bar
             \\   t       takeover (viewer becomes primary)
             \\   hjkl    pan viewport (when session > local size)

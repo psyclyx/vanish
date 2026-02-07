@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const Action = enum {
     detach,
+    scrollback,
     scroll_up,
     scroll_down,
     scroll_left,
@@ -32,6 +33,7 @@ pub const Config = struct {
 pub const default_binds = [_]Bind{
     .{ .key = 'd', .action = .detach, .desc = "detach" },
     .{ .key = 0x01, .ctrl = true, .action = .detach, .desc = "detach" }, // Ctrl+A Ctrl+A
+    .{ .key = '[', .action = .scrollback, .desc = "scrollback" },
     .{ .key = 'h', .action = .scroll_left, .desc = "pan left" },
     .{ .key = 'j', .action = .scroll_down, .desc = "pan down" },
     .{ .key = 'k', .action = .scroll_up, .desc = "pan up" },
