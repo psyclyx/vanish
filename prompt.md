@@ -11,7 +11,62 @@ Ongoing:
   What's simple, and what's complected? Think about the long term. You'll have
   to maintain this, don't make that hard on yourself.
 
-Inbox:
+Inbox: keep this up to date
+
+New:
+
+(none)
+
+Current:
+
+- Sometimes, the cursor is in the wrong place for particularly narrow primary
+  sessions.
+- Can't send input from firefox - captures keyboard events but no effect, no
+  console errors.
+- The session list isn't reactive in the web (would need SSE for session list).
+- Man page, readme. all to the point. little fluff. a tool, not a product or an
+  experience.
+- an arch pkgbuild
+
+Done (Session 31):
+
+- ✓ Extract shared utilities (paths.zig) - Moved appendJsonEscaped,
+  getDefaultSocketDir, and resolveSocketPath into paths.zig. Removed ~60 lines
+  of duplication across main.zig, http.zig, and vthtml.zig. 13 source files
+  now. All tests passing.
+
+Done (Session 30):
+
+- ✓ Architecture review - Codebase is stable at 5,410 lines across 12 files.
+  Core multiplexing and web terminal both working well. Identified code
+  duplication (appendJsonEscaped, getDefaultSocketDir, resolveSocketPath) as
+  technical debt to address. Project approaching "done" for stated scope.
+
+Done (Session 29):
+
+- ✓ Updated prompt.md scope - Reorganized task description into sections (Core,
+  Sessions, Native Client, Web Access, Design Principles). Web access is now
+  documented as a first-class feature with its key characteristics: JWT/OTP
+  auth, SSE streaming, server-side VT→HTML, cell-level deltas.
+
+Done (Session 27):
+
+- ✓ Ctrl+Backslash and Ctrl+Space leader keys - Fixed config parsing and
+  writeJson to handle special control characters (0x00, 0x1B-0x1F). Now `"^\\"`,
+  `"^ "`, and `"Ctrl+Space"` all work in config.json.
+
+Done (Session 26):
+
+- ✓ HTML deltas - Implemented server-side VT→HTML rendering with cell-level
+  diffing. Each SSE client maintains a ScreenBuffer of last-sent state. Only
+  changed cells are sent as JSON. See vthtml.zig.
+- ✓ Character bugs - Fixed by doing all rendering server-side. Browser just
+  positions pre-rendered HTML spans.
+- ✓ http module refactor (partial) - Extracted vthtml.zig (395 lines), http.zig
+  now 988 lines.
+- ✓ Native vs web client analysis - Session 24 concluded they should stay
+  separate; fundamentally different pipelines.
+- ✓ Kill command - Session 25 added `vanish kill <session>`.
 
 OLD:
 
@@ -43,7 +98,9 @@ The task at hand
 
 # Vanish
 
-lightweight libghostty terminal session multiplexer
+lightweight libghostty terminal session multiplexer with web access
+
+## Core
 
 - dtach is great, but the fact that it only passes bytes through limits it.
 - to preserve the state of the terminal as a user would see it, and for
@@ -51,9 +108,18 @@ lightweight libghostty terminal session multiplexer
 - most terminal emulators are bad
 - libghostty is good
 
+## Sessions
+
 - supports up to 1 primary consumer per session at a time. this session
   determines the height/width, and can write to the session.
 - supports any number of view-only consumers
+- session management is like dtach - a socket.
+- by default, closing the process exits the session, but there's a keybinding /
+  command to detach. (the intent is to make this convinient to use for every
+  terminal, and detach when needed.
+
+## Native Client
+
 - for output that's scrolling, it'll keep track of scrollback and adapt it to
   the consumer's terminal size if necessary
 - for something like nvim, just let it get cut off, and allow consumers to move
@@ -65,7 +131,6 @@ lightweight libghostty terminal session multiplexer
 - there is a toggleable status bar as well - it shows when the keybinding menu
   is active, and users can toggle it with a bind to have it show up all the
   time.
-- session management is like dtach - a socket.
 - when there are binds available (except under leader under the default config),
   the keybinding help pops up. this means it has to be unobtrusive (there may be
   a need for a larger one if there are many binds - there should be a clearly
@@ -76,9 +141,18 @@ lightweight libghostty terminal session multiplexer
   scrollback to the terminal - we don't want to have to deal with our own
   scrolling, just use the terminals. for the non-scrollback mode, just show the
   state of the terminal.
-- by default, closing the process exits the session, but there's a keybinding /
-  command to detach. (the intent is to make this convinient to use for every
-  terminal, and detach when needed.
+
+## Web Access
+
+- `vanish serve` starts an HTTP server for browser-based access to sessions
+- JWT/HMAC authentication with OTP exchange for security
+- SSE (Server-Sent Events) for streaming terminal output to browsers
+- server-side VT→HTML rendering with cell-level delta streaming
+- each SSE client maintains a ScreenBuffer; only changed cells sent over wire
+- vanilla JS frontend, no framework dependencies
+
+## Design Principles
+
 - scope this out. make it elegant, minimal, don't trust i've framed the problem
   perfectly, make sure it's extremely performant and well-tested. code should be
   clean, idiomatic, with only the essential comments. you're not writing
@@ -107,6 +181,1243 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
+## 2026-02-07: Session 31 - Extract Shared Utilities (paths.zig)
+
+Addressed the technical debt identified in sessions 27 and 30: code duplication
+across main.zig, http.zig, and vthtml.zig.
+
+### What Changed
+
+**New file: paths.zig (43 lines)**
+
+Three functions extracted:
+
+- `getDefaultSocketDir()` - resolves socket directory from config, XDG, or /tmp
+- `resolveSocketPath()` - resolves session name to full socket path
+- `appendJsonEscaped()` - escapes a string for JSON output
+
+**main.zig (982 → 942 lines, -40)**
+
+- Added `paths` import
+- Replaced `appendJsonString` calls with `paths.appendJsonEscaped`
+- Replaced `resolveSocketPath` and `getDefaultSocketDir` calls with `paths.*`
+- Removed the three local function definitions
+
+**http.zig (988 → 949 lines, -39)**
+
+- Added `paths` import
+- Replaced all `appendJsonEscaped`, `resolveSocketPath`, and
+  `getDefaultSocketDir` calls with `paths.*`
+- Removed the three local function definitions
+
+**vthtml.zig (395 → 375 lines, -20)**
+
+- Added `paths` import
+- Replaced `appendJsonEscaped` call with `paths.appendJsonEscaped`
+- Removed local `appendJsonEscaped` definition
+
+### Line Count Impact
+
+| File       | Before | After | Change |
+| ---------- | ------ | ----- | ------ |
+| main.zig   | 982    | 942   | -40    |
+| http.zig   | 988    | 949   | -39    |
+| vthtml.zig | 395    | 375   | -20    |
+| paths.zig  | -      | 43    | +43    |
+| **Net**    |        |       | **-56**|
+
+Total codebase: 13 source files, ~5,354 lines (down from 5,410).
+
+### Inbox Status
+
+| Item                | Status  | Notes                              |
+| ------------------- | ------- | ---------------------------------- |
+| Cursor position bug | ○ Todo  | Narrow primary sessions            |
+| Firefox input bug   | ○ Todo  | Keyboard events captured, no send  |
+| Session list SSE    | ○ Todo  | Would need SSE for list            |
+| Man page, readme    | ○ Todo  |                                    |
+| Arch PKGBUILD       | ○ Todo  |                                    |
+
+### Recommendations for Next Sessions
+
+1. **Session 32:** Investigate the Firefox input bug - keyboard events are
+   captured but input doesn't reach the session. This is a user-reported
+   functional bug.
+
+2. **Session 33 (next review):** Architecture review. Assess whether cursor
+   position bug is a vthtml rendering issue or a frontend positioning issue.
+
+---
+
+## 2026-02-07: Session 29 - Update Prompt Scope
+
+Updated the task description in prompt.md to reflect the current state of the
+project. The web terminal is now a first-class feature, not an afterthought.
+
+### What Changed
+
+Reorganized the task description into clear sections:
+
+1. **Core** - The original motivation (dtach limitations, ghostty-vt solution)
+2. **Sessions** - Primary/viewer model, socket-based management, detach behavior
+3. **Native Client** - Terminal UI, keybinds, status bar, viewport panning
+4. **Web Access** - NEW section documenting:
+   - `vanish serve` command
+   - JWT/HMAC authentication with OTP exchange
+   - SSE streaming for real-time output
+   - Server-side VT→HTML rendering
+   - Cell-level delta streaming (ScreenBuffer per client)
+   - Vanilla JS frontend
+5. **Design Principles** - The existing guidance on simplicity, testing, commits
+
+### Why This Matters
+
+The prompt is the "spec" that each session reads. Having the web feature
+properly documented ensures:
+
+- Future sessions understand the full scope
+- Design decisions consider both native and web clients
+- The web terminal isn't treated as secondary
+
+### Inbox Status
+
+| Item                | Status | Notes                   |
+| ------------------- | ------ | ----------------------- |
+| Update prompt scope | ✓ Done | Session 29              |
+| Session list SSE    | ○ Todo | Would need SSE for list |
+| Man page, readme    | ○ Todo |                         |
+| Nix package/overlay | ○ Todo |                         |
+| Arch PKGBUILD       | ○ Todo |                         |
+
+---
+
+## 2026-02-07: Session 30 - Architecture Review (3-session checkpoint)
+
+Since session 30 is divisible by 3, conducting architecture review. Last review
+was session 27.
+
+### Codebase Stats
+
+| File         | Lines     | Purpose                              |
+| ------------ | --------- | ------------------------------------ |
+| http.zig     | 988       | Web server, SSE, routing             |
+| main.zig     | 982       | CLI entry point                      |
+| client.zig   | 620       | Native client, viewport rendering    |
+| auth.zig     | 556       | JWT/HMAC, OTP exchange               |
+| session.zig  | 526       | Daemon, poll loop, client mgmt       |
+| config.zig   | 454       | JSON config parsing, error handling  |
+| vthtml.zig   | 395       | VT→HTML rendering, delta computation |
+| terminal.zig | 335       | ghostty-vt wrapper                   |
+| protocol.zig | 192       | Wire format                          |
+| keybind.zig  | 174       | Input state machine                  |
+| pty.zig      | 140       | PTY operations                       |
+| signal.zig   | 48        | Signal handling                      |
+| **Total**    | **5,410** | 12 source files                      |
+
+Tests: All passing (unit + integration: 19 tests)
+
+### What's Working Well
+
+**1. Core Multiplexing Is Complete and Stable**
+
+The ghostty-vt based architecture works exactly as designed:
+
+- Session creation/attach/detach with terminal state preservation
+- Primary/viewer roles with seamless takeover
+- Viewport panning for smaller viewers
+- All protocol messages stable (9 client + 8 server)
+
+**2. Web Terminal Is Production-Ready**
+
+The delta streaming approach (session 26) was the correct architecture:
+
+- vthtml.zig provides clean VT→HTML conversion (395 lines, self-contained)
+- Cell-level diffing minimizes bandwidth
+- Each SSE client has isolated ScreenBuffer state
+- Vanilla JS frontend is minimal (182 lines)
+
+**3. Module Boundaries Are Excellent**
+
+No file exceeds 1000 lines. Dependencies flow downward:
+
+```
+main.zig → config, auth, http, session, client
+http.zig → auth, protocol, terminal, vthtml, config
+session.zig → protocol, terminal, pty, signal
+client.zig → protocol, terminal, keybind, config
+```
+
+No circular dependencies. Each module has single responsibility.
+
+**4. Config System Is Robust**
+
+Session 23 and 28 made config parsing handle edge cases correctly:
+
+- Special control keys (`^\`, `^`, `^[`, etc.) all work
+- Parse errors give helpful messages
+- Duplicate JSON keys detected
+
+### Code Duplication (Technical Debt)
+
+**1. appendJsonEscaped() - Duplicated**
+
+Identical 20-line function in both http.zig:969 and vthtml.zig:307. Both escape
+JSON strings the same way.
+
+**2. getDefaultSocketDir() and resolveSocketPath() - Duplicated**
+
+Nearly identical 10-line and 8-line functions in main.zig:744 and http.zig:949.
+Both resolve socket paths the same way.
+
+**Recommended fix:** Create `paths.zig` with shared utilities:
+
+```zig
+// paths.zig
+pub fn getDefaultSocketDir(...) ![]const u8 { ... }
+pub fn resolveSocketPath(...) ![]const u8 { ... }
+pub fn appendJsonEscaped(...) !void { ... }
+```
+
+This would remove ~60 lines of duplication and centralize path/JSON logic.
+
+### Simple vs Complected Analysis
+
+**Simple (good):**
+
+- Cell-level diffing: pure function, no side effects
+- SSE streaming: one-way data flow, no request/response coupling
+- Protocol: stateless messages, explicit types
+- Session: single poll loop, no threads
+- Config: parsed once at startup, arena-allocated
+
+**Acceptable complexity:**
+
+- http.zig at 988 lines handles routing, SSE, and HTTP parsing. Could split, but
+  the code is cohesive and readable.
+- main.zig at 982 lines has 11 CLI commands. Standard for a CLI tool.
+
+**No complected code found.** The architecture is clean.
+
+### Inbox Status
+
+| Item              | Status   | Notes                        |
+| ----------------- | -------- | ---------------------------- |
+| Session list SSE  | ○ Todo   | Would need SSE for list      |
+| Man page, readme  | ○ Todo   | README exists but needs work |
+| Nix package       | ✓ Exists | default.nix, overlay.nix     |
+| Arch PKGBUILD     | ○ Todo   |                              |
+| Extract paths.zig | ○ Todo   | Technical debt (duplication) |
+
+### Documentation Assessment
+
+**README.md (98 lines):** Functional but minimal. Missing:
+
+- Web terminal usage (`vanish serve`, `vanish otp`)
+- Configuration file format
+- OTP/JWT authentication flow
+
+**DESIGN.md (exists):** Protocol documented, architecture explained. Reasonably
+current.
+
+**Man page:** Does not exist. Should be added for proper Unix tool experience.
+
+### Recommendations for Next Sessions
+
+1. **Session 31:** Extract shared utilities to paths.zig (removes 60 lines of
+   duplication). This is technical debt that's easy to fix.
+
+2. **Session 32:** Update README.md with web terminal documentation.
+
+3. **Session 33 (next review):** Consider man page creation, PKGBUILD.
+
+### Code Health Assessment
+
+**Excellent.** The codebase has stabilized:
+
+- Session 27: 5,411 lines
+- Session 30: 5,410 lines (virtually unchanged)
+
+Growth has stopped because features are complete. The remaining work is:
+
+1. Documentation polish
+2. Packaging (PKGBUILD)
+3. Minor technical debt (duplication)
+
+The project is approaching "done" for its stated scope. The architecture is
+sound, the code is maintainable, and both native and web clients work correctly.
+
+---
+
+## 2026-02-07: Session 28 - Fix Special Leader Keys
+
+Addressed inbox item: Ctrl+Backslash and Ctrl+Space couldn't be set as leader.
+
+### The Problem
+
+1. `"^\\"` in JSON (Ctrl+Backslash = 0x1C) was being parsed correctly but
+   `writeJson()` failed to output it properly because the condition
+   `key >= 1 and key <= 26` only covers 0x01-0x1A (Ctrl+A through Ctrl+Z).
+
+2. `"^ "` (Ctrl+Space = 0x00) wasn't supported in parsing at all.
+
+### The Fix
+
+**config.zig:**
+
+- Added `writeKeyJson()` helper function that handles all special control chars:
+  - 0x00 (Ctrl+Space) → `^`
+  - 0x1B (ESC) → `^[`
+  - 0x1C (Ctrl+\) → `^\\` (escaped for JSON)
+  - 0x1D (Ctrl+]) → `^]`
+  - 0x1E (Ctrl+^) → `^^`
+  - 0x1F (Ctrl+_) → `^_`
+- Added space handling in `parseKeyString()`: `' '` → 0x00
+- Added `Ctrl+Space` verbose format support
+- Consolidated `parseLeader()` to just call `parseKeyString()`
+- Added 4 new tests for the special keys
+
+**main.zig:**
+
+- Added 0x00 case to `leaderToString()` for debug output
+
+### Supported Formats
+
+All of these now work in config.json:
+
+```json
+{ "leader": "^\\" }     // Ctrl+Backslash
+{ "leader": "^ " }      // Ctrl+Space
+{ "leader": "Ctrl+\\" } // Ctrl+Backslash (verbose)
+{ "leader": "Ctrl+Space" } // Ctrl+Space (verbose)
+```
+
+### Testing
+
+- Unit tests: All passing (added 4 new tests)
+- Integration tests: All 19 passing
+
+---
+
+## 2026-02-07: Session 27 - Architecture Review (3-session checkpoint)
+
+Since session 27 is divisible by 3, conducted architecture review. Last review
+was session 24.
+
+### Codebase Stats
+
+| File         | Lines     | Purpose                              |
+| ------------ | --------- | ------------------------------------ |
+| http.zig     | 988       | Web server, SSE, routing             |
+| main.zig     | 981       | CLI entry point                      |
+| client.zig   | 620       | Native client, viewport rendering    |
+| auth.zig     | 556       | JWT/HMAC, OTP exchange               |
+| session.zig  | 526       | Daemon, poll loop, client mgmt       |
+| config.zig   | 456       | JSON config parsing, error handling  |
+| vthtml.zig   | 395       | VT→HTML rendering, delta computation |
+| terminal.zig | 335       | ghostty-vt wrapper                   |
+| protocol.zig | 192       | Wire format                          |
+| keybind.zig  | 174       | Input state machine                  |
+| pty.zig      | 140       | PTY operations                       |
+| signal.zig   | 48        | Signal handling                      |
+| **Total**    | **5,411** | 12 source files                      |
+
+Tests: All passing (unit + integration: 19 tests)
+
+### Session 26 Delta Implementation Assessment
+
+The HTML delta streaming implemented in session 26 is working correctly:
+
+**What's Good:**
+
+1. **Clean separation**: vthtml.zig is self-contained (395 lines) with clear
+   responsibility - convert VTerminal state to HTML spans
+2. **Efficient diffing**: ScreenBuffer tracks last-sent state per SSE client,
+   only changed cells sent over the wire
+3. **Simple data flow**: VTerminal → ScreenBuffer → CellUpdate[] → JSON → SSE
+4. **Proper frontend**: 182 lines of vanilla JS, no framework dependencies
+
+**Architecture is sound**: The delta approach works at the right abstraction
+level. We diff at the cell level (after VT processing) rather than at the VT
+sequence level (which was the session 22 mistake).
+
+**Memory characteristics**:
+
+- Each SSE client: ~7.5KB for 80x24 screen buffer (24 bytes/cell × 1920 cells)
+- Acceptable for the expected use case (few concurrent web viewers)
+
+### What's Working Well
+
+**1. Module Extraction Was Correct**
+
+Session 26's extraction of vthtml.zig from http.zig was the right call:
+
+- http.zig dropped from 1,205 to 988 lines (-18%)
+- Rendering logic is now testable in isolation
+- Clear interface: `ScreenBuffer`, `CellUpdate`, `cellToHtml()`,
+  `updatesToJson()`
+
+**2. Native vs Web Client Separation**
+
+Session 24's analysis concluded the clients should stay separate. This remains
+correct:
+
+- Native: VT sequences → terminal emulator (direct, real-time)
+- Web: VT sequences → server VTerminal → HTML cells → browser DOM
+- No shared abstraction makes sense; the pipelines are fundamentally different
+
+**3. Protocol Stability**
+
+Protocol hasn't changed since session 25 (kill_session added):
+
+- 9 client messages (0x01-0x09)
+- 8 server messages (0x81-0x88)
+- Wire format is stable, easy to debug
+
+**4. Core Multiplexing Remains Solid**
+
+The original ghostty-vt based architecture continues to work well:
+
+- Session daemon is simple (single poll loop, 526 lines)
+- Terminal state preservation is correct
+- Primary/viewer roles with takeover work
+
+### What Needs Attention
+
+**1. Duplicated Code**
+
+`appendJsonEscaped()` exists in both http.zig:969 and vthtml.zig:307. These are
+nearly identical. Should extract to a shared location.
+
+Similarly, `getDefaultSocketDir()` and `resolveSocketPath()` are in both
+main.zig and http.zig with slight variations.
+
+**2. main.zig at 981 Lines**
+
+main.zig has grown from 929 (session 24) to 981 lines. It now handles 11 CLI
+commands. The command implementations share patterns (socket connection,
+handshake) but don't share code.
+
+Not critical but approaching the point where extraction would help:
+
+- `commands.zig`: Individual command implementations
+- `main.zig`: Dispatch and argument parsing only
+
+**3. Frontend Hardcoded Character Dimensions**
+
+index.html:81 has hardcoded `charWidth = 8.4, charHeight = 17`. These work for
+the specified fonts but could break with other fonts. A proper fix would measure
+actual character dimensions at runtime.
+
+**4. No HTTP Daemon Shutdown**
+
+From inbox: "kill option for sessions or the http daemon". Session 25 added
+`vanish kill <session>` for session kill. But no way to stop the HTTP daemon
+other than SIGTERM to the process.
+
+Options:
+
+- Add `/api/shutdown` endpoint (authenticated, requires admin scope)
+- PID file with `vanish serve --stop` command
+- Keep as-is (SIGTERM is fine for server processes)
+
+Recommendation: Keep as-is. Server processes are typically managed by systemd or
+similar. Adding shutdown endpoints creates more attack surface.
+
+### Simple vs Complected Analysis
+
+**Simple (good):**
+
+- Cell-level diffing: pure function, no side effects
+- SSE streaming: one-way data flow, no request/response coupling
+- ScreenBuffer: explicit state, clear update mechanism
+- Protocol: stateless messages, no session state in wire format
+
+**Potentially complected:**
+
+- http.zig still mixes HTTP parsing, routing, and session logic. Could split
+  into `http.zig` (server/parsing) and `routes.zig` (handlers). But at 988
+  lines, it's manageable.
+
+- The SSE client upgrade path (HttpClient → SseClient) requires careful index
+  tracking during the poll loop. Works but is subtle.
+
+### Inbox Status Update
+
+| Item                    | Status     | Notes                         |
+| ----------------------- | ---------- | ----------------------------- |
+| **HTML deltas**         | **✓ Done** | Session 26                    |
+| Kill sessions           | ✓ Done     | Session 25                    |
+| Config file not loading | ✓ Fixed    | Session 23                    |
+| Web character bugs      | ✓ Fixed    | Session 22→26                 |
+| Session list reactive   | ○ Todo     | Would need SSE for list       |
+| Refactor http module    | ✓ Partial  | vthtml.zig extracted          |
+| Man page, readme        | ○ Todo     |                               |
+| Nix package/overlay     | ○ Todo     |                               |
+| Arch PKGBUILD           | ○ Todo     |                               |
+| Update prompt scope     | ○ Todo     | Project scope expanded to web |
+
+### Code Health Assessment
+
+**Good.** The codebase grew from 5,167 (session 24) to 5,411 lines (4.7% in 3
+sessions). This is entirely the new vthtml.zig module, which represents a net
+improvement in organization rather than bloat.
+
+The delta streaming architecture is correct. The implementation is clean and
+testable. No major refactoring needed.
+
+### Recommendations for Next Sessions
+
+1. **Session 28**: Extract shared utilities (JSON escaping, socket path
+   resolution) to a common module to reduce duplication.
+
+2. **Session 29**: Consider updating the prompt.md to reflect the expanded scope
+   (web terminal is now a first-class feature, not just "extended
+   functionality").
+
+3. **Session 30 (next review)**: Assess whether documentation push is ready (man
+   page, updated README).
+
+---
+
+## 2026-02-07: Session 26 - HTML Delta Streaming Implementation
+
+Implemented the urgent inbox item: HTML deltas instead of VT deltas.
+
+### What Changed
+
+**New file: vthtml.zig (~395 lines)**
+
+Extracted and enhanced VT→HTML rendering into its own module:
+
+- `Cell` struct: Stores character (UTF-8) + style (bold, italic, underline,
+  inverse, fg/bg colors)
+- `ScreenBuffer`: Maintains the last-sent screen state for each SSE client
+  - `updateFromVTerm()`: Compares current VTerminal state with buffer, returns
+    only changed cells
+  - `fullScreen()`: Returns all cells (for keyframes)
+- `CellUpdate`: Position (x, y) + Cell data
+- `cellToHtml()`: Renders a single cell to
+  `<span data-x="..." data-y="...">char</span>`
+- `updatesToJson()`: Formats cell updates as JSON for SSE events
+- `color256ToHex()`: 256-color palette to CSS hex (moved from http.zig)
+
+**http.zig (reduced from 1,205 to ~990 lines)**
+
+- Import vthtml module
+- SseClient now includes `screen_buf: vthtml.ScreenBuffer`
+- Replaced `sendSseKeyframe()` with `sendSseUpdate()` that:
+  - Sends `keyframe` event for full screen updates
+  - Sends `delta` event for incremental updates
+- Removed old VT→HTML functions (vtToHtml, vtDataToHtml, parseSgr,
+  color256ToHex)
+- Session output handler now computes diffs via `screen_buf.updateFromVTerm()`
+
+**index.html (updated)**
+
+- New rendering approach: positioned `<span>` elements in a grid
+- `handleUpdate()` parses cells from JSON and positions them absolutely
+- `cellMap`: tracks DOM elements by "x,y" key for efficient updates
+- On delta: only changed cells are created/replaced
+- On keyframe: all cells updated (grid cleared if dimensions change)
+
+### How It Works
+
+1. SSE client connects, server creates VTerminal + ScreenBuffer (all cells
+   empty)
+2. Initial full screen sent as `keyframe` event
+3. On session output:
+   - VTerminal.feed() processes VT sequences
+   - ScreenBuffer.updateFromVTerm() compares each cell with buffer
+   - Only changed cells returned as CellUpdate array
+   - If any changes, send as `delta` event (or `keyframe` if resize)
+   - Buffer updated to match current state
+4. Frontend receives JSON:
+   `{"cols":80,"rows":24,"cells":["<span...>A</span>",...]}`
+5. Frontend parses position from data-x/data-y attributes, positions span
+   absolutely
+6. Existing cells replaced, new cells added
+
+### Benefits
+
+1. **Reduced bandwidth**: Only changed cells sent, not entire screen
+2. **Server-side rendering**: All VT→HTML conversion happens on server
+3. **Simpler frontend**: Just insert positioned spans, no VT parsing
+4. **Correct rendering**: No escape sequence leakage to browser
+
+### Testing
+
+- Build: ✓
+- Unit tests: ✓ (new tests in vthtml.zig)
+- Integration tests: ✓ (all 19 passing)
+
+### Codebase Stats
+
+| File       | Lines | Change     |
+| ---------- | ----- | ---------- |
+| http.zig   | 988   | -217 lines |
+| vthtml.zig | 395   | New        |
+| **Net**    |       | +178 lines |
+
+### Inbox Status Update
+
+| Item                     | Status     | Notes                   |
+| ------------------------ | ---------- | ----------------------- |
+| **HTML deltas (not VT)** | **✓ Done** | **Session 26**          |
+| Kill sessions/daemon     | ✓ Done     | Session 25              |
+| Config file not loading  | ✓ Fixed    | Session 23              |
+| Web character bugs       | ✓ Fixed    | Session 22 (now better) |
+| Session list reactive    | ○ Todo     | Would need SSE for list |
+| Refactor http module     | ✓ Partial  | vthtml.zig extracted    |
+| Man page, readme         | ○ Todo     |                         |
+| Nix package/overlay      | ○ Todo     |                         |
+| Arch PKGBUILD            | ○ Todo     |                         |
+
+### Next Priority
+
+Session 27 will be the next architecture review (divisible by 3). Should assess
+whether the delta approach is working well in practice and if any optimizations
+are needed (e.g., batching multiple rapid updates, cursor position
+optimization).
+
+---
+
+## 2026-02-07: Session 25 - Kill Command Implementation
+
+Implemented the `vanish kill <session>` command from the session 24 architecture
+review recommendations.
+
+### What Changed
+
+**Protocol (protocol.zig):**
+
+- Added `ClientMsg.kill_session` (0x09)
+
+**Session (session.zig):**
+
+- Handle `kill_session` message by setting `running = false`
+- Session exits gracefully, notifying all clients with exit message
+
+**CLI (main.zig):**
+
+- Added `vanish kill <name>` command
+- Added `cmdKill()` function (mirrors kick/clients pattern)
+- Updated help text
+
+### Usage
+
+```sh
+# Terminate a session
+vanish kill mysession
+# Output: Session terminated
+```
+
+### Bug Fix: Poll Event Order
+
+During testing, discovered that the kill command wasn't working because:
+
+1. Poll events were checked in HUP-before-IN order
+2. When a client sends data and immediately closes, both HUP and IN are set
+3. HUP was handled first, removing the client before the message was read
+
+Fixed by reordering: now IN is processed before HUP for viewer connections.
+
+### Bug Fix: Blocked Wait After Kill
+
+Another issue: after setting `running = false`, the session tried to `wait()`
+for the child process, which blocks indefinitely if the child is still running.
+
+Fixed by:
+
+1. Adding `Pty.killChild()` method that sends SIGHUP to the child
+2. Calling `killChild()` before `wait()` when exiting the event loop
+
+### Design Notes
+
+- Kill sends a message to the session daemon rather than using signals
+- This allows the session to exit gracefully (notify clients, cleanup socket)
+- Any client can request kill (no role restriction) - this matches `kick`
+  behavior
+- The session's child process receives SIGHUP before wait()
+
+### Testing
+
+- Build: ✓
+- Tests: ✓ (all 19 integration tests passing)
+
+### Inbox Status Update
+
+| Item                    | Status     | Notes                    |
+| ----------------------- | ---------- | ------------------------ |
+| Kill sessions/daemon    | **✓ Done** | Session 25               |
+| Config file not loading | ✓ Fixed    | Session 23               |
+| Web character bugs      | ✓ Fixed    | Session 22 keyframe-only |
+| Session list reactive   | ○ Todo     | Would need SSE for list  |
+| Refactor http module    | ○ Todo     | Split identified         |
+| Man page, readme        | ○ Todo     |                          |
+| Nix package/overlay     | ○ Todo     |                          |
+| Arch PKGBUILD           | ○ Todo     |                          |
+| HTML deltas (not VT)    | ○ Todo     | New inbox item           |
+
+### Next Priority
+
+Per session 24 review: refactor http.zig split (extract vthtml.zig) in
+session 26.
+
+---
+
+## 2026-02-07: Session 24 - Architecture Review (3-session checkpoint)
+
+Since session 24 is divisible by 3, conducting architecture review. Last reviews
+were sessions 18 and 21.
+
+### Codebase Stats
+
+| File         | Lines     | Purpose                             |
+| ------------ | --------- | ----------------------------------- |
+| http.zig     | 1,205     | Web server, SSE, VT→HTML            |
+| main.zig     | 929       | CLI entry point                     |
+| client.zig   | 620       | Native client, viewport rendering   |
+| auth.zig     | 556       | JWT/HMAC, OTP exchange              |
+| session.zig  | 519       | Daemon, poll loop, client mgmt      |
+| config.zig   | 456       | JSON config parsing, error handling |
+| terminal.zig | 335       | ghostty-vt wrapper                  |
+| protocol.zig | 191       | Wire format                         |
+| keybind.zig  | 174       | Input state machine                 |
+| pty.zig      | 134       | PTY operations                      |
+| signal.zig   | 48        | Signal handling                     |
+| **Total**    | **5,167** | 11 source files                     |
+
+Tests: All passing (unit + integration: 19 tests in test.sh)
+
+### What's Working Well
+
+**1. Core Functionality Is Complete and Stable**
+
+The native terminal multiplexer works exactly as designed:
+
+- Session creation/attach/detach with ghostty-vt state preservation
+- Primary/viewer roles with takeover
+- Viewport panning for smaller viewers
+- Keybinds with leader key
+- JSON/human output for scripting
+
+**2. Web Terminal Is Functional**
+
+Session 22's keyframe-only fix made the web terminal work correctly. The
+rendering approach (server-side VT→HTML) is sound.
+
+**3. Auth System Is Simple and Secure**
+
+OTP→JWT with HMAC-SHA256, scopes (full, session, daemon, temporary), HttpOnly
+cookies. The auth.zig at 556 lines is self-contained.
+
+**4. Config Loading Is Robust (Session 23)**
+
+The config system now handles edge cases: special control keys (`^\`, `^[`,
+etc.), parse errors with helpful messages, duplicate JSON keys.
+
+### What Needs Work
+
+**1. http.zig Is Still Too Large (1,205 lines)**
+
+Session 21 identified this but it wasn't addressed. The file contains:
+
+- TCP socket setup (~50 lines)
+- HTTP parsing (~100 lines)
+- Routing (~200 lines)
+- SSE streaming (~100 lines)
+- VT→HTML conversion (~200 lines)
+- SGR→CSS parsing (~150 lines)
+- 256-color tables (~50 lines)
+- Path resolution helpers (duplicated from main.zig)
+
+**Recommended split:**
+
+- `http.zig` (~400 lines): Server, routing, clients
+- `sse.zig` (~150 lines): SSE-specific logic
+- `vthtml.zig` (~300 lines): VT→HTML conversion
+
+This isn't critical but would improve maintainability.
+
+**2. main.zig Has Also Grown (929 lines)**
+
+main.zig grew from 905 (session 21) to 929 lines. It now handles 10 CLI
+commands. The commands share some logic (socket path resolution, connection
+setup) but don't share code.
+
+**Not urgent** - CLI entry points are naturally large, and the code is readable.
+
+**3. Duplicated Path Resolution**
+
+`getDefaultSocketDir()` and `resolveSocketPath()` are duplicated between
+main.zig and http.zig. Should extract to a shared location (paths.zig or
+config.zig).
+
+**4. No Kill Command**
+
+From the inbox: "There isn't a 'kill' option for sessions or the http daemon."
+This requires:
+
+- New protocol message for session kill
+- CLI command: `vanish kill <session>`
+- Signal handling in session daemon for graceful shutdown
+- For HTTP daemon: either send SIGTERM to PID file or add `/api/shutdown`
+
+**5. Session List Not Reactive in Web**
+
+The web UI polls for the session list. Real-time updates would require SSE for
+the session list endpoint, not just individual sessions.
+
+### Simple vs Complected Analysis
+
+**Simple (good):**
+
+- Protocol: one-way messages, no acks, explicit types (stable at 8+8)
+- Session: single poll() loop, no threads
+- Auth: stateless JWT validation
+- Config: JSON parsed once at startup, arena-allocated
+- Keyframe rendering: full screen state every update, no partial diffs
+
+**Complected (needs attention):**
+
+- VT→HTML conversion in http.zig: the `vtDataToHtml()` function is 88 lines of
+  inline parsing. It works, but it's doing too much in one place (parsing VT
+  sequences, emitting HTML, handling SGR parameters, color lookups).
+
+- Duplicated helpers: path resolution, JSON escaping appear in multiple files.
+
+### Comparison: Native vs Web Client
+
+Per inbox question: "how much is actually different between the two clients?"
+
+| Aspect     | Native (client.zig)      | Web (http.zig SSE)    |
+| ---------- | ------------------------ | --------------------- |
+| Connection | Unix socket              | HTTP/SSE over TCP     |
+| Rendering  | VT sequences to terminal | VT→HTML to browser    |
+| State      | Local VTerminal + offset | Server-side VTerminal |
+| Input      | Raw key events           | JSON input via POST   |
+| Auth       | Implicit (socket perms)  | JWT tokens            |
+
+**Fundamental differences:** Yes. The rendering pipelines are completely
+different. Native sends VT to the terminal emulator; web converts VT to HTML
+spans with inline CSS.
+
+**Shared abstractions:**
+
+- Protocol messages (same wire format)
+- VTerminal (ghostty-vt wrapper)
+- Session management (session.zig serves both)
+
+**Abstractions that might help:**
+
+- A "Renderer" interface that could be VT or HTML wouldn't gain much since the
+  implementations share no code.
+- The VT→HTML could reuse the terminal.zig SGR handling, but the output formats
+  are too different.
+
+**Verdict:** The separation is correct. Don't try to unify them.
+
+### Inbox Status
+
+| Item                      | Status     | Notes                     |
+| ------------------------- | ---------- | ------------------------- |
+| Config file not loading   | ✓ Fixed    | Session 23                |
+| Web character bugs        | ✓ Fixed    | Session 22 keyframe-only  |
+| Session list reactive     | ○ Todo     | Would need SSE for list   |
+| Refactor http module      | ○ Todo     | Split identified          |
+| Kill sessions/daemon      | ○ Todo     | Protocol + CLI            |
+| Native/web client compare | ✓ Analyzed | Session 24 (this session) |
+| Man page, readme          | ○ Todo     |                           |
+| Nix package/overlay       | ○ Todo     |                           |
+| Arch PKGBUILD             | ○ Todo     |                           |
+
+### Recommendations
+
+1. **Next session (25):** Implement `vanish kill <session>` command. This is
+   genuinely missing functionality - users can create sessions but have no way
+   to terminate them except by exiting the child process.
+
+2. **Session 26:** Refactor http.zig split (vthtml.zig extraction).
+
+3. **Session 27 (next review):** Check if the codebase is ready for
+   documentation push (man page, readme update).
+
+### Code Health Assessment
+
+**Good.** The codebase grew from 5,078 (session 21) to 5,167 lines (1.8% growth
+in 3 sessions). This is mostly the config error handling improvements (session
+23).
+
+The architecture is stable. No new modules were needed. The main concern remains
+http.zig size, but it's not blocking any features.
+
+The project is approaching feature-complete for the core use case. Remaining
+work is mostly polish (kill command, documentation, packaging).
+
+---
+
+## 2026-02-07: Session 23 - Fix Config File Loading Bug
+
+Addressed the high-priority inbox item about config file not loading.
+
+### The Problem
+
+User reported config file wasn't loading despite being in the default location
+(`~/.config/vanish/config.json`). Investigation found two issues:
+
+1. **Non-letter control keys not supported**: The user's config had
+   `"leader":
+   "^\\"` (Ctrl+backslash), but `parseLeader()` only accepted
+   letters a-z after `^`. Control characters like `^\` (0x1C), `^[` (ESC), `^]`,
+   `^^`, `^_` were silently rejected.
+
+2. **Silent parse failures**: When the config file existed but failed to parse,
+   no warning was shown. The code just used defaults without telling the user.
+
+3. **Duplicate key in user's config**: The user's `binds` object had `"d"` twice
+   (for "detach" and "scroll_page_down"). JSON doesn't allow duplicate keys, and
+   Zig's JSON parser returns `error.DuplicateField`.
+
+### The Fix
+
+**config.zig:**
+
+- Extended `parseLeader()` and `parseKeyString()` to handle special control
+  characters: `^[` (0x1B), `^\` (0x1C), `^]` (0x1D), `^^` (0x1E), `^_` (0x1F)
+- Added `LoadError` enum with specific error types: `not_found`, `read_failed`,
+  `invalid_json`, `duplicate_key`
+- Changed `ParseResult` from `?Config` to tagged union with error details
+- Added `error_type` field to `LoadResult` for callers to inspect
+- Fixed memory leak on parse failure (arena cleanup)
+
+**main.zig:**
+
+- Added helpful error messages that explain what went wrong:
+  - `"duplicate key in JSON (check for repeated keys in binds)"`
+  - `"invalid JSON syntax"`
+  - `"could not read file"`
+- Added `leaderToString()` helper for debug output of special control keys
+
+**User's config.json:**
+
+- Fixed the duplicate `"d"` key issue by changing the second one to `"^D"`
+
+### Testing
+
+- Build: ✓
+- Tests: ✓ (all passing, added 2 new tests for `^\` parsing)
+- Manual test: Config now loads correctly with `^\` as leader
+
+### Example Error Message
+
+Before:
+
+```
+$ vanish list
+foo
+```
+
+(silent failure, used defaults)
+
+After:
+
+```
+$ vanish list
+Warning: /home/psyc/.config/vanish/config.json: duplicate key in JSON (check for repeated keys in binds), using defaults
+foo
+```
+
+### Inbox Status
+
+| Item                    | Status      | Notes                      |
+| ----------------------- | ----------- | -------------------------- |
+| Config file not loading | **✓ Fixed** | Session 23                 |
+| Web character bugs      | ✓ Fixed     | Keyframe-only (session 22) |
+| Session list reactive   | ○ Todo      |                            |
+| Refactor http module    | ○ Todo      | Session 21 split strategy  |
+| Kill sessions/daemon    | ○ Todo      |                            |
+| Man page, readme        | ○ Todo      |                            |
+| Nix package/overlay     | ○ Todo      |                            |
+| Arch PKGBUILD           | ○ Todo      |                            |
+
+---
+
+## 2026-02-07: Session 22 - Fix Web Terminal Rendering (Keyframe-Only)
+
+Addressed the inbox item about character bugs in the web terminal.
+
+### The Problem
+
+The delta streaming approach tried to convert raw VT sequences to HTML via
+`sendSseDelta()` → `vtDataToHtml()`. This was fundamentally flawed:
+
+1. Raw VT sequences contain cursor movements, clear screen, etc.
+2. These can't be reliably converted to HTML without tracking full terminal
+   state
+3. The browser was receiving partial/broken sequences and showing garbage
+
+### The Fix
+
+Switched to **keyframe-only** rendering:
+
+1. SSE clients now receive a full HTML keyframe on **every output event**
+2. The keyframe is rendered from the VTerminal's internal state (via
+   `dumpScreen()`)
+3. `dumpScreen()` returns clean VT sequences (just SGR for colors/styles)
+4. These can be reliably converted to HTML spans
+
+### Changes Made
+
+**http.zig:**
+
+- `handleSseSessionOutput()` now calls `sendSseKeyframe()` instead of
+  `sendSseDelta()`
+- Removed `sendSseDelta()` function (no longer needed)
+
+**index.html:**
+
+- Removed `delta` event handler (no longer sent)
+- Keyframe handler now scrolls to bottom after update
+
+### Why This Is Better
+
+1. **Correct rendering**: Browser always sees complete screen state
+2. **Simpler**: No need to parse raw VT sequences with cursor movements
+3. **Robust**: Handles clear screen, cursor repositioning, etc. automatically
+
+### Trade-off
+
+More bandwidth per update (full screen vs delta). But:
+
+- Terminal screens are small (~80x24 = ~2KB typical)
+- The 1s poll interval already limited update frequency
+- Correctness > bandwidth optimization for now
+
+### Testing
+
+- Build: ✓
+- Tests: ✓ (all passing)
+
+### Inbox Status
+
+| Item                    | Status      | Notes                                |
+| ----------------------- | ----------- | ------------------------------------ |
+| Web character bugs      | **✓ Fixed** | Keyframe-only rendering              |
+| Session list reactive   | ○ Todo      |                                      |
+| Refactor http module    | ○ Todo      | Session 21 identified split strategy |
+| Config file not loading | ○ Todo      | User-reported bug                    |
+| Kill sessions/daemon    | ○ Todo      |                                      |
+| Man page, readme        | ○ Todo      |                                      |
+| Nix package/overlay     | ○ Todo      |                                      |
+| Arch PKGBUILD           | ○ Todo      |                                      |
+
+---
+
+## 2026-02-07: Session 21 - Architecture Review (3-session checkpoint)
+
+Since session 21 is divisible by 3, conducting architecture review. Last reviews
+were sessions 12 and 15.
+
+### Codebase Stats
+
+| File         | Lines     | Purpose                           |
+| ------------ | --------- | --------------------------------- |
+| http.zig     | 1,218     | Web server, SSE, VT→HTML          |
+| main.zig     | 905       | CLI entry point                   |
+| client.zig   | 620       | Native client, viewport rendering |
+| auth.zig     | 556       | JWT/HMAC, OTP exchange            |
+| session.zig  | 519       | Daemon, poll loop, client mgmt    |
+| config.zig   | 378       | JSON config parsing               |
+| terminal.zig | 335       | ghostty-vt wrapper                |
+| protocol.zig | 191       | Wire format                       |
+| keybind.zig  | 174       | Input state machine               |
+| pty.zig      | 134       | PTY operations                    |
+| signal.zig   | 48        | Signal handling                   |
+| **Total**    | **5,078** | 11 source files                   |
+
+Tests: All passing (unit + integration)
+
+### What's Working Well
+
+**1. Core Multiplexing Is Solid**
+
+The original vision - ghostty-vt based terminal state preservation with
+primary/viewer roles - works exactly as designed. The protocol is stable at 8+8
+message types. Native clients work reliably.
+
+**2. Module Boundaries Remain Clean**
+
+Despite adding 3 new modules (auth, config, http) since session 15, there are no
+circular dependencies. Each module has clear responsibility:
+
+- Protocol: wire format only (191 lines, unchanged)
+- Terminal: VT emulation only (335 lines, stable)
+- Session: server-side orchestration (519 lines)
+- Client: user-side interaction (620 lines)
+
+**3. Auth Design Is Correct**
+
+The OTP→JWT flow with HMAC-SHA256 is simple and secure. Scopes (full, session,
+daemon, temporary) give appropriate access control. HttpOnly cookies prevent XSS
+token theft.
+
+### What Needs Work
+
+**1. http.zig Is Too Large (1,218 lines)**
+
+This file has grown to contain:
+
+- TCP socket setup
+- HTTP parsing
+- Routing
+- SSE streaming
+- VT→HTML conversion
+- SGR→CSS parsing
+- 256-color tables
+
+This is too much. Should split:
+
+- `http.zig` (~400 lines): Server, routing, clients
+- `sse.zig` (~200 lines): SSE-specific logic
+- `vthtml.zig` (~300 lines): VT→HTML conversion (vtDataToHtml, parseSgr, etc.)
+
+**2. main.zig Is Also Large (905 lines)**
+
+CLI parsing + 10 commands is a lot for one file. Consider:
+
+- `cli.zig`: Argument parsing, help text
+- `main.zig`: Command dispatch only
+
+However, this is lower priority than http.zig.
+
+**3. Web Terminal Rendering Issues (from Session 20)**
+
+Two known issues:
+
+a) **Escape sequences leaking through**: vtDataToHtml filters SGR and OSC, but
+some CSI sequences (cursor movement, etc.) still get through. The delta
+streaming approach (sending raw VT sequences to browser) is fundamentally flawed
+for proper rendering.
+
+**Better approach**: Instead of streaming VT deltas, always send keyframes
+(rendered HTML of full screen state). The polling interval is already 1s, and
+SSE keyframes every 30s. Could:
+
+- Send keyframe on every output event, or
+- Send diffs at the HTML level (not VT level)
+
+b) **Takeover semantics for SSE clients**: The `/takeover` endpoint works
+correctly - it sends a takeover message to the session daemon. The old primary
+IS demoted to viewer. But the issue noted in session 20 may be about the UX -
+the SSE client that called takeover isn't the one that becomes primary, an
+ephemeral HTTP connection does.
+
+**Fix**: SSE clients should send takeover through their existing session
+connection, not through a separate HTTP request.
+
+**4. Duplicated Socket Path Resolution**
+
+`getDefaultSocketDir()` and `resolveSocketPath()` exist in both main.zig and
+http.zig. Should extract to a shared location (config.zig or new paths.zig).
+
+### Simple vs Complected Analysis
+
+**Simple (good):**
+
+- Protocol: one-way messages, no acks, explicit types
+- Session: single poll() loop, no threads
+- Auth: stateless JWT validation, OTPs in memory
+- Config: JSON parsed once at startup
+
+**Complected (needs attention):**
+
+- vtDataToHtml: Trying to do too much (parse VT + emit HTML + handle styles).
+  The streaming delta approach couples VT parsing with HTML generation in a way
+  that can't handle cursor movement properly.
+
+- HTTP client lifecycle: Regular clients vs SSE clients handled differently. SSE
+  clients are "upgraded" from the regular list. This works but is tricky.
+
+### Recommendations
+
+1. **Immediate (Session 22)**: Split vtDataToHtml into separate file, fix
+   rendering by using keyframes instead of deltas
+
+2. **Soon**: Refactor http.zig into smaller modules
+
+3. **Later**: Consider main.zig split, path resolution dedup
+
+### Inbox Status - All Original Items Complete
+
+All original inbox items are done. Current work is extending functionality (web
+terminal) beyond the original spec.
+
+| Original Item           | Status  | Session |
+| ----------------------- | ------- | ------- |
+| JSON config             | ✓ Done  | 16      |
+| Session takeover        | ✓ Done  | 8       |
+| Viewport panning        | ✓ Done  | 10-11   |
+| List/disconnect clients | ✓ Done  | 13      |
+| Background sessions     | ✓ Works | Default |
+| XDG_RUNTIME_DIR         | ✓ Works | Default |
+| --json flag             | ✓ Done  | 5, 13   |
+
+### New Work (Beyond Original Spec)
+
+| Feature         | Status    | Notes                        |
+| --------------- | --------- | ---------------------------- |
+| HTTP server     | ✓ Works   | Sessions 17-20               |
+| JWT/OTP auth    | ✓ Works   | Session 17                   |
+| Web terminal UI | ◐ Partial | Rendering issues remain      |
+| Web takeover    | ◐ Partial | Works but UX could be better |
+
+### Code Health Assessment
+
+**Mixed.** The core (session, client, protocol) is excellent - simple, tested,
+stable. The web layer (http, auth) works but has accumulated complexity.
+http.zig at 1,218 lines is the main concern.
+
+The native CLI experience is complete and polished. The web experience is
+functional but needs refinement.
+
+Next session should focus on fixing the web terminal rendering by switching from
+delta streaming to keyframe-only approach.
+
+---
+
+## 2026-02-07: Session 20 - Web Terminal (In Progress)
+
+Added HTTP server for web-based terminal access (`vanish serve`).
+
+### Completed
+
+- Rewrote index.html from 456 lines + Datastar dependency to 105 lines vanilla
+  JS
+- Added escape sequence filtering for OSC sequences in vtDataToHtml
+- Added `/api/sessions/{name}/takeover` endpoint
+
+### Issues Remaining
+
+1. **Terminal rendering still imperfect** - Some escape sequences still leaking
+   through. The vtDataToHtml function needs more work:
+   - Shell integration sequences (kitty-shell-cwd, etc.)
+   - Possibly other CSI sequences not being filtered
+   - Characters echoing strangely (doubled input visible in screenshot)
+
+2. **Takeover kicks instead of demoting** - Current takeover implementation
+   disconnects the other session entirely instead of demoting it to viewer mode.
+   Need to:
+   - Keep the existing client connected
+   - Send role_change message to demote to viewer
+   - Match the native client takeover behavior
+
+### Files Changed
+
+- `src/http.zig`: Added OSC filtering, takeover endpoint
+- `src/static/index.html`: Complete rewrite to vanilla JS
+
+---
+
 ## 2026-02-07: Session 19 - UX Improvements and Clear Screen Handling
 
 Addressed 5 user requests from the inbox.
@@ -116,6 +1427,7 @@ Addressed 5 user requests from the inbox.
 **1. Simplified Help Text (main.zig)**
 
 Removed the confusing `<socket|name>` notation from usage. Now just shows:
+
 ```
 vanish new [--detach] <name> <command> [args...]
 vanish attach [--primary] <name>
@@ -141,8 +1453,8 @@ not sent to new clients. This prevents terminal divergence when users run
 
 **4. Default to Viewer Mode (main.zig)**
 
-`vanish attach` now defaults to viewer mode. Added `--primary` flag to take
-over as primary. This prevents accidentally hijacking someone else's session.
+`vanish attach` now defaults to viewer mode. Added `--primary` flag to take over
+as primary. This prevents accidentally hijacking someone else's session.
 
 - `vanish attach mysession` → attach as viewer
 - `vanish attach --primary mysession` → attach as primary
@@ -150,8 +1462,8 @@ over as primary. This prevents accidentally hijacking someone else's session.
 **5. Color Difference Explanation**
 
 User noticed colors looked "great" but different in zsh. Investigation found
-their ~/.config/zsh/.zshrc sources vte.sh which sends OSC 4 sequences to set
-a custom color palette. This is correct behavior - the attached terminal receives
+their ~/.config/zsh/.zshrc sources vte.sh which sends OSC 4 sequences to set a
+custom color palette. This is correct behavior - the attached terminal receives
 these palette-setting sequences and adopts the colors.
 
 ### Testing
@@ -188,6 +1500,7 @@ The panic handler then tries to access the parent process's memory via
 panic.
 
 The specific sequence that triggers the issue:
+
 ```
 \x1b[0m\x1b[27m\x1b[24m\x1b[J\x1b[34m~proj/vanish
 ```
@@ -212,9 +1525,9 @@ works correctly.
 ### Answers to User Questions
 
 1. **"Shouldn't I not be able to Ctrl+Z it?"** - During the brief moment while
-   the parent process waits for the daemon to signal readiness, the parent is
-   in the foreground and can receive SIGTSTP (Ctrl+Z). This is expected. The
-   issue was that the daemon was crashing, causing the parent to wait forever.
+   the parent process waits for the daemon to signal readiness, the parent is in
+   the foreground and can receive SIGTSTP (Ctrl+Z). This is expected. The issue
+   was that the daemon was crashing, causing the parent to wait forever.
 
 2. **"Why is it hanging?"** - The daemon was panicking with "reached unreachable
    code" when processing zsh's escape sequences. This is a bug in ghostty-vt
@@ -230,8 +1543,8 @@ works correctly.
 ### Technical Details
 
 The mremap failures (ENOMEM) observed in strace were red herrings - the page
-allocator correctly fell back to mmap. The actual issue was in ghostty-vt's
-VT sequence processing, not memory allocation.
+allocator correctly fell back to mmap. The actual issue was in ghostty-vt's VT
+sequence processing, not memory allocation.
 
 ---
 
