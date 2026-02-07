@@ -77,6 +77,7 @@
 
     <script>
         let sse = null;
+        let isPrimary = false;
         let termCols = 80, termRows = 24;
         const charWidth = 8.4, charHeight = 17;  // Approximate monospace char size
         const cellMap = new Map();  // "x,y" -> DOM element
@@ -97,6 +98,7 @@
             document.getElementById('sessions').classList.add('hidden');
             document.getElementById('terminal').classList.remove('hidden');
             document.getElementById('session-name').textContent = name;
+            isPrimary = false;
 
             const term = document.getElementById('term');
             const grid = document.getElementById('term-grid');
@@ -166,15 +168,17 @@
 
         function takeover() {
             const name = document.getElementById('session-name').textContent;
-            fetch(`/api/sessions/${encodeURIComponent(name)}/takeover`, { method: 'POST' });
+            fetch(`/api/sessions/${encodeURIComponent(name)}/takeover`, { method: 'POST' })
+                .then(r => { if (r.ok) isPrimary = true; });
         }
 
         function handleKey(e, session) {
             e.preventDefault();
             const key = e.key, ctrl = e.ctrlKey;
             let data = key.length === 1 ? (ctrl ? String.fromCharCode(key.toLowerCase().charCodeAt(0) - 96) : key) :
-                { Enter: '\r', Backspace: '\x7f', Tab: '\t', Escape: '\x1b', ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D', Home: '\x1b[H', End: '\x1b[F', Delete: '\x1b[3~' }[key];
-            if (data) fetch(`/api/sessions/${encodeURIComponent(session)}/input`, { method: 'POST', body: data });
+                { Enter: '\r', Backspace: '\x7f', Tab: '\t', Escape: '\x1b', ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D', Home: '\x1b[H', End: '\x1b[F', Delete: '\x1b[3~', PageUp: '\x1b[5~', PageDown: '\x1b[6~', Insert: '\x1b[2~' }[key];
+            if (data) fetch(`/api/sessions/${encodeURIComponent(session)}/input`, { method: 'POST', body: data })
+                .then(r => { if (r.status === 409 && !isPrimary) takeover(); });
         }
     </script>
 </body>

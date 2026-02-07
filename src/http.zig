@@ -42,6 +42,7 @@ const SseClient = struct {
     last_update: i64 = 0,
     cols: u16 = 120,
     rows: u16 = 40,
+    is_primary: bool = false,
 
     fn deinit(self: *SseClient, alloc: std.mem.Allocator) void {
         posix.close(self.http_fd);
@@ -470,7 +471,6 @@ fn handleInput(self: *HttpServer, client: *HttpClient, headers: []const u8, body
     };
     defer if (payload.session) |s| self.alloc.free(s);
 
-    // Check session scope
     if (payload.scope == .session) {
         if (payload.session) |allowed| {
             if (!std.mem.eql(u8, session_name, allowed)) {
@@ -480,66 +480,19 @@ fn handleInput(self: *HttpServer, client: *HttpClient, headers: []const u8, body
         }
     }
 
-    // Connect to session
-    const socket_path = try paths.resolveSocketPath(self.alloc, session_name, self.cfg);
-    defer self.alloc.free(socket_path);
-
-    const sock = connectToSession(socket_path) catch {
-        try self.sendError(client, 404, "Session not found");
-        return;
-    };
-    defer posix.close(sock);
-
-    // Send hello as primary
-    var hello = protocol.Hello{ .role = .primary, .cols = 120, .rows = 40 };
-    hello.setTerm("xterm-256color");
-    protocol.writeStruct(sock, @intFromEnum(protocol.ClientMsg.hello), hello) catch {
-        try self.sendError(client, 500, "Protocol error");
-        return;
-    };
-
-    // Read welcome
-    const welcome_hdr = protocol.readHeader(sock) catch {
-        try self.sendError(client, 500, "Protocol error");
-        return;
-    };
-
-    if (welcome_hdr.msg_type == @intFromEnum(protocol.ServerMsg.denied)) {
-        try self.sendError(client, 409, "Session busy");
-        return;
-    }
-
-    var welcome_buf: [@sizeOf(protocol.Welcome)]u8 = undefined;
-    protocol.readExact(sock, &welcome_buf) catch {
-        try self.sendError(client, 500, "Protocol error");
-        return;
-    };
-
-    // Skip full state
-    const state_hdr = protocol.readHeader(sock) catch {
-        try self.sendError(client, 500, "Protocol error");
-        return;
-    };
-    if (state_hdr.msg_type == @intFromEnum(protocol.ServerMsg.full)) {
-        var remaining = state_hdr.len;
-        var skip_buf: [4096]u8 = undefined;
-        while (remaining > 0) {
-            const chunk: usize = @min(remaining, skip_buf.len);
-            protocol.readExact(sock, skip_buf[0..chunk]) catch break;
-            remaining -= @intCast(chunk);
+    // Find SSE client for this session and send input through its connection
+    for (self.sse_clients.items) |*sse| {
+        if (std.mem.eql(u8, sse.session_name, session_name) and sse.is_primary) {
+            protocol.writeMsg(sse.session_fd, @intFromEnum(protocol.ClientMsg.input), body) catch {
+                try self.sendError(client, 500, "Failed to send input");
+                return;
+            };
+            try self.sendJson(client, "{\"ok\":true}");
+            return;
         }
     }
 
-    // Send input
-    protocol.writeMsg(sock, @intFromEnum(protocol.ClientMsg.input), body) catch {
-        try self.sendError(client, 500, "Failed to send input");
-        return;
-    };
-
-    // Send detach
-    protocol.writeMsg(sock, @intFromEnum(protocol.ClientMsg.detach), &.{}) catch {};
-
-    try self.sendJson(client, "{\"ok\":true}");
+    try self.sendError(client, 409, "No active primary connection (use takeover first)");
 }
 
 fn handleResize(self: *HttpServer, client: *HttpClient, headers: []const u8, body: []const u8, session_name: []const u8) !void {
@@ -564,7 +517,6 @@ fn handleTakeover(self: *HttpServer, client: *HttpClient, headers: []const u8, s
     };
     defer if (payload.session) |s| self.alloc.free(s);
 
-    // Check session scope
     if (payload.scope == .session) {
         if (payload.session) |allowed| {
             if (!std.mem.eql(u8, session_name, allowed)) {
@@ -574,67 +526,20 @@ fn handleTakeover(self: *HttpServer, client: *HttpClient, headers: []const u8, s
         }
     }
 
-    // Connect to session as viewer, then send takeover
-    const socket_path = try paths.resolveSocketPath(self.alloc, session_name, self.cfg);
-    defer self.alloc.free(socket_path);
-
-    const sock = connectToSession(socket_path) catch {
-        try self.sendError(client, 404, "Session not found");
-        return;
-    };
-    defer posix.close(sock);
-
-    // Send hello as viewer
-    var hello = protocol.Hello{ .role = .viewer, .cols = 120, .rows = 40 };
-    hello.setTerm("xterm-256color");
-    protocol.writeStruct(sock, @intFromEnum(protocol.ClientMsg.hello), hello) catch {
-        try self.sendError(client, 500, "Protocol error");
-        return;
-    };
-
-    // Read welcome
-    const welcome_hdr = protocol.readHeader(sock) catch {
-        try self.sendError(client, 500, "Protocol error");
-        return;
-    };
-
-    if (welcome_hdr.msg_type == @intFromEnum(protocol.ServerMsg.denied)) {
-        try self.sendError(client, 409, "Connection denied");
-        return;
-    }
-
-    // Skip welcome payload
-    var welcome_buf: [@sizeOf(protocol.Welcome)]u8 = undefined;
-    protocol.readExact(sock, &welcome_buf) catch {
-        try self.sendError(client, 500, "Protocol error");
-        return;
-    };
-
-    // Skip full state
-    const state_hdr = protocol.readHeader(sock) catch {
-        try self.sendError(client, 500, "Protocol error");
-        return;
-    };
-    if (state_hdr.msg_type == @intFromEnum(protocol.ServerMsg.full)) {
-        var remaining = state_hdr.len;
-        var skip_buf: [4096]u8 = undefined;
-        while (remaining > 0) {
-            const chunk: usize = @min(remaining, skip_buf.len);
-            protocol.readExact(sock, skip_buf[0..chunk]) catch break;
-            remaining -= @intCast(chunk);
+    // Find SSE client for this session and send takeover through its connection
+    for (self.sse_clients.items) |*sse| {
+        if (std.mem.eql(u8, sse.session_name, session_name)) {
+            protocol.writeMsg(sse.session_fd, @intFromEnum(protocol.ClientMsg.takeover), &.{}) catch {
+                try self.sendError(client, 500, "Failed to send takeover");
+                return;
+            };
+            sse.is_primary = true;
+            try self.sendJson(client, "{\"ok\":true}");
+            return;
         }
     }
 
-    // Send takeover request
-    protocol.writeMsg(sock, @intFromEnum(protocol.ClientMsg.takeover), &.{}) catch {
-        try self.sendError(client, 500, "Failed to send takeover");
-        return;
-    };
-
-    // Detach
-    protocol.writeMsg(sock, @intFromEnum(protocol.ClientMsg.detach), &.{}) catch {};
-
-    try self.sendJson(client, "{\"ok\":true}");
+    try self.sendError(client, 404, "No active stream for session");
 }
 
 fn handleSseStream(self: *HttpServer, client_idx: usize, headers: []const u8, session_name: []const u8) !void {
@@ -777,6 +682,14 @@ fn handleSseSessionOutput(self: *HttpServer, sse_idx: usize) !void {
             const event = "event: exit\ndata: {}\n\n";
             _ = posix.write(sse.http_fd, event) catch {};
             return error.SessionEnded;
+        },
+        .role_change => {
+            if (header.len == @sizeOf(protocol.RoleChange)) {
+                var rc_buf: [@sizeOf(protocol.RoleChange)]u8 = undefined;
+                try protocol.readExact(sse.session_fd, &rc_buf);
+                const rc = std.mem.bytesToValue(protocol.RoleChange, &rc_buf);
+                sse.is_primary = (rc.new_role == .primary);
+            }
         },
         else => {
             // Skip unknown messages
