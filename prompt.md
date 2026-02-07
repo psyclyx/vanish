@@ -64,7 +64,7 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
-## 2026-02-07: Session 3 - Status Bar, Scroll Mode, Session Signals
+## 2026-02-07: Session 3 - UX Polish and Features
 
 ### Completed
 - [x] Status bar (src/client.zig)
@@ -83,25 +83,44 @@ lightweight libghostty terminal session multiplexer
   - Session now handles SIGTERM/SIGINT via sig.setup()
   - Graceful shutdown with client notification
   - Socket cleanup on exit
-
-### Architecture Decisions
-- Status bar is purely client-side rendering
-- Scroll mode dumps entire screen content (using ghostty-vt's screen points)
-- User exits scroll mode with any key input
-
 - [x] Viewer mode (src/client.zig, src/main.zig)
   - --viewer flag for attach command
   - Viewers don't send input (blocked client-side)
   - Status bar shows "viewer" role
+- [x] Automatic socket path resolution (src/main.zig)
+  - Session names without '/' stored in $XDG_RUNTIME_DIR/vanish/
+  - Simpler usage: `vanish new myshell -- bash`
+  - List command shows session names only in default dir
+
+### Current Feature Set (MVP Complete)
+- Create sessions: `vanish new <name> -- <command>`
+- Attach to sessions: `vanish attach <name>`
+- Viewer mode: `vanish attach --viewer <name>`
+- List sessions: `vanish list`
+- Keybindings (Ctrl+A as leader):
+  - d: detach
+  - s: toggle status bar
+  - k/j: scroll up/down (enters scroll mode)
+  - ?: show help
+  - Esc: cancel leader mode
+- Terminal state preservation via ghostty-vt
+- Graceful signal handling
+
+### Architecture Decisions
+- Status bar is purely client-side rendering
+- Scroll mode dumps entire screen content
+- Session names use $XDG_RUNTIME_DIR/vanish/ by default
 
 ### Next Steps
 1. **Configuration file** - TOML or similar for keybinds, leader key
 2. **Tests** - More comprehensive unit tests
 3. **Documentation** - README, man page
+4. **Send command** - `vanish send <name> <keys>` for scripting
 
 ### Open Questions Resolved
 - Status bar content: session name + role (simple, useful)
 - Scroll mode UX: any key exits, visual indicator shown
+- Socket paths: names without / use default dir
 
 ---
 
