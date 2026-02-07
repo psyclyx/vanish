@@ -1,11 +1,17 @@
 const std = @import("std");
 const keybind = @import("keybind.zig");
 
+pub const ServeConfig = struct {
+    bind: ?[]const u8 = null, // null means 127.0.0.1 + ::1
+    port: u16 = 7890,
+};
+
 pub const Config = struct {
     leader: u8 = 0x01, // Ctrl+A
     leader_ctrl: bool = true,
     socket_dir: ?[]const u8 = null,
     binds: []const keybind.Bind = &keybind.default_binds,
+    serve: ServeConfig = .{},
 
     // Owned memory from parsing
     _arena: ?std.heap.ArenaAllocator = null,
@@ -80,6 +86,24 @@ fn parse(alloc: std.mem.Allocator, content: []const u8) !Config {
         if (binds_val == .object) {
             if (parseBinds(arena_alloc, binds_val.object)) |binds| {
                 config.binds = binds;
+            }
+        }
+    }
+
+    if (root.object.get("serve")) |serve_val| {
+        if (serve_val == .object) {
+            if (serve_val.object.get("bind")) |bind_val| {
+                if (bind_val == .string) {
+                    config.serve.bind = try arena_alloc.dupe(u8, bind_val.string);
+                }
+            }
+            if (serve_val.object.get("port")) |port_val| {
+                if (port_val == .integer) {
+                    const p = port_val.integer;
+                    if (p > 0 and p <= 65535) {
+                        config.serve.port = @intCast(p);
+                    }
+                }
             }
         }
     }

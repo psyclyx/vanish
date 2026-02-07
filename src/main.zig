@@ -6,6 +6,8 @@ const Session = @import("session.zig");
 const protocol = @import("protocol.zig");
 const VTerminal = @import("terminal.zig");
 const config = @import("config.zig");
+const Auth = @import("auth.zig");
+const HttpServer = @import("http.zig");
 
 const STDERR_FILENO = posix.STDERR_FILENO;
 const STDOUT_FILENO = posix.STDOUT_FILENO;
@@ -20,6 +22,9 @@ const usage =
     \\  vanish list [--json]
     \\  vanish clients [--json] <name>
     \\  vanish kick <name> <client-id>
+    \\  vanish serve [options]
+    \\  vanish otp [options]
+    \\  vanish revoke [options]
     \\
     \\Commands:
     \\  new      Create session and attach (--detach to run in background)
@@ -28,6 +33,27 @@ const usage =
     \\  list     List sessions
     \\  clients  List connected clients
     \\  kick     Disconnect a client by ID
+    \\  serve    Start HTTP server for web-based terminal access
+    \\  otp      Generate one-time password for web authentication
+    \\  revoke   Revoke authentication tokens
+    \\
+    \\Serve options:
+    \\  -b, --bind <addr>    Bind address (default: 127.0.0.1 and ::1)
+    \\  -p, --port <port>    Port (default: 7890)
+    \\  -d, --daemonize      Run in background
+    \\
+    \\OTP options:
+    \\  --duration <time>    Temporary token (e.g., "1h", "30m", "7d")
+    \\  --session <name>     Scoped to session
+    \\  --daemon             Valid until HTTP server restarts
+    \\  --indefinite         Never expires (default)
+    \\
+    \\Revoke options:
+    \\  --temporary          Revoke all duration-based tokens
+    \\  --session <name>     Revoke tokens for specific session
+    \\  --daemon             Revoke all daemon-scoped tokens
+    \\  --indefinite         Revoke all indefinite tokens
+    \\  --all                Revoke everything
     \\
 ;
 
@@ -72,6 +98,12 @@ pub fn main() !void {
         try cmdClients(alloc, args[2..], &cfg);
     } else if (std.mem.eql(u8, cmd, "kick")) {
         try cmdKick(alloc, args[2..], &cfg);
+    } else if (std.mem.eql(u8, cmd, "serve")) {
+        try cmdServe(alloc, args[2..], &cfg);
+    } else if (std.mem.eql(u8, cmd, "otp")) {
+        try cmdOtp(alloc, args[2..]);
+    } else if (std.mem.eql(u8, cmd, "revoke")) {
+        try cmdRevoke(alloc, args[2..]);
     } else if (std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "--help")) {
         try writeAll(STDOUT_FILENO, usage);
     } else {
@@ -550,6 +582,212 @@ fn resolveSocketPath(alloc: std.mem.Allocator, name_or_path: []const u8, cfg: *c
     return try std.fmt.allocPrint(alloc, "{s}/{s}", .{ dir, name_or_path });
 }
 
+fn cmdServe(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
+    var bind_addr: []const u8 = cfg.serve.bind orelse "127.0.0.1";
+    var port: u16 = cfg.serve.port;
+    var daemonize = false;
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "-b") or std.mem.eql(u8, arg, "--bind")) {
+            i += 1;
+            if (i >= args.len) {
+                try writeAll(STDERR_FILENO, "Missing bind address\n");
+                std.process.exit(1);
+            }
+            bind_addr = args[i];
+        } else if (std.mem.eql(u8, arg, "-p") or std.mem.eql(u8, arg, "--port")) {
+            i += 1;
+            if (i >= args.len) {
+                try writeAll(STDERR_FILENO, "Missing port\n");
+                std.process.exit(1);
+            }
+            port = std.fmt.parseInt(u16, args[i], 10) catch {
+                try writeAll(STDERR_FILENO, "Invalid port\n");
+                std.process.exit(1);
+            };
+        } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--daemonize")) {
+            daemonize = true;
+        }
+    }
+
+    if (daemonize) {
+        const pid = try posix.fork();
+        if (pid != 0) {
+            // Parent exits
+            return;
+        }
+
+        // Child: become daemon
+        _ = posix.setsid() catch {};
+        posix.close(0);
+        posix.close(1);
+        posix.close(2);
+        const devnull = posix.open("/dev/null", .{ .ACCMODE = .RDWR }, 0) catch std.process.exit(1);
+        _ = posix.dup2(devnull, 0) catch {};
+        _ = posix.dup2(devnull, 1) catch {};
+        _ = posix.dup2(devnull, 2) catch {};
+        if (devnull > 2) posix.close(devnull);
+    }
+
+    var server = HttpServer.init(alloc, cfg, bind_addr, port) catch |err| {
+        if (!daemonize) {
+            var buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "Failed to initialize server: {}\n", .{err}) catch "Failed to initialize server\n";
+            try writeAll(STDERR_FILENO, msg);
+        }
+        std.process.exit(1);
+    };
+    defer server.deinit();
+
+    server.run() catch |err| {
+        if (!daemonize) {
+            var buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "Server error: {}\n", .{err}) catch "Server error\n";
+            try writeAll(STDERR_FILENO, msg);
+        }
+        std.process.exit(1);
+    };
+}
+
+fn cmdOtp(alloc: std.mem.Allocator, args: []const []const u8) !void {
+    var scope: Auth.Scope = .indefinite;
+    var session: ?[]const u8 = null;
+    var duration: ?i64 = null;
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--duration")) {
+            i += 1;
+            if (i >= args.len) {
+                try writeAll(STDERR_FILENO, "Missing duration value\n");
+                std.process.exit(1);
+            }
+            duration = parseDuration(args[i]) orelse {
+                try writeAll(STDERR_FILENO, "Invalid duration format (use e.g., 1h, 30m, 7d)\n");
+                std.process.exit(1);
+            };
+            scope = .temporary;
+        } else if (std.mem.eql(u8, arg, "--session")) {
+            i += 1;
+            if (i >= args.len) {
+                try writeAll(STDERR_FILENO, "Missing session name\n");
+                std.process.exit(1);
+            }
+            session = args[i];
+            scope = .session;
+        } else if (std.mem.eql(u8, arg, "--daemon")) {
+            scope = .daemon;
+        } else if (std.mem.eql(u8, arg, "--indefinite")) {
+            scope = .indefinite;
+        }
+    }
+
+    var auth = Auth.init(alloc) catch |err| {
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Failed to initialize auth: {}\n", .{err}) catch "Failed to initialize auth\n";
+        try writeAll(STDERR_FILENO, msg);
+        std.process.exit(1);
+    };
+    defer auth.deinit();
+
+    const otp = auth.generateOtp(scope, session, duration) catch |err| {
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Failed to generate OTP: {}\n", .{err}) catch "Failed to generate OTP\n";
+        try writeAll(STDERR_FILENO, msg);
+        std.process.exit(1);
+    };
+    defer alloc.free(otp);
+
+    try writeAll(STDOUT_FILENO, otp);
+    try writeAll(STDOUT_FILENO, "\n");
+}
+
+fn cmdRevoke(alloc: std.mem.Allocator, args: []const []const u8) !void {
+    var auth = Auth.init(alloc) catch |err| {
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Failed to initialize auth: {}\n", .{err}) catch "Failed to initialize auth\n";
+        try writeAll(STDERR_FILENO, msg);
+        std.process.exit(1);
+    };
+    defer auth.deinit();
+
+    var revoke_all = false;
+    var scope: ?Auth.Scope = null;
+    var session: ?[]const u8 = null;
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "--all")) {
+            revoke_all = true;
+        } else if (std.mem.eql(u8, arg, "--temporary")) {
+            scope = .temporary;
+        } else if (std.mem.eql(u8, arg, "--daemon")) {
+            scope = .daemon;
+        } else if (std.mem.eql(u8, arg, "--indefinite")) {
+            scope = .indefinite;
+        } else if (std.mem.eql(u8, arg, "--session")) {
+            i += 1;
+            if (i >= args.len) {
+                try writeAll(STDERR_FILENO, "Missing session name\n");
+                std.process.exit(1);
+            }
+            session = args[i];
+            scope = .session;
+        }
+    }
+
+    if (revoke_all) {
+        // Rotate all keys
+        auth.rotateKey(.temporary, null) catch {};
+        auth.rotateKey(.daemon, null) catch {};
+        auth.rotateKey(.indefinite, null) catch {};
+        // Revoke all OTPs
+        auth.revokeOtps(null, null) catch {};
+        try writeAll(STDOUT_FILENO, "All tokens revoked\n");
+    } else if (scope) |s| {
+        auth.rotateKey(s, session) catch |err| {
+            var buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "Failed to revoke: {}\n", .{err}) catch "Failed to revoke\n";
+            try writeAll(STDERR_FILENO, msg);
+            std.process.exit(1);
+        };
+        auth.revokeOtps(s, session) catch {};
+        try writeAll(STDOUT_FILENO, "Tokens revoked\n");
+    } else {
+        try writeAll(STDERR_FILENO, "Specify --all, --temporary, --daemon, --indefinite, or --session\n");
+        std.process.exit(1);
+    }
+}
+
+fn parseDuration(s: []const u8) ?i64 {
+    if (s.len < 2) return null;
+
+    const unit = s[s.len - 1];
+    const value_str = s[0 .. s.len - 1];
+    const value = std.fmt.parseInt(i64, value_str, 10) catch return null;
+
+    return switch (unit) {
+        's' => value,
+        'm' => value * 60,
+        'h' => value * 3600,
+        'd' => value * 86400,
+        'w' => value * 604800,
+        else => null,
+    };
+}
+
 test "basic" {
     // Placeholder
+}
+
+test "parse duration" {
+    try std.testing.expectEqual(@as(?i64, 60), parseDuration("1m"));
+    try std.testing.expectEqual(@as(?i64, 3600), parseDuration("1h"));
+    try std.testing.expectEqual(@as(?i64, 86400), parseDuration("1d"));
+    try std.testing.expectEqual(@as(?i64, 604800), parseDuration("1w"));
+    try std.testing.expectEqual(@as(?i64, null), parseDuration("invalid"));
 }
