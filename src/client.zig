@@ -6,6 +6,7 @@ const protocol = @import("protocol.zig");
 const keybind = @import("keybind.zig");
 const sig = @import("signal.zig");
 const terminal = @import("terminal.zig");
+const config = @import("config.zig");
 
 const STDIN = 0;
 const STDOUT = 1;
@@ -386,8 +387,7 @@ pub fn send(socket_path: []const u8, keys: []const u8) !void {
     protocol.writeMsg(fd, @intFromEnum(protocol.ClientMsg.detach), "") catch {};
 }
 
-pub fn attach(alloc: std.mem.Allocator, socket_path: []const u8, as_viewer: bool) !void {
-
+pub fn attach(alloc: std.mem.Allocator, socket_path: []const u8, as_viewer: bool, cfg: *const config.Config) !void {
     const fd = try connectSocket(socket_path);
     defer posix.close(fd);
 
@@ -447,7 +447,7 @@ pub fn attach(alloc: std.mem.Allocator, socket_path: []const u8, as_viewer: bool
 
     var client = Client{
         .fd = fd,
-        .keys = keybind.State.init(.{}),
+        .keys = keybind.State.init(cfg.toKeybindConfig()),
         .cols = size.cols,
         .rows = size.rows,
         .session_name = session_name,

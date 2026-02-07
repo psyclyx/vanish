@@ -105,6 +105,90 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
+## 2026-02-07: Session 16 - JSON Config Implementation
+
+Implemented the last remaining inbox item: JSON configuration file.
+
+### What Changed
+
+**New file: config.zig (183 lines)**
+- Loads `~/.config/vanish/config.json` if it exists
+- Falls back to `$XDG_CONFIG_HOME/vanish/config.json`
+- Parses JSON with Zig's std.json
+- Supports:
+  - `leader`: Leader key override (`"^B"`, `"Ctrl+B"`, or single char)
+  - `socket_dir`: Custom socket directory path
+  - `binds`: Custom keybindings as object `{"d": "detach", "q": "detach"}`
+- Uses arena allocator for parsed data
+- Graceful fallback: invalid/missing config → use defaults
+- 3 unit tests for leader parsing and action parsing
+
+**keybind.zig:**
+- Made `default_binds` public so config.zig can reference it
+
+**client.zig:**
+- Added config import
+- `attach()` now takes `*const config.Config` parameter
+- Uses `cfg.toKeybindConfig()` to initialize keybind state
+
+**main.zig:**
+- Loads config at startup with `config.load(alloc)`
+- Passes config to all commands that need socket resolution
+- `getDefaultSocketDir()` now checks `cfg.socket_dir` first
+- `resolveSocketPath()` uses config-aware `getDefaultSocketDir()`
+
+### Example Config
+
+```json
+{
+  "leader": "^B",
+  "socket_dir": "/tmp/my-vanish",
+  "binds": {
+    "d": "detach",
+    "q": "detach",
+    "k": "pan_up",
+    "j": "pan_down",
+    "?": "help"
+  }
+}
+```
+
+### Design Notes
+
+- Config is loaded once at startup, not hot-reloaded
+- Arena allocator owns all parsed strings
+- Minimal validation: unknown keys ignored, invalid values use defaults
+- Action aliases supported: `"pan_up"` = `"scroll_up"`, `"status"` = `"toggle_status"`
+
+### Testing
+
+- Build: ✓
+- Tests: ✓ (21 tests total, 3 new in config.zig)
+
+### Inbox Status - ALL COMPLETE
+
+| Item | Status | Session |
+|------|--------|---------|
+| Session takeover | ✓ Done | 8 |
+| Viewport panning | ✓ Done | 10-11 |
+| JSON output (--json) | ✓ Done | 5, 13 |
+| Background sessions | ✓ Works | Default |
+| XDG_RUNTIME_DIR | ✓ Works | Default |
+| List/disconnect clients | ✓ Done | 13 |
+| **JSON config** | **✓ Done** | **16** |
+
+**All inbox items are now complete.** The project has reached feature completion
+as originally specified.
+
+### Next Steps (if any)
+
+The core feature set is done. Potential future work:
+- Bind scrollback dump to Ctrl+A [ (currently unbound)
+- Remove dead `ClientMsg.scrollback` code if not binding it
+- Consider session 18 (next divisible by 3) for final architecture review
+
+---
+
 ## 2026-02-07: Session 15 - Architecture Review (3-session checkpoint)
 
 Since session 15 is divisible by 3, performing an architecture review. Last reviews

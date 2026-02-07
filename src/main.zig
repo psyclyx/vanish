@@ -5,6 +5,7 @@ const Pty = @import("pty.zig");
 const Session = @import("session.zig");
 const protocol = @import("protocol.zig");
 const VTerminal = @import("terminal.zig");
+const config = @import("config.zig");
 
 const STDERR_FILENO = posix.STDERR_FILENO;
 const STDOUT_FILENO = posix.STDOUT_FILENO;
@@ -50,6 +51,9 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
+    var cfg = config.load(alloc);
+    defer cfg.deinit();
+
     const args = try std.process.argsAlloc(alloc);
     defer std.process.argsFree(alloc, args);
 
@@ -61,17 +65,17 @@ pub fn main() !void {
     const cmd = args[1];
 
     if (std.mem.eql(u8, cmd, "new")) {
-        try cmdNew(alloc, args[2..]);
+        try cmdNew(alloc, args[2..], &cfg);
     } else if (std.mem.eql(u8, cmd, "attach")) {
-        try cmdAttach(alloc, args[2..]);
+        try cmdAttach(alloc, args[2..], &cfg);
     } else if (std.mem.eql(u8, cmd, "send")) {
-        try cmdSend(alloc, args[2..]);
+        try cmdSend(alloc, args[2..], &cfg);
     } else if (std.mem.eql(u8, cmd, "list")) {
-        try cmdList(alloc, args[2..]);
+        try cmdList(alloc, args[2..], &cfg);
     } else if (std.mem.eql(u8, cmd, "clients")) {
-        try cmdClients(alloc, args[2..]);
+        try cmdClients(alloc, args[2..], &cfg);
     } else if (std.mem.eql(u8, cmd, "kick")) {
-        try cmdKick(alloc, args[2..]);
+        try cmdKick(alloc, args[2..], &cfg);
     } else if (std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "--help")) {
         try writeAll(STDOUT_FILENO, usage);
     } else {
@@ -83,13 +87,13 @@ pub fn main() !void {
     }
 }
 
-fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8) !void {
+fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
     if (args.len < 2) {
         try writeAll(STDERR_FILENO, "Usage: vanish new <socket|name> [--] <command> [args...]\n");
         std.process.exit(1);
     }
 
-    const socket_path = try resolveSocketPath(alloc, args[0]);
+    const socket_path = try resolveSocketPath(alloc, args[0], cfg);
     defer alloc.free(socket_path);
 
     var cmd_start: usize = 1;
@@ -106,7 +110,7 @@ fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8) !void {
     try Session.run(alloc, socket_path, cmd_args);
 }
 
-fn cmdAttach(alloc: std.mem.Allocator, args: []const []const u8) !void {
+fn cmdAttach(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
     if (args.len < 1) {
         try writeAll(STDERR_FILENO, "Usage: vanish attach [--viewer] <socket|name>\n");
         std.process.exit(1);
@@ -128,20 +132,20 @@ fn cmdAttach(alloc: std.mem.Allocator, args: []const []const u8) !void {
         std.process.exit(1);
     }
 
-    const socket_path = try resolveSocketPath(alloc, socket_arg.?);
+    const socket_path = try resolveSocketPath(alloc, socket_arg.?, cfg);
     defer alloc.free(socket_path);
 
     const Client = @import("client.zig");
-    try Client.attach(alloc, socket_path, as_viewer);
+    try Client.attach(alloc, socket_path, as_viewer, cfg);
 }
 
-fn cmdSend(alloc: std.mem.Allocator, args: []const []const u8) !void {
+fn cmdSend(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
     if (args.len < 2) {
         try writeAll(STDERR_FILENO, "Usage: vanish send <socket|name> <keys>\n");
         std.process.exit(1);
     }
 
-    const socket_path = try resolveSocketPath(alloc, args[0]);
+    const socket_path = try resolveSocketPath(alloc, args[0], cfg);
     defer alloc.free(socket_path);
 
     const keys = args[1];
@@ -149,7 +153,7 @@ fn cmdSend(alloc: std.mem.Allocator, args: []const []const u8) !void {
     try Client.send(socket_path, keys);
 }
 
-fn cmdList(alloc: std.mem.Allocator, args: []const []const u8) !void {
+fn cmdList(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
     var as_json = false;
     var explicit_dir: ?[]const u8 = null;
 
@@ -162,7 +166,7 @@ fn cmdList(alloc: std.mem.Allocator, args: []const []const u8) !void {
     }
 
     const allocated_dir = if (explicit_dir == null) blk: {
-        break :blk getDefaultSocketDir(alloc) catch {
+        break :blk getDefaultSocketDir(alloc, cfg) catch {
             if (as_json) {
                 try writeAll(STDOUT_FILENO, "{\"error\":\"Could not determine socket directory\"}\n");
             } else {
@@ -241,7 +245,7 @@ fn writeJsonList(alloc: std.mem.Allocator, sessions: []const []const u8, dir_pat
     try writeAll(STDOUT_FILENO, out.items);
 }
 
-fn cmdClients(alloc: std.mem.Allocator, args: []const []const u8) !void {
+fn cmdClients(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
     var as_json = false;
     var socket_arg: ?[]const u8 = null;
 
@@ -258,7 +262,7 @@ fn cmdClients(alloc: std.mem.Allocator, args: []const []const u8) !void {
         std.process.exit(1);
     }
 
-    const socket_path = try resolveSocketPath(alloc, socket_arg.?);
+    const socket_path = try resolveSocketPath(alloc, socket_arg.?, cfg);
     defer alloc.free(socket_path);
 
     const sock = connectToSession(socket_path) catch |err| {
@@ -371,13 +375,13 @@ fn writeClientsJson(alloc: std.mem.Allocator, payload: []const u8, count: usize)
     try writeAll(STDOUT_FILENO, out.items);
 }
 
-fn cmdKick(alloc: std.mem.Allocator, args: []const []const u8) !void {
+fn cmdKick(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
     if (args.len < 2) {
         try writeAll(STDERR_FILENO, "Usage: vanish kick <socket|name> <client-id>\n");
         std.process.exit(1);
     }
 
-    const socket_path = try resolveSocketPath(alloc, args[0]);
+    const socket_path = try resolveSocketPath(alloc, args[0], cfg);
     defer alloc.free(socket_path);
 
     const client_id = std.fmt.parseInt(u32, args[1], 10) catch {
@@ -456,7 +460,10 @@ fn appendJsonString(out: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []cons
     }
 }
 
-fn getDefaultSocketDir(alloc: std.mem.Allocator) ![]const u8 {
+fn getDefaultSocketDir(alloc: std.mem.Allocator, cfg: *const config.Config) ![]const u8 {
+    if (cfg.socket_dir) |dir| {
+        return try alloc.dupe(u8, dir);
+    }
     if (std.posix.getenv("XDG_RUNTIME_DIR")) |xdg| {
         return try std.fmt.allocPrint(alloc, "{s}/vanish", .{xdg});
     }
@@ -464,11 +471,11 @@ fn getDefaultSocketDir(alloc: std.mem.Allocator) ![]const u8 {
     return try std.fmt.allocPrint(alloc, "/tmp/vanish-{d}", .{uid});
 }
 
-fn resolveSocketPath(alloc: std.mem.Allocator, name_or_path: []const u8) ![]const u8 {
+fn resolveSocketPath(alloc: std.mem.Allocator, name_or_path: []const u8, cfg: *const config.Config) ![]const u8 {
     if (std.mem.indexOf(u8, name_or_path, "/") != null) {
         return try alloc.dupe(u8, name_or_path);
     }
-    const dir = try getDefaultSocketDir(alloc);
+    const dir = try getDefaultSocketDir(alloc, cfg);
     defer alloc.free(dir);
     return try std.fmt.allocPrint(alloc, "{s}/{s}", .{ dir, name_or_path });
 }

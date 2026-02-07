@@ -29,7 +29,7 @@ pub const Config = struct {
     binds: []const Bind = &default_binds,
 };
 
-const default_binds = [_]Bind{
+pub const default_binds = [_]Bind{
     .{ .key = 'd', .action = .detach, .desc = "detach" },
     .{ .key = 0x01, .ctrl = true, .action = .detach, .desc = "detach" }, // Ctrl+A Ctrl+A
     .{ .key = 'h', .action = .scroll_left, .desc = "pan left" },
