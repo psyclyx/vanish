@@ -172,6 +172,46 @@ const Client = struct {
     }
 };
 
+pub fn send(socket_path: []const u8, keys: []const u8) !void {
+    const fd = try connectSocket(socket_path);
+    defer posix.close(fd);
+
+    const hello = protocol.Hello{
+        .role = .primary,
+        .cols = 80,
+        .rows = 24,
+    };
+
+    try protocol.writeStruct(fd, @intFromEnum(protocol.ClientMsg.hello), hello);
+
+    const resp_header = try protocol.readHeader(fd);
+
+    switch (@as(protocol.ServerMsg, @enumFromInt(resp_header.msg_type))) {
+        .welcome => {
+            var buf: [@sizeOf(protocol.Welcome)]u8 = undefined;
+            try protocol.readExact(fd, &buf);
+        },
+        .denied => {
+            var buf: [@sizeOf(protocol.Denied)]u8 = undefined;
+            try protocol.readExact(fd, &buf);
+            const denied = std.mem.bytesToValue(protocol.Denied, &buf);
+            switch (denied.reason) {
+                .primary_exists => {
+                    _ = posix.write(posix.STDERR_FILENO, "Session already has a primary client\n") catch {};
+                },
+                .invalid_hello => {
+                    _ = posix.write(posix.STDERR_FILENO, "Invalid handshake\n") catch {};
+                },
+            }
+            return;
+        },
+        else => return error.UnexpectedMessage,
+    }
+
+    try protocol.writeMsg(fd, @intFromEnum(protocol.ClientMsg.input), keys);
+    protocol.writeMsg(fd, @intFromEnum(protocol.ClientMsg.detach), "") catch {};
+}
+
 pub fn attach(alloc: std.mem.Allocator, socket_path: []const u8, as_viewer: bool) !void {
     _ = alloc;
 

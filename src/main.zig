@@ -15,11 +15,13 @@ const usage =
     \\Usage:
     \\  vanish new <name> [--] <command> [args...]
     \\  vanish attach [--viewer] <name>
+    \\  vanish send <name> <keys>
     \\  vanish list [directory]
     \\
     \\Commands:
     \\  new      Create a new session
     \\  attach   Attach to an existing session (--viewer for read-only)
+    \\  send     Send keys to a session (for scripting)
     \\  list     List available sessions
     \\
     \\Notes:
@@ -58,6 +60,8 @@ pub fn main() !void {
         try cmdNew(alloc, args[2..]);
     } else if (std.mem.eql(u8, cmd, "attach")) {
         try cmdAttach(alloc, args[2..]);
+    } else if (std.mem.eql(u8, cmd, "send")) {
+        try cmdSend(alloc, args[2..]);
     } else if (std.mem.eql(u8, cmd, "list")) {
         try cmdList(alloc, args[2..]);
     } else if (std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "--help")) {
@@ -121,6 +125,20 @@ fn cmdAttach(alloc: std.mem.Allocator, args: []const []const u8) !void {
 
     const Client = @import("client.zig");
     try Client.attach(alloc, socket_path, as_viewer);
+}
+
+fn cmdSend(alloc: std.mem.Allocator, args: []const []const u8) !void {
+    if (args.len < 2) {
+        try writeAll(STDERR_FILENO, "Usage: vanish send <socket|name> <keys>\n");
+        std.process.exit(1);
+    }
+
+    const socket_path = try resolveSocketPath(alloc, args[0]);
+    defer alloc.free(socket_path);
+
+    const keys = args[1];
+    const Client = @import("client.zig");
+    try Client.send(socket_path, keys);
 }
 
 fn cmdList(alloc: std.mem.Allocator, args: []const []const u8) !void {
