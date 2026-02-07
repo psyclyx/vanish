@@ -105,6 +105,121 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
+## 2026-02-07: Session 6 - Architecture Review (Hammock Session)
+
+Per the "every 3 sessions" rule, taking time to interrogate the abstractions.
+
+### What's Working Well
+
+**1. Module Boundaries Are Clean**
+- Each file has a single responsibility: pty.zig does PTY, terminal.zig wraps ghostty-vt,
+  protocol.zig handles wire format, keybind.zig manages key state
+- No circular dependencies
+- Low coupling between modules
+
+**2. Protocol Is Simple and Correct**
+- 5-byte header (1 type + 4 len) is easy to parse and debug
+- Message types are well-separated (0x01-0x0F client, 0x81-0x8F server)
+- External structs for wire format prevent ABI issues
+
+**3. Single Event Loop per Process**
+- Session uses poll() over dynamic fd list - simple, efficient
+- Client uses fixed 2-fd poll - even simpler
+- No threading, no async runtime - just synchronous POSIX
+
+**4. State Machines Are Explicit**
+- Keybind state: normal → leader → action
+- Client state: running, hint_visible, in_scroll_mode
+- Easy to reason about
+
+### What Could Be Better
+
+**1. Scrolling Semantics Are Confused**
+The inbox clarifies this: scrolling is for *panning* around a terminal larger than
+the viewer, NOT for navigating scrollback in the traditional sense. Current
+implementation treats scroll mode as "dump scrollback then exit" which misses the point.
+
+**The actual need:**
+- Viewer might be 80x24, session might be 120x50
+- User needs hjkl to pan around the 120x50 viewport
+- This is more like a viewport into a larger screen, not scrollback
+
+**What we have:**
+- dumpScrollback() which gives text content
+- Scroll mode that dumps and exits on any key
+
+**What we need:**
+- Track viewport offset (x, y) relative to session terminal size
+- Render only the visible portion
+- hjkl adjusts viewport, not scrollback position
+- This is fundamentally different from what we have
+
+**2. Session Takeover Not Implemented**
+The inbox mentions viewers should be able to take over as primary. This requires:
+- New protocol message: "takeover" from client
+- Session logic: demote current primary to viewer, promote requester
+- Handle size mismatch: resize terminal to new primary's size
+
+Currently, if primary exists, new primary is denied. Need to add takeover flow.
+
+**3. Client Management Missing**
+No way to:
+- List connected clients
+- Disconnect a specific client
+- See client metadata (size, connection time)
+
+This needs:
+- Protocol messages for client list query/response
+- Protocol message for disconnect command
+- CLI commands: `vanish clients <session>`, `vanish kick <session> <client-id>`
+
+**4. Config Not Implemented Yet**
+User wants JSON instead of TOML. That's fine - JSON is simpler anyway.
+But config isn't implemented at all yet. Need:
+- ~/.config/vanish/config.json
+- Leader key override
+- Default keybinds
+- Socket directory override
+
+**5. Minor Code Smells**
+
+a) **Client struct in client.zig is doing too much** - it handles input, rendering,
+   scroll mode, status bar. Could split into smaller pieces, but not critical.
+
+b) **signal.zig uses global mutable state** - This works but makes testing harder.
+   Could pass signal state as parameter, but overhead may not be worth it.
+
+c) **handleClientInput in session.zig has a large switch** - Could use a dispatch
+   table, but current approach is explicit and readable.
+
+### Simplicity Analysis (Simple vs Easy)
+
+**Simple (good):**
+- Protocol: one-way data flow, no RPC semantics, no acks
+- PTY: thin wrapper around system calls
+- Session: single loop, no threads
+- Keybind: pure state machine, no side effects in processKey
+
+**Potentially Complected:**
+- Scroll mode: conflating scrollback navigation with viewport panning
+- Client state: hint_visible, in_scroll_mode, show_status are separate booleans;
+  could be a single enum Mode { normal, leader, scroll, help }
+
+### Priority Actions for Future Sessions
+
+1. **Fix scroll semantics** - This is a design issue. Viewport panning, not scrollback.
+2. **Add session takeover** - Protocol + session logic
+3. **Add client management** - List/disconnect
+4. **Add config file** - JSON format
+
+### Not Urgent
+
+- Refactoring signal.zig (works fine)
+- Splitting Client struct (it's not that big)
+- Test coverage (we have basics, can add more incrementally)
+
+---
+
 ## 2026-02-07: Session 5 - JSON Output for Scripting
 
 ### Completed
