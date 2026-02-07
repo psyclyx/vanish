@@ -109,3 +109,26 @@ test "terminal dump screen" {
 
     try std.testing.expect(screen.len > 0);
 }
+
+test "terminal resize" {
+    const alloc = std.testing.allocator;
+    var term = try init(alloc, 80, 24);
+    defer term.deinit();
+
+    try term.resize(120, 40);
+    try std.testing.expectEqual(@as(u16, 120), term.cols);
+    try std.testing.expectEqual(@as(u16, 40), term.rows);
+}
+
+test "terminal scrollback" {
+    const alloc = std.testing.allocator;
+    var term = try init(alloc, 80, 24);
+    defer term.deinit();
+
+    term.feed("Line 1\n");
+    term.feed("Line 2\n");
+    const scrollback = try term.dumpScrollback(alloc);
+    defer alloc.free(scrollback);
+
+    try std.testing.expect(scrollback.len > 0);
+}
