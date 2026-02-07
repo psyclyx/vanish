@@ -105,6 +105,146 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
+## 2026-02-07: Session 12 - Architecture Review (3-session checkpoint)
+
+This is session 12 (divisible by 3), time for another architecture review. Last
+review was session 9.
+
+### Codebase Stats
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| client.zig | 616 | User-facing terminal, viewport rendering |
+| session.zig | 439 | Daemon, poll loop, client management |
+| terminal.zig | 279 | ghostty-vt wrapper, viewport dump |
+| main.zig | 276 | CLI entry point |
+| protocol.zig | 177 | Wire format |
+| keybind.zig | 172 | Input state machine |
+| pty.zig | 134 | PTY operations |
+| signal.zig | 48 | Signal handling |
+| **Total** | **2,141** | 8 source files |
+
+Tests: 17 across 4 modules (keybind, protocol, pty, terminal)
+
+### What's Working Well
+
+**1. Viewport Panning is Correctly Designed**
+
+The session 7 design choice to have viewers maintain a local VTerminal and do
+client-side viewport clipping was correct. The implementation in sessions 10-11
+is clean:
+- `Viewport` struct in client.zig handles offset tracking
+- `ensureVTerm()` lazily allocates only when panning is needed
+- `dumpViewport()` in terminal.zig renders the visible region with proper styling
+- Memory overhead only exists when session > local size
+
+**2. Protocol Remains Extensible**
+
+Current protocol (7 client + 7 server message types):
+- Client: 0x01-0x06 (hello, input, resize, detach, scrollback, takeover)
+- Server: 0x81-0x87 (welcome, output, full, exit, denied, role_change, session_resize)
+
+The 5-byte header + payload design is simple and debuggable. Adding new messages
+is trivial.
+
+**3. Module Boundaries Still Clean**
+
+No file exceeds 620 lines. Dependencies still flow downward. The only new import
+in session 11 was `terminal` into `client`, which is natural since client now
+does viewport rendering.
+
+**4. Event Loop Architecture is Solid**
+
+Single poll() loop in both session and client. No threading. The complexity of
+viewport panning didn't require architectural changes to the event loop - just
+added rendering logic in the output path.
+
+### What Could Be Improved
+
+**1. client.zig is Getting Larger (616 lines)**
+
+This file grew from ~427 to 616 lines with viewport panning. It now handles:
+- Connection handshake
+- Input processing (keybinds, forwarding)
+- Output processing (direct write vs viewport render)
+- Status bar rendering
+- Hint rendering
+- Help display
+- Viewport state
+
+Not critical yet, but approaching the point where splitting makes sense:
+- `viewport.zig`: Viewport struct + rendering logic
+- Keep `client.zig` for connection, input handling, and event loop
+
+**Decision**: Monitor but don't split yet. The code is cohesive.
+
+**2. Viewport Struct Location**
+
+The `Viewport` struct is defined inside client.zig but is a self-contained
+abstraction. If we add viewport-related tests, it should probably move to its
+own file.
+
+**3. DESIGN.md Still Outdated**
+
+Session 9 noted this; still not fixed. Missing:
+- 0x06 Takeover, 0x86 RoleChange, 0x87 SessionResize
+- Viewport panning documentation
+
+**4. Scrollback is Awkward Now**
+
+The old scroll mode (`ClientMsg.scrollback`, 0x05) still exists but isn't bound
+to any key after session 10's refactor. hjkl now does viewport panning instead.
+Options:
+- Remove scrollback protocol entirely (users can scroll in their terminal)
+- Bind to a new key (Ctrl+A [?) for explicit scrollback dump
+
+**Decision**: Keep the protocol for now, maybe bind to Ctrl+A [ later.
+
+### Simple vs Complected
+
+**Simple (good):**
+- Viewport struct is pure: no I/O, just offset math
+- `dumpViewport()` takes all params explicitly - no hidden state
+- VTerminal is only allocated when needed
+- Pan actions are atomic: adjust offset → render
+
+**Potentially complected:**
+- `handleOutput()` has two paths: direct write vs VTerminal + viewport render.
+  This is acceptable complexity for the performance benefit (no allocation when
+  not panning).
+- Status bar code duplicates some offset display logic. Minor.
+
+### Inbox Status Update
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Session takeover | ✓ Done | Session 8 |
+| Viewport panning | ✓ Done | Sessions 10-11 |
+| JSON output (--json) | ✓ Done | Session 5 |
+| Background sessions | ✓ Works | Default behavior |
+| XDG_RUNTIME_DIR | ✓ Works | Default behavior |
+| JSON config | ○ Todo | Config not implemented at all |
+| List/disconnect clients | ○ Todo | Protocol + CLI needed |
+
+### Remaining Work (Priority Order)
+
+1. **Client list/disconnect command** - Admin utility, straightforward
+2. **JSON config file** - User wants this, but defaults work fine
+3. **Update DESIGN.md** - Documentation debt
+4. **Consider client.zig split** - Only if it grows more
+
+### Code Health Assessment
+
+**Good.** The viewport panning implementation was a clean addition that didn't
+require refactoring existing abstractions. The codebase has grown ~20% (1,781 →
+2,141 lines) since session 9 but remains maintainable.
+
+Main concern: If we add config file parsing and client management commands, we
+should consider whether main.zig needs splitting too. Right now it's 276 lines
+which is fine.
+
+---
+
 ## 2026-02-07: Session 11 - Viewport Rendering Complete
 
 Completed the viewport rendering implementation that was deferred in session 10. Now
