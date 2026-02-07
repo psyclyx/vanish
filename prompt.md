@@ -64,6 +64,27 @@ lightweight libghostty terminal session multiplexer
 
 # Progress Notes
 
+## 2026-02-07: Session 4 - Documentation and Testing
+
+### Completed
+- [x] Send command (`vanish send <name> <keys>`) for scripting
+- [x] README.md with usage, keybindings, installation
+- [x] Updated DESIGN.md to reflect current implementation
+- [x] Comprehensive tests for keybind, protocol, pty, terminal
+  - keybind: escape cancel, scroll actions, hint formatting
+  - protocol: term truncation, header size, message type values
+  - pty: resize operation
+  - terminal: resize, scrollback dump
+
+### Test Coverage
+All modules now have meaningful tests:
+- keybind.zig: 5 tests
+- protocol.zig: 4 tests
+- pty.zig: 2 tests
+- terminal.zig: 4 tests
+
+---
+
 ## 2026-02-07: Session 3 - UX Polish and Features
 
 ### Completed
