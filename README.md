@@ -1,96 +1,150 @@
 # vanish
 
-A lightweight terminal session multiplexer built on libghostty.
+Terminal session multiplexer built on libghostty. Like dtach with terminal
+state preservation, or tmux without the complexity.
 
-Like dtach, but with terminal state preservation. Like tmux, but minimal.
+## What it does
 
-## Features
+Vanish manages persistent terminal sessions behind Unix sockets. Sessions
+survive detachment and reconnection with full screen state intact. One primary
+client controls input; any number of viewers can watch read-only.
 
-- **Terminal state preservation**: Uses ghostty-vt to track terminal state, so reconnecting shows the current screen
-- **Invisible by default**: No visible UI until you need it
-- **Primary/viewer model**: One writer per session, unlimited read-only viewers
-- **Session takeover**: Viewers can become primary (existing primary becomes viewer)
-- **Simple socket-based sessions**: Just a unix socket per session
-- **Scroll mode**: Navigate scrollback with vim-like keys
+A built-in HTTP server provides browser-based access with the same
+primary/viewer model.
 
-## Usage
-
-```sh
-# Create a session
-vanish new myshell -- bash
-
-# Attach to a session
-vanish attach myshell
-
-# Attach as viewer (read-only)
-vanish attach --viewer myshell
-
-# Send keys to a session (for scripting)
-vanish send myshell "ls -la\n"
-
-# List sessions
-vanish list
-```
-
-## Keybindings
-
-Leader key: `Ctrl+A`
-
-| Key | Action |
-|-----|--------|
-| `d` | Detach from session |
-| `s` | Toggle status bar |
-| `t` | Takeover session (viewer becomes primary) |
-| `k` / `j` | Scroll up/down |
-| `Ctrl+U` / `Ctrl+D` | Page up/down |
-| `g` / `G` | Scroll to top/bottom |
-| `?` | Show help |
-| `Esc` | Cancel |
-
-In scroll mode, any key exits and refreshes the screen.
-
-## Installation
-
-### NixOS
-
-```nix
-{ pkgs, ... }:
-let
-  vanish = pkgs.callPackage /path/to/vanish {};
-in {
-  environment.systemPackages = [ vanish ];
-}
-```
-
-Or use the overlay:
-
-```nix
-{ pkgs, ... }:
-{
-  nixpkgs.overlays = [ (import /path/to/vanish/overlay.nix) ];
-  environment.systemPackages = [ pkgs.vanish ];
-}
-```
-
-### From source
+## Install
 
 Requires Zig 0.15.
 
 ```sh
 zig build
-./zig-out/bin/vanish
+# Binary at ./zig-out/bin/vanish
 ```
+
+### NixOS
+
+```nix
+# Via overlay
+nixpkgs.overlays = [ (import /path/to/vanish/overlay.nix) ];
+environment.systemPackages = [ pkgs.vanish ];
+```
+
+## Quick start
+
+```sh
+# Create a session and attach
+vanish new work zsh
+
+# Detach: Ctrl+A d
+
+# Reattach
+vanish attach work
+
+# Auto-named session
+vanish new -a zsh
+# stderr: calm-ridge-zsh
+
+# List sessions
+vanish list
+```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `new [--detach] [--auto-name] [--serve] <name> <cmd>` | Create session and attach |
+| `attach [--primary] <name>` | Attach to session (viewer by default) |
+| `list [--json]` | List sessions |
+| `send <name> <keys>` | Send input to session |
+| `clients [--json] <name>` | List connected clients |
+| `kick <name> <client-id>` | Disconnect a client |
+| `kill <name>` | Terminate a session |
+| `serve [-b addr] [-p port] [-d]` | Start HTTP server |
+| `otp [--duration time] [--session name]` | Generate auth token |
+| `revoke [--all]` | Revoke auth tokens |
+| `print-config` | Show effective config |
+
+Global flags: `-c <config>`, `-v` (verbose), `-vv` (debug).
+
+## Keybindings
+
+Leader key: **Ctrl+A** (configurable).
+
+| Key | Action |
+|-----|--------|
+| `d` | Detach |
+| `t` | Take over session (viewer becomes primary) |
+| `s` | Toggle status bar |
+| `h` `j` `k` `l` | Pan viewport (when session is larger than terminal) |
+| `Ctrl+U` `Ctrl+D` | Page up/down |
+| `g` `G` | Jump to top-left / bottom-right |
+| `[` | Dump scrollback |
+| `?` | Help |
+
+## Web access
+
+```sh
+# Start the HTTP server
+vanish serve -d
+
+# Generate an auth token
+vanish otp
+# Prints a one-time password
+
+# Open http://localhost:7890 in a browser
+# Paste the OTP to authenticate
+```
+
+The web terminal uses server-side VT-to-HTML rendering with cell-level delta
+streaming over SSE. No framework dependencies.
+
+Auto-start the server alongside a session:
+
+```sh
+vanish new --serve -a zsh
+# Or set "auto_serve": true in config
+```
+
+## Configuration
+
+`~/.config/vanish/config.json`
+
+```json
+{
+  "leader": "^B",
+  "socket_dir": "/tmp/vanish",
+  "serve": {
+    "bind": "127.0.0.1",
+    "port": 7890,
+    "auto_serve": false
+  },
+  "binds": {
+    "d": "detach",
+    "t": "takeover",
+    "s": "toggle_status",
+    "?": "help"
+  }
+}
+```
+
+Leader key formats: `^A`, `Ctrl+A`, `Ctrl+Space`, `^\`.
+
+Actions: `detach`, `takeover`, `toggle_status`, `help`, `scrollback`,
+`scroll_up`, `scroll_down`, `scroll_left`, `scroll_right`,
+`scroll_page_up`, `scroll_page_down`, `scroll_top`, `scroll_bottom`.
+
+All fields are optional. Unset values use defaults.
 
 ## Design
 
-- Sessions are pty + ghostty-vt terminal emulator pairs, managed by daemon processes
-- Communication via binary protocol over unix sockets
-- One primary client controls terminal size and can send input
-- Multiple viewer clients can watch (read-only)
-- Keybindings handled client-side for responsiveness
-- Status bar and hints rendered client-side
+Sessions are PTY + ghostty-vt terminal emulator pairs, managed as daemon
+processes. Communication uses a binary protocol over Unix sockets. Keybindings
+and rendering are handled client-side. The session daemon is the single source
+of truth for terminal state.
 
-See [DESIGN.md](DESIGN.md) for architecture details.
+Session sockets live in `$XDG_RUNTIME_DIR/vanish/` by default.
+
+See [DESIGN.md](DESIGN.md) for protocol details.
 
 ## License
 

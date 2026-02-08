@@ -1,0 +1,183 @@
+.TH VANISH 1 "2026-02-07" "vanish" "User Commands"
+.SH NAME
+vanish \- terminal session multiplexer
+.SH SYNOPSIS
+.B vanish
+.RI [ options ]
+.I command
+.RI [ command-options ]
+.SH DESCRIPTION
+.B vanish
+manages persistent terminal sessions using libghostty for terminal state
+preservation. Sessions survive detachment and reconnection with full screen
+state intact.
+.PP
+Each session supports one primary client (controls input and terminal size) and
+any number of read-only viewers. An HTTP server provides browser-based access
+with the same model.
+.SH COMMANDS
+.TP
+.B new \fR[\fB\-\-detach\fR] [\fB\-\-auto\-name\fR] [\fB\-\-serve\fR] \fIname command\fR [\fIargs...\fR]
+Create a new session running
+.I command
+and attach to it.
+.B \-\-detach
+(\fB\-d\fR) returns to the shell instead of attaching.
+.B \-\-auto\-name
+(\fB\-a\fR) generates a name from the current time and command
+(e.g. "calm\-ridge\-zsh"); the
+.I name
+argument is not needed.
+.B \-\-serve
+(\fB\-s\fR) starts the HTTP server if not already running.
+.TP
+.B attach \fR[\fB\-\-primary\fR] \fIname\fR
+Attach to an existing session as a viewer.
+.B \-\-primary
+attaches as the primary client, taking over input control.
+.TP
+.B list \fR[\fB\-\-json\fR]
+List active sessions. With
+.BR \-\-json ,
+output is machine-readable.
+.TP
+.B send \fIname keys\fR
+Send
+.I keys
+to a session. Useful for scripting.
+.TP
+.B clients \fR[\fB\-\-json\fR] \fIname\fR
+List clients connected to a session.
+.TP
+.B kick \fIname client-id\fR
+Disconnect a client by ID (see
+.BR clients ).
+.TP
+.B kill \fIname\fR
+Terminate a session.
+.TP
+.B serve \fR[\fB\-b\fR \fIaddr\fR] [\fB\-p\fR \fIport\fR] [\fB\-d\fR]
+Start the HTTP server for web terminal access. Default bind address is
+127.0.0.1 and ::1, default port is 7890.
+.B \-d
+daemonizes.
+.TP
+.B otp \fR[\fB\-\-duration\fR \fItime\fR] [\fB\-\-session\fR \fIname\fR] [\fB\-\-daemon\fR] [\fB\-\-indefinite\fR]
+Generate a one-time password for HTTP authentication. Tokens are indefinite by
+default.
+.B \-\-duration
+accepts values like "1h", "30m", "7d".
+.B \-\-session
+scopes the token to a single session.
+.TP
+.B revoke \fR[\fB\-\-temporary\fR] [\fB\-\-session\fR \fIname\fR] [\fB\-\-daemon\fR] [\fB\-\-indefinite\fR] [\fB\-\-all\fR]
+Revoke authentication tokens.
+.TP
+.B print\-config
+Print the effective configuration.
+.SH OPTIONS
+.TP
+.BR \-c ", " \-\-config " " \fIpath\fR
+Path to configuration file.
+.TP
+.B \-v
+Verbose output.
+.TP
+.B \-vv
+Debug output.
+.TP
+.BR \-h ", " \-\-help
+Show help.
+.SH KEYBINDINGS
+The leader key (default:
+.BR Ctrl+A )
+activates keybinding mode. Press the leader key followed by one of:
+.PP
+.RS
+.nf
+d       detach from session
+t       take over as primary (viewers only)
+s       toggle status bar
+[       dump scrollback to terminal
+h j k l pan viewport (when session is larger)
+Ctrl+U  page up
+Ctrl+D  page down
+g       jump to top-left
+G       jump to bottom-right
+?       show help
+Esc     cancel
+.fi
+.RE
+.PP
+Viewport panning is available when the viewer's terminal is smaller than the
+session terminal.
+.SH CONFIGURATION
+Configuration is read from
+.I ~/.config/vanish/config.json
+(or
+.IR $XDG_CONFIG_HOME/vanish/config.json ).
+All fields are optional.
+.PP
+.RS
+.nf
+{
+  "leader": "^B",
+  "socket_dir": "/tmp/vanish",
+  "serve": {
+    "bind": "127.0.0.1",
+    "port": 7890,
+    "auto_serve": false
+  },
+  "binds": {
+    "d": "detach",
+    "t": "takeover",
+    "s": "toggle_status"
+  }
+}
+.fi
+.RE
+.PP
+Leader key formats:
+.BR ^A ,
+.BR Ctrl+A ,
+.BR Ctrl+Space ,
+.BR ^\[rs] .
+.PP
+Bind actions:
+.BR detach ,
+.BR takeover ,
+.BR toggle_status ,
+.BR help ,
+.BR scrollback ,
+.BR scroll_up ,
+.BR scroll_down ,
+.BR scroll_left ,
+.BR scroll_right ,
+.BR scroll_page_up ,
+.BR scroll_page_down ,
+.BR scroll_top ,
+.BR scroll_bottom .
+.SH ENVIRONMENT
+.TP
+.B XDG_RUNTIME_DIR
+Default location for session sockets
+.RI ( $XDG_RUNTIME_DIR/vanish/ ).
+Falls back to
+.IR /tmp/vanish-$UID .
+.TP
+.B XDG_CONFIG_HOME
+Configuration directory. Defaults to
+.IR ~/.config .
+.SH FILES
+.TP
+.I ~/.config/vanish/config.json
+User configuration file.
+.TP
+.I $XDG_RUNTIME_DIR/vanish/
+Session socket directory.
+.SH AUTHORS
+Written with the assistance of Claude.
+.SH SEE ALSO
+.BR dtach (1),
+.BR tmux (1),
+.BR screen (1)
