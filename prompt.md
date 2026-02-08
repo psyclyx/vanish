@@ -33,6 +33,10 @@ Current:
 - Man page, readme. Minimal, to the point.
 - Arch PKGBUILD.
 
+Done (Session 42):
+
+- ✓ Architecture review (3-session checkpoint). See notes below.
+
 Done (Session 41):
 
 - ✓ Autostart HTTP daemon (`--serve` / `-s` flag on `vanish new`, plus
@@ -4210,3 +4214,171 @@ All modules now have meaningful tests:
 - CallingConvention is `.c` not `.C`
 - sigaction doesn't return error union
 - Need to handle NixOS paths (no /bin/echo, etc.)
+
+---
+
+## 2026-02-07: Session 42 - Architecture Review (3-session checkpoint)
+
+Last review was session 39. This is the fifth consecutive architecture review
+where the codebase is fundamentally healthy. The project is mature and stable.
+
+### Codebase Stats
+
+| File         | Lines     | Change from S39 | Purpose                    |
+| ------------ | --------- | --------------- | -------------------------- |
+| main.zig     | 1,041     | +68             | CLI entry point            |
+| http.zig     | 898       | 0               | Web server, SSE, routing   |
+| client.zig   | 636       | 0               | Native client, viewport    |
+| auth.zig     | 556       | 0               | JWT/HMAC, OTP exchange     |
+| session.zig  | 526       | 0               | Daemon, poll loop          |
+| config.zig   | 461       | +7              | JSON config parsing        |
+| vthtml.zig   | 375       | 0               | VT→HTML, delta computation |
+| terminal.zig | 335       | 0               | ghostty-vt wrapper         |
+| index.html   | 220       | 0               | Web frontend               |
+| protocol.zig | 192       | 0               | Wire format                |
+| keybind.zig  | 185       | 0               | Input state machine        |
+| naming.zig   | 165       | -44             | Auto-name generation       |
+| pty.zig      | 140       | 0               | PTY operations             |
+| signal.zig   | 48        | 0               | Signal handling            |
+| paths.zig    | 43        | 0               | Shared utilities           |
+| **Total**    | **5,821** | **+31**         | 15 files                   |
+
+Build: Clean. Tests: All ~40 unit tests passing. Integration: 19/19 passing.
+
+### Codebase Health
+
+**Good.** The +31 line growth from session 39 is entirely from the autostart
+serve feature in main.zig (+68) offset by naming.zig shrinking (-44 from the
+16-word bucket reformatting). 13 of 15 files are unchanged since session 39.
+
+The core is done. Protocol, session, terminal, pty, signal, paths, auth, http,
+vthtml, keybind, client - all stable and untouched for multiple review cycles.
+
+### What's Working Well
+
+**1. Stability.** 11 of 15 modules have been unchanged for 6+ sessions. The
+architecture has converged. Bug reports are rare, and when they occur, fixes are
+small and localized.
+
+**2. Module boundaries remain excellent.** No circular dependencies. Clean
+downward dependency flow. Each file has single responsibility. No file exceeds
+1,041 lines.
+
+**3. Zero TODO/FIXME/HACK markers.** There is no acknowledged technical debt
+left as comments in the source. All known issues are tracked in this prompt
+rather than scattered through code.
+
+**4. Test coverage is reasonable.** ~40 unit tests across 9 modules, plus 19
+integration tests. The modules with tests (protocol, terminal, keybind, config,
+auth, naming, vthtml, pty, main) cover the correctness-critical paths.
+
+### Issues Found
+
+**1. Daemonization boilerplate duplicated 3× in main.zig**
+
+The 9-line setsid/close/devnull/dup2 block appears identically at:
+- Lines 326-336 (cmdNew child fork)
+- Lines 787-795 (maybeStartServe child fork)
+- Lines 861-869 (cmdServe daemonize fork)
+
+This is the most clear-cut duplication in the codebase. A `daemonize()` helper
+function would eliminate 18 lines and make intent clearer.
+
+**2. Protocol handshake boilerplate duplicated 3× in main.zig**
+
+The pattern: create viewer Hello → send → read welcome → check denied → read
+welcome struct → skip full state appears near-identically in:
+- cmdClients (lines 554-585)
+- cmdKick (lines 674-697)
+- cmdKill (lines 723-746)
+
+Each copy is ~25 lines. A `connectAsViewer(socket_path)` helper returning
+`(fd, Welcome)` would reduce this to 3 one-liners.
+
+**3. connectToSession duplicated across 3 files**
+
+The UNIX socket connect function exists in:
+- main.zig:754 (connectToSession)
+- http.zig:889 (connectToSession)
+- client.zig:576 (connectSocket)
+
+All three are functionally identical. This could live in paths.zig alongside
+the other shared utilities, though the current duplication is mild (~10 lines
+each).
+
+**4. main.zig has crossed 1,000 lines**
+
+main.zig grew from 973 (session 39) to 1,041. It now handles 11 CLI commands
+plus the autostart serve logic. The `cmdNew` function alone is 132 lines.
+
+This isn't critical - CLI entry points are naturally large - but it's worth
+noting as the largest file. The duplication issues (#1 and #2 above) account
+for ~70 of those lines. Addressing the duplication would bring it back under
+1,000.
+
+**5. executeAction scroll repetition in client.zig**
+
+Noted in session 39 and still present: 8 scroll actions at lines 173-212 all
+follow `self.viewport.moveX(); self.renderViewport(); self.renderStatusBar();`.
+This is 40 lines that could be ~8 with a single scroll-action handler. Not
+urgent since these actions are stable and unlikely to change.
+
+### Simple vs Complected Analysis
+
+**Simple (good):**
+
+- Everything from session 39 remains simple
+- The autostart serve feature is clean: probe port → fork if needed. No PID
+  files, no lock files, no shared state.
+- naming.zig with 16-word buckets: flat data, compile-time size enforcement,
+  pure function generation.
+
+**Watch items:**
+
+- main.zig duplication. Three copies of daemonize boilerplate and three copies
+  of handshake boilerplate in the same file is starting to smell. Each copy is
+  identical, so a bug fix in one would need to be applied to all three. This is
+  the strongest candidate for cleanup.
+
+- index.html at 220 lines. Mobile modifier buttons will push it past 250.
+  Previous reviews recommended splitting JS into a separate file at that point.
+  Still valid.
+
+**No complected code found.** Architecture remains clean.
+
+### Recommendations for Next Sessions
+
+**1. Session 43: Extract daemonize() and connectAsViewer() helpers in main.zig**
+
+This is the most impactful cleanup available. Two small helper functions would:
+- Remove ~50 lines of duplication
+- Bring main.zig back under 1,000 lines
+- Make cmdNew, cmdKick, cmdKill, cmdClients, cmdServe all more readable
+- Reduce the risk of inconsistent bug fixes across copies
+
+Estimated: -50 lines, +15 lines = net -35.
+
+**2. Session 44: Mobile modifier buttons (web)**
+
+The web terminal is the biggest remaining feature gap. Touch users need Ctrl,
+Alt, Esc, Tab buttons. This is a UX design task first, implementation second.
+
+**3. Session 45 (review): Documentation push**
+
+Man page and README update. The web terminal, auto-naming, autostart serve, and
+the full config format are all undocumented. By session 45 we should have mobile
+modifiers done and can document everything together.
+
+### Inbox Status
+
+| Item                     | Status | Priority  | Notes                          |
+| ------------------------ | ------ | --------- | ------------------------------ |
+| main.zig dedup cleanup   | ○ Todo | **High**  | 3× daemonize, 3× handshake    |
+| Mobile modifier buttons  | ○ Todo | Medium    | Ctrl/Alt/Esc toolbar           |
+| Web refresh button       | ○ Todo | Medium    | Close+reopen SSE               |
+| Cursor position (narrow) | ○ Todo | Low       | Needs investigation            |
+| Session list SSE         | ○ Todo | Low       | Reactive web session list      |
+| Man page, readme         | ○ Todo | Medium    | Documentation                  |
+| Arch PKGBUILD            | ○ Todo | Low       | Packaging                      |
+| Render deduplication     | ✗ Skip | -         | Not worth the complexity       |
+| Brotli/gzip compression  | ✗ Skip | -         | Not worth the complexity       |
