@@ -1,3 +1,3 @@
 final: prev: {
-  vanish = final.callPackage ./default.nix { };
+  vanish = final.callPackage ./package.nix { };
 }

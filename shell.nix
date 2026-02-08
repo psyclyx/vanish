@@ -1,10 +1,16 @@
-{ pkgs ? import <nixpkgs> { } }:
-
+let
+  sources = import ./npins;
+  zig-overlay = (import sources.flake-compat { src = sources.zig-overlay; }).outputs;
+  pkgs = import sources.nixpkgs-unstable {
+    overlays = [ zig-overlay.overlays.default ];
+  };
+  zig = pkgs.zigpkgs."0.15.2";
+in
 pkgs.mkShell {
-  packages = with pkgs; [
-    zig_0_15
-    zls
-    gdb
+  packages = [
+    zig
+    pkgs.zls
+    pkgs.gdb
   ];
 
   shellHook = ''
