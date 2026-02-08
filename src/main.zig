@@ -322,18 +322,7 @@ fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config
         // Child: close read end of pipe
         posix.close(pipe_fds[0]);
 
-        // Become session leader
-        _ = posix.setsid() catch {};
-
-        // Close stdin/stdout/stderr and redirect to /dev/null
-        posix.close(0);
-        posix.close(1);
-        posix.close(2);
-        const devnull = posix.open("/dev/null", .{ .ACCMODE = .RDWR }, 0) catch std.process.exit(1);
-        _ = posix.dup2(devnull, 0) catch {};
-        _ = posix.dup2(devnull, 1) catch {};
-        _ = posix.dup2(devnull, 2) catch {};
-        if (devnull > 2) posix.close(devnull);
+        daemonize();
 
         // Use C allocator in child process (GPA is not fork-safe, and
         // page_allocator has mremap issues after fork that cause ghostty-vt panics)
@@ -539,50 +528,20 @@ fn cmdClients(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const co
     const socket_path = try paths.resolveSocketPath(alloc, socket_arg.?, cfg);
     defer alloc.free(socket_path);
 
-    const sock = connectToSession(socket_path) catch |err| {
+    const sock = connectAsViewer(alloc, socket_path) catch |err| {
+        const err_msg = if (err == error.ConnectionDenied) "Connection denied" else "Could not connect to session";
         if (as_json) {
-            try writeAll(STDOUT_FILENO, "{\"error\":\"Could not connect to session\"}\n");
+            var buf: [128]u8 = undefined;
+            const json = std.fmt.bufPrint(&buf, "{{\"error\":\"{s}\"}}\n", .{err_msg}) catch "{\"error\":\"Connection failed\"}\n";
+            try writeAll(STDOUT_FILENO, json);
         } else {
             var buf: [256]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "Could not connect to session: {}\n", .{err}) catch "Could not connect\n";
+            const msg = std.fmt.bufPrint(&buf, "{s}\n", .{err_msg}) catch "Could not connect\n";
             try writeAll(STDERR_FILENO, msg);
         }
         std.process.exit(1);
     };
     defer posix.close(sock);
-
-    // Send hello as viewer (we're just querying)
-    var hello = protocol.Hello{ .role = .viewer, .cols = 80, .rows = 24 };
-    hello.setTerm("xterm-256color");
-    try protocol.writeStruct(sock, @intFromEnum(protocol.ClientMsg.hello), hello);
-
-    // Read welcome
-    const welcome_hdr = try protocol.readHeader(sock);
-    if (welcome_hdr.msg_type == @intFromEnum(protocol.ServerMsg.denied)) {
-        if (as_json) {
-            try writeAll(STDOUT_FILENO, "{\"error\":\"Connection denied\"}\n");
-        } else {
-            try writeAll(STDERR_FILENO, "Connection denied\n");
-        }
-        std.process.exit(1);
-    }
-    var welcome_buf: [@sizeOf(protocol.Welcome)]u8 = undefined;
-    try protocol.readExact(sock, &welcome_buf);
-
-    // Skip full state if sent
-    const state_hdr = protocol.readHeader(sock) catch {
-        if (as_json) {
-            try writeAll(STDOUT_FILENO, "{\"error\":\"Protocol error\"}\n");
-        } else {
-            try writeAll(STDERR_FILENO, "Protocol error\n");
-        }
-        std.process.exit(1);
-    };
-    if (state_hdr.msg_type == @intFromEnum(protocol.ServerMsg.full)) {
-        const skip = try alloc.alloc(u8, state_hdr.len);
-        defer alloc.free(skip);
-        protocol.readExact(sock, skip) catch {};
-    }
 
     // Send list_clients request
     try protocol.writeMsg(sock, @intFromEnum(protocol.ClientMsg.list_clients), &.{});
@@ -663,38 +622,14 @@ fn cmdKick(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const confi
         std.process.exit(1);
     };
 
-    const sock = connectToSession(socket_path) catch |err| {
+    const sock = connectAsViewer(alloc, socket_path) catch |err| {
+        const err_msg = if (err == error.ConnectionDenied) "Connection denied" else "Could not connect to session";
         var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Could not connect to session: {}\n", .{err}) catch "Could not connect\n";
+        const msg = std.fmt.bufPrint(&buf, "{s}\n", .{err_msg}) catch "Could not connect\n";
         try writeAll(STDERR_FILENO, msg);
         std.process.exit(1);
     };
     defer posix.close(sock);
-
-    // Send hello as viewer
-    var hello = protocol.Hello{ .role = .viewer, .cols = 80, .rows = 24 };
-    hello.setTerm("xterm-256color");
-    try protocol.writeStruct(sock, @intFromEnum(protocol.ClientMsg.hello), hello);
-
-    // Read welcome
-    const welcome_hdr = try protocol.readHeader(sock);
-    if (welcome_hdr.msg_type == @intFromEnum(protocol.ServerMsg.denied)) {
-        try writeAll(STDERR_FILENO, "Connection denied\n");
-        std.process.exit(1);
-    }
-    var welcome_buf: [@sizeOf(protocol.Welcome)]u8 = undefined;
-    try protocol.readExact(sock, &welcome_buf);
-
-    // Skip full state if sent
-    const state_hdr = protocol.readHeader(sock) catch {
-        try writeAll(STDERR_FILENO, "Protocol error\n");
-        std.process.exit(1);
-    };
-    if (state_hdr.msg_type == @intFromEnum(protocol.ServerMsg.full)) {
-        const skip = try alloc.alloc(u8, state_hdr.len);
-        defer alloc.free(skip);
-        protocol.readExact(sock, skip) catch {};
-    }
 
     // Send kick request
     const kick = protocol.KickClient{ .id = client_id };
@@ -712,38 +647,14 @@ fn cmdKill(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const confi
     const socket_path = try paths.resolveSocketPath(alloc, args[0], cfg);
     defer alloc.free(socket_path);
 
-    const sock = connectToSession(socket_path) catch |err| {
+    const sock = connectAsViewer(alloc, socket_path) catch |err| {
+        const err_msg = if (err == error.ConnectionDenied) "Connection denied" else "Could not connect to session";
         var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Could not connect to session: {}\n", .{err}) catch "Could not connect\n";
+        const msg = std.fmt.bufPrint(&buf, "{s}\n", .{err_msg}) catch "Could not connect\n";
         try writeAll(STDERR_FILENO, msg);
         std.process.exit(1);
     };
     defer posix.close(sock);
-
-    // Send hello as viewer
-    var hello = protocol.Hello{ .role = .viewer, .cols = 80, .rows = 24 };
-    hello.setTerm("xterm-256color");
-    try protocol.writeStruct(sock, @intFromEnum(protocol.ClientMsg.hello), hello);
-
-    // Read welcome
-    const welcome_hdr = try protocol.readHeader(sock);
-    if (welcome_hdr.msg_type == @intFromEnum(protocol.ServerMsg.denied)) {
-        try writeAll(STDERR_FILENO, "Connection denied\n");
-        std.process.exit(1);
-    }
-    var welcome_buf: [@sizeOf(protocol.Welcome)]u8 = undefined;
-    try protocol.readExact(sock, &welcome_buf);
-
-    // Skip full state if sent
-    const state_hdr = protocol.readHeader(sock) catch {
-        try writeAll(STDERR_FILENO, "Protocol error\n");
-        std.process.exit(1);
-    };
-    if (state_hdr.msg_type == @intFromEnum(protocol.ServerMsg.full)) {
-        const skip = try alloc.alloc(u8, state_hdr.len);
-        defer alloc.free(skip);
-        protocol.readExact(sock, skip) catch {};
-    }
 
     // Send kill request
     try protocol.writeMsg(sock, @intFromEnum(protocol.ClientMsg.kill_session), &.{});
@@ -757,6 +668,44 @@ fn connectToSession(path: []const u8) !posix.socket_t {
 
     var addr = std.net.Address.initUnix(path) catch return error.PathTooLong;
     try posix.connect(sock, &addr.any, addr.getOsSockLen());
+
+    return sock;
+}
+
+fn daemonize() void {
+    _ = posix.setsid() catch {};
+    posix.close(0);
+    posix.close(1);
+    posix.close(2);
+    const devnull = posix.open("/dev/null", .{ .ACCMODE = .RDWR }, 0) catch std.process.exit(1);
+    _ = posix.dup2(devnull, 0) catch {};
+    _ = posix.dup2(devnull, 1) catch {};
+    _ = posix.dup2(devnull, 2) catch {};
+    if (devnull > 2) posix.close(devnull);
+}
+
+fn connectAsViewer(alloc: std.mem.Allocator, socket_path: []const u8) !posix.socket_t {
+    const sock = try connectToSession(socket_path);
+    errdefer posix.close(sock);
+
+    var hello = protocol.Hello{ .role = .viewer, .cols = 80, .rows = 24 };
+    hello.setTerm("xterm-256color");
+    try protocol.writeStruct(sock, @intFromEnum(protocol.ClientMsg.hello), hello);
+
+    const welcome_hdr = try protocol.readHeader(sock);
+    if (welcome_hdr.msg_type == @intFromEnum(protocol.ServerMsg.denied)) {
+        return error.ConnectionDenied;
+    }
+    var welcome_buf: [@sizeOf(protocol.Welcome)]u8 = undefined;
+    try protocol.readExact(sock, &welcome_buf);
+
+    // Skip full state if sent
+    const state_hdr = try protocol.readHeader(sock);
+    if (state_hdr.msg_type == @intFromEnum(protocol.ServerMsg.full)) {
+        const skip = try alloc.alloc(u8, state_hdr.len);
+        defer alloc.free(skip);
+        protocol.readExact(sock, skip) catch {};
+    }
 
     return sock;
 }
@@ -783,16 +732,7 @@ fn maybeStartServe(alloc: std.mem.Allocator, cfg: *const config.Config) void {
         return;
     }
 
-    // Child: become daemon
-    _ = posix.setsid() catch {};
-    posix.close(0);
-    posix.close(1);
-    posix.close(2);
-    const devnull = posix.open("/dev/null", .{ .ACCMODE = .RDWR }, 0) catch std.process.exit(1);
-    _ = posix.dup2(devnull, 0) catch {};
-    _ = posix.dup2(devnull, 1) catch {};
-    _ = posix.dup2(devnull, 2) catch {};
-    if (devnull > 2) posix.close(devnull);
+    daemonize();
 
     var server = HttpServer.init(alloc, cfg, bind_addr, port) catch std.process.exit(1);
     defer server.deinit();
@@ -823,7 +763,7 @@ fn isPortListening(addr: []const u8, port: u16) bool {
 fn cmdServe(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
     var bind_addr: []const u8 = cfg.serve.bind orelse "127.0.0.1";
     var port: u16 = cfg.serve.port;
-    var daemonize = false;
+    var run_as_daemon = false;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -846,31 +786,22 @@ fn cmdServe(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const conf
                 std.process.exit(1);
             };
         } else if (std.mem.eql(u8, arg, "-d") or std.mem.eql(u8, arg, "--daemonize")) {
-            daemonize = true;
+            run_as_daemon = true;
         }
     }
 
-    if (daemonize) {
+    if (run_as_daemon) {
         const pid = try posix.fork();
         if (pid != 0) {
             // Parent exits
             return;
         }
 
-        // Child: become daemon
-        _ = posix.setsid() catch {};
-        posix.close(0);
-        posix.close(1);
-        posix.close(2);
-        const devnull = posix.open("/dev/null", .{ .ACCMODE = .RDWR }, 0) catch std.process.exit(1);
-        _ = posix.dup2(devnull, 0) catch {};
-        _ = posix.dup2(devnull, 1) catch {};
-        _ = posix.dup2(devnull, 2) catch {};
-        if (devnull > 2) posix.close(devnull);
+        daemonize();
     }
 
     var server = HttpServer.init(alloc, cfg, bind_addr, port) catch |err| {
-        if (!daemonize) {
+        if (!run_as_daemon) {
             var buf: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "Failed to initialize server: {}\n", .{err}) catch "Failed to initialize server\n";
             try writeAll(STDERR_FILENO, msg);
@@ -880,7 +811,7 @@ fn cmdServe(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const conf
     defer server.deinit();
 
     server.run() catch |err| {
-        if (!daemonize) {
+        if (!run_as_daemon) {
             var buf: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "Server error: {}\n", .{err}) catch "Server error\n";
             try writeAll(STDERR_FILENO, msg);

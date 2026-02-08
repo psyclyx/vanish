@@ -33,6 +33,14 @@ Current:
 - Man page, readme. Minimal, to the point.
 - Arch PKGBUILD.
 
+Done (Session 43):
+
+- ✓ Deduplicated main.zig: extracted `daemonize()` helper (9-line
+  setsid/close/devnull/dup2 block appeared 3×) and `connectAsViewer()` helper
+  (25-line viewer handshake pattern appeared 3×). Renamed local `daemonize` var
+  to `run_as_daemon` in `cmdServe` to avoid shadowing. main.zig: 1,041 → 972
+  lines (-69). Build clean, all tests passing.
+
 Done (Session 42):
 
 - ✓ Architecture review (3-session checkpoint). See notes below.
@@ -267,6 +275,77 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-07: Session 43 - Deduplicate main.zig
+
+Addressed the top recommendation from the session 42 architecture review:
+extract `daemonize()` and `connectAsViewer()` helpers to eliminate duplicated
+boilerplate in main.zig.
+
+### What Changed
+
+**main.zig (1,041 → 972 lines, -69)**
+
+Two new helper functions:
+
+**`daemonize()`** (10 lines): The setsid + close stdio + open /dev/null + dup2
+pattern that appeared identically in three places:
+- `cmdNew` child fork (line 326)
+- `maybeStartServe` child fork (line 787)
+- `cmdServe` daemonize fork (line 861)
+
+All three call sites replaced with `daemonize()`.
+
+**`connectAsViewer()`** (21 lines): The viewer handshake pattern (create Hello
+as viewer → send → read welcome → check denied → read welcome struct → skip
+full state) that appeared identically in three places:
+- `cmdClients` (lines 554-585)
+- `cmdKick` (lines 674-697)
+- `cmdKill` (lines 723-746)
+
+All three call sites replaced with `connectAsViewer()`. Error handling at call
+sites now uses `error.ConnectionDenied` to distinguish denial from connection
+failure.
+
+**Variable rename**: `var daemonize` in `cmdServe` renamed to `var
+run_as_daemon` to avoid shadowing the new `daemonize()` function.
+
+### Why This Matters
+
+- **Bug fix consistency**: A fix to the daemonize or handshake logic now applies
+  everywhere. Previously, a bug fix in one copy could miss the other two.
+- **Readability**: `cmdKick` dropped from ~50 lines to ~25. The intent (connect,
+  send kick, done) is immediately clear.
+- **main.zig back under 1,000 lines**: 972, down from 1,041.
+
+### Line Count Impact
+
+| File     | Before | After | Change  |
+| -------- | ------ | ----- | ------- |
+| main.zig | 1,041  | 972   | -69     |
+
+Total codebase: 15 files, ~5,752 lines (down from 5,821).
+
+### Testing
+
+- Build: Clean
+- Unit tests: All passing
+
+### Inbox Status
+
+| Item                     | Status    | Priority | Notes                    |
+| ------------------------ | --------- | -------- | ------------------------ |
+| main.zig dedup cleanup   | ✓ Done    | -        | Session 43               |
+| Mobile modifier buttons  | ○ Todo    | Medium   | Ctrl/Alt/Esc toolbar     |
+| Web refresh button       | ○ Todo    | Medium   | Close+reopen SSE         |
+| Cursor position (narrow) | ○ Todo    | Low      | Needs investigation      |
+| Session list SSE         | ○ Todo    | Low      | Reactive web session list|
+| Man page, readme         | ○ Todo    | Medium   | Documentation            |
+| Arch PKGBUILD            | ○ Todo    | Low      | Packaging                |
+| Render deduplication     | ✗ Skip    | -        | Not worth the complexity |
+| Brotli/gzip compression  | ✗ Skip    | -        | Not worth the complexity |
+
+---
 
 ## 2026-02-07: Session 41 - Autostart HTTP Daemon
 
