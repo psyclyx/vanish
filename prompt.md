@@ -15,7 +15,6 @@ Inbox: keep this up to date
 
 New:
 
-- config option / flag to autostart the http daemon when a session is started
 - for each size that we're rendering and sending of a particular type, perhaps
   we could deduplicate? larger viewers should get the benefits of smaller
   renders, even, making this even better.
@@ -33,6 +32,15 @@ Current:
 - Session list SSE (reactive in web).
 - Man page, readme. Minimal, to the point.
 - Arch PKGBUILD.
+
+Done (Session 41):
+
+- ✓ Autostart HTTP daemon (`--serve` / `-s` flag on `vanish new`, plus
+  `auto_serve` config option). When enabled, checks if HTTP server is already
+  listening on the configured port before spawning. If not running, forks a
+  daemonized HTTP server automatically. Supports both IPv4 and IPv6 bind
+  addresses. Config: `"serve": { "auto_serve": true }`. CLI:
+  `vanish new --serve -a zsh`.
 
 Done (Session 40):
 
@@ -255,6 +263,83 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-07: Session 41 - Autostart HTTP Daemon
+
+Implemented the inbox item: config option / flag to autostart the HTTP daemon
+when a session is started.
+
+### What Changed
+
+**config.zig:**
+
+- Added `auto_serve: bool = false` to `ServeConfig` struct
+- Config parser now handles `"auto_serve"` boolean in the `"serve"` object
+- `writeJson()` outputs the `auto_serve` field
+
+**main.zig:**
+
+- Added `--serve` / `-s` flag to `cmdNew()`
+- Added `maybeStartServe()`: checks if HTTP server is already running on the
+  configured port, forks a daemonized server if not
+- Added `isPortListening()`: probes the configured bind address and port via
+  TCP connect. Handles both IPv4 and IPv6 addresses.
+- Usage text updated to show `--serve` flag
+
+### How It Works
+
+1. User runs `vanish new --serve -a zsh` (or has `"auto_serve": true` in config)
+2. After the session daemon is started and ready, `maybeStartServe()` is called
+3. It tries to TCP connect to `cfg.serve.bind:cfg.serve.port` (default
+   127.0.0.1:7890)
+4. If connection succeeds → server is already running, nothing to do
+5. If connection fails → fork a child process that daemonizes and runs
+   `HttpServer.init() + run()` (same pattern as `vanish serve -d`)
+6. Parent continues to auto-attach (or exit if `--detach`)
+
+### Design Decisions
+
+- **Port probing over PID files**: No lock files, no state files, no cleanup
+  needed. Just try to connect. If something is listening, assume it's our
+  server. Simple and robust.
+- **Reuses existing daemonize pattern**: The fork + setsid + close stdio + run
+  pattern is identical to `cmdServe --daemonize`. No new abstractions.
+- **Config + CLI flag**: `auto_serve` in config means "always start server on
+  session creation." `--serve` flag means "start server this time." Either
+  triggers the same logic.
+- **IPv4 + IPv6**: `isPortListening` tries IPv4 first, then IPv6. Handles
+  `127.0.0.1`, `0.0.0.0`, `::1`, `::` correctly.
+
+### Usage
+
+```sh
+# One-time: start server with this session
+vanish new --serve -a zsh
+
+# Always: set in config
+# ~/.config/vanish/config.json:
+# { "serve": { "auto_serve": true } }
+vanish new -a zsh  # server starts automatically
+
+# Combine flags
+vanish new -s -a -d zsh  # serve + auto-name + detach
+```
+
+### Line Count Impact
+
+| File       | Before | After | Change  |
+| ---------- | ------ | ----- | ------- |
+| config.zig | 455    | 461   | +6      |
+| main.zig   | 974    | 1041  | +67     |
+| **Net**    |        |       | **+73** |
+
+### Testing
+
+- Build: Clean
+- Unit tests: All passing
+- Integration tests: 19/19 passing
+
+---
 
 ## 2026-02-07: Session 40 - Expand Naming Wordlists to 16 Per Bucket
 

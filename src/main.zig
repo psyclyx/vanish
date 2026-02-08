@@ -45,7 +45,7 @@ const usage_header =
 
 const usage_commands =
     \\Command usage:
-    \\  vanish new [--detach] [--auto-name] <name> <command> [args...]
+    \\  vanish new [--detach] [--auto-name] [--serve] <name> <command> [args...]
     \\  vanish attach [--primary] <name>
     \\  vanish send <name> <keys>
     \\  vanish list [--json]
@@ -250,12 +250,13 @@ pub fn main() !void {
 
 fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
     if (args.len < 1) {
-        try writeAll(STDERR_FILENO, "Usage: vanish new [--detach] [--auto-name] <name> <command> [args...]\n");
+        try writeAll(STDERR_FILENO, "Usage: vanish new [--detach] [--auto-name] [--serve] <name> <command> [args...]\n");
         std.process.exit(1);
     }
 
     var detach_mode = false;
     var auto_name = false;
+    var serve_flag = false;
     var arg_idx: usize = 0;
 
     // Parse flags
@@ -266,6 +267,9 @@ fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config
         } else if (std.mem.eql(u8, args[arg_idx], "--auto-name") or std.mem.eql(u8, args[arg_idx], "-a")) {
             auto_name = true;
             arg_idx += 1;
+        } else if (std.mem.eql(u8, args[arg_idx], "--serve") or std.mem.eql(u8, args[arg_idx], "-s")) {
+            serve_flag = true;
+            arg_idx += 1;
         } else {
             break;
         }
@@ -274,7 +278,7 @@ fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config
     // With --auto-name, we need at least a command; without it, name + command
     const min_args = if (auto_name) arg_idx + 1 else arg_idx + 2;
     if (args.len < min_args) {
-        try writeAll(STDERR_FILENO, "Usage: vanish new [--detach] [--auto-name] <name> <command> [args...]\n");
+        try writeAll(STDERR_FILENO, "Usage: vanish new [--detach] [--auto-name] [--serve] <name> <command> [args...]\n");
         std.process.exit(1);
     }
 
@@ -364,6 +368,11 @@ fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config
         var msg_buf: [128]u8 = undefined;
         const msg = std.fmt.bufPrint(&msg_buf, "{s}\n", .{session_name}) catch session_name;
         try writeAll(STDERR_FILENO, msg);
+    }
+
+    // Start HTTP server if --serve flag or auto_serve config
+    if (serve_flag or cfg.serve.auto_serve) {
+        maybeStartServe(alloc, cfg);
     }
 
     // Auto-attach unless --detach was specified
@@ -750,6 +759,65 @@ fn connectToSession(path: []const u8) !posix.socket_t {
     try posix.connect(sock, &addr.any, addr.getOsSockLen());
 
     return sock;
+}
+
+fn maybeStartServe(alloc: std.mem.Allocator, cfg: *const config.Config) void {
+    const port = cfg.serve.port;
+    const bind_addr = cfg.serve.bind orelse "127.0.0.1";
+
+    // Check if server is already running by trying to connect
+    if (isPortListening(bind_addr, port)) {
+        logVerbose("serve: HTTP server already running on {s}:{d}", .{ bind_addr, port });
+        return;
+    }
+
+    // Fork a daemonized HTTP server
+    const pid = posix.fork() catch |err| {
+        logVerbose("serve: failed to fork HTTP server: {}", .{err});
+        return;
+    };
+
+    if (pid != 0) {
+        // Parent: server is starting
+        logVerbose("serve: started HTTP server on {s}:{d}", .{ bind_addr, port });
+        return;
+    }
+
+    // Child: become daemon
+    _ = posix.setsid() catch {};
+    posix.close(0);
+    posix.close(1);
+    posix.close(2);
+    const devnull = posix.open("/dev/null", .{ .ACCMODE = .RDWR }, 0) catch std.process.exit(1);
+    _ = posix.dup2(devnull, 0) catch {};
+    _ = posix.dup2(devnull, 1) catch {};
+    _ = posix.dup2(devnull, 2) catch {};
+    if (devnull > 2) posix.close(devnull);
+
+    var server = HttpServer.init(alloc, cfg, bind_addr, port) catch std.process.exit(1);
+    defer server.deinit();
+    server.run() catch std.process.exit(1);
+    std.process.exit(0);
+}
+
+fn isPortListening(addr: []const u8, port: u16) bool {
+    // Try IPv4
+    if (std.net.Address.parseIp4(addr, port)) |sa| {
+        const sock = posix.socket(posix.AF.INET, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0) catch return false;
+        defer posix.close(sock);
+        posix.connect(sock, &sa.any, sa.getOsSockLen()) catch return false;
+        return true;
+    } else |_| {}
+
+    // Try IPv6
+    if (std.net.Address.parseIp6(addr, port)) |sa| {
+        const sock = posix.socket(posix.AF.INET6, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0) catch return false;
+        defer posix.close(sock);
+        posix.connect(sock, &sa.any, sa.getOsSockLen()) catch return false;
+        return true;
+    } else |_| {}
+
+    return false;
 }
 
 fn cmdServe(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {

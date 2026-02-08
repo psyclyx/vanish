@@ -4,6 +4,7 @@ const keybind = @import("keybind.zig");
 pub const ServeConfig = struct {
     bind: ?[]const u8 = null, // null means 127.0.0.1 + ::1
     port: u16 = 7890,
+    auto_serve: bool = false,
 };
 
 pub const Config = struct {
@@ -59,7 +60,8 @@ pub const Config = struct {
         } else {
             try writer.writeAll("null,\n");
         }
-        try writer.print("    \"port\": {d}\n", .{self.serve.port});
+        try writer.print("    \"port\": {d},\n", .{self.serve.port});
+        try writer.print("    \"auto_serve\": {}\n", .{self.serve.auto_serve});
         try writer.writeAll("  },\n");
 
         // Binds
@@ -255,6 +257,11 @@ fn parse(alloc: std.mem.Allocator, content: []const u8) ParseResult {
                     if (p > 0 and p <= 65535) {
                         config.serve.port = @intCast(p);
                     }
+                }
+            }
+            if (serve_val.object.get("auto_serve")) |auto_val| {
+                if (auto_val == .bool) {
+                    config.serve.auto_serve = auto_val.bool;
                 }
             }
         }
