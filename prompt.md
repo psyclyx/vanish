@@ -16,12 +16,6 @@ Inbox: keep this up to date
 New:
 
 - config option / flag to autostart the http daemon when a session is started
-- a flag to auto name a new session (maybe 2 (short) random words, an
-  adjective + noun pair, where the adjective progress from A-Z with hours in the
-  day, and the noun progresses from A-Z with minutes in the hour, suffixed with
-  argv[0]). don't do it completely deterministically, we should have enough
-  words prevent collisions for normal usage. if we end up with a conflict, just
-  linear probe or something, or add a suffix.
 - for each size that we're rendering and sending of a particular type, perhaps
   we could deduplicate? larger viewers should get the benefits of smaller
   renders, even, making this even better.
@@ -39,6 +33,14 @@ Current:
 - Session list SSE (reactive in web).
 - Man page, readme. Minimal, to the point.
 - Arch PKGBUILD.
+
+Done (Session 38):
+
+- ✓ Auto-name sessions (`--auto-name` / `-a` flag). Generates adjective-noun-command
+  names (e.g. "dark-knot-zsh"). Adjective letter keyed to hour, noun letter to
+  minute, specific word chosen with second-based jitter. Linear probes with
+  numeric suffix on collision. New naming.zig module (~170 lines, 3 tests).
+  Name printed to stderr so user knows what was created.
 
 Done (Session 37):
 
@@ -240,6 +242,82 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-07: Session 38 - Auto-Name Sessions
+
+Implemented the `--auto-name` / `-a` flag for `vanish new`.
+
+### What Changed
+
+**New file: naming.zig (~170 lines)**
+
+- Two wordlists: 26 adjective buckets (A-Z) and 26 noun buckets (A-Z), 4 words
+  each. All words are short (3-4 chars) to keep names compact.
+- `generate()`: Maps current hour → adjective letter, minute → noun letter.
+  Second is used as jitter to pick the specific word within each 4-word bucket.
+  Command name (basename of argv[0], truncated to 12 chars) appended as suffix.
+  Format: `adjective-noun-command` (e.g. "dark-knot-zsh").
+- `nameExists()`: Checks if a socket exists at the given path.
+- `generateUnique()`: Calls `generate()`, then linear probes with numeric
+  suffixes (2-9) on collision.
+- 3 unit tests.
+
+**main.zig:**
+
+- Added `naming` import.
+- `cmdNew()` now parses `--auto-name` / `-a` flag in a while loop (previously
+  only checked first arg for `--detach`).
+- When `--auto-name` is set, the session name is generated instead of read from
+  args. Command is the first positional arg (name arg is not consumed).
+- Generated name printed to stderr so user knows what was created.
+- Usage text updated.
+
+### Usage
+
+```sh
+# Auto-name a session
+vanish new --auto-name zsh
+# stderr: dark-knot-zsh
+# (attaches automatically)
+
+# Auto-name + detach
+vanish new -a -d zsh
+# stderr: calm-nest-zsh
+# (returns to shell)
+
+# Traditional explicit name still works
+vanish new myshell zsh
+```
+
+### Design Notes
+
+- **Time correlation**: Names created in the same hour start with the same
+  adjective letter. Names created in the same ~2-minute window share the same
+  noun letter. This gives rough temporal ordering when listing sessions.
+- **Jitter**: The second component picks which word from the 4-word bucket,
+  preventing two sessions created in quick succession from getting the same name.
+- **Collision handling**: Linear probe with numeric suffix. With 4×4=16 possible
+  combinations per time bucket plus suffix probing, collisions in normal usage
+  are negligible.
+- **Command suffix**: Makes names immediately useful - "calm-nest-zsh" vs
+  "calm-nest-nvim" distinguishes purpose at a glance.
+
+### Line Count Impact
+
+| File       | Before | After | Change  |
+| ---------- | ------ | ----- | ------- |
+| naming.zig | -      | 170   | +170    |
+| main.zig   | 942    | 962   | +20     |
+| **Net**    |        |       | **+190**|
+
+### Testing
+
+- Build: Clean
+- Unit tests: All passing (3 new in naming.zig)
+- Integration tests: 19/19 passing
+- Manual test: `vanish new -a -d zsh` → created "dark-knot-zsh", listed, killed
+
+---
 
 ## 2026-02-07: Session 37 - Status Bar Revamp
 

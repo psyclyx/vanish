@@ -7,6 +7,7 @@ const protocol = @import("protocol.zig");
 const VTerminal = @import("terminal.zig");
 const config = @import("config.zig");
 const paths = @import("paths.zig");
+const naming = @import("naming.zig");
 const Auth = @import("auth.zig");
 const HttpServer = @import("http.zig");
 
@@ -44,7 +45,7 @@ const usage_header =
 
 const usage_commands =
     \\Command usage:
-    \\  vanish new [--detach] <name> <command> [args...]
+    \\  vanish new [--detach] [--auto-name] <name> <command> [args...]
     \\  vanish attach [--primary] <name>
     \\  vanish send <name> <keys>
     \\  vanish list [--json]
@@ -248,30 +249,54 @@ pub fn main() !void {
 }
 
 fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
-    if (args.len < 2) {
-        try writeAll(STDERR_FILENO, "Usage: vanish new [--detach] <name> <command> [args...]\n");
+    if (args.len < 1) {
+        try writeAll(STDERR_FILENO, "Usage: vanish new [--detach] [--auto-name] <name> <command> [args...]\n");
         std.process.exit(1);
     }
 
     var detach_mode = false;
+    var auto_name = false;
     var arg_idx: usize = 0;
 
-    // Parse --detach flag
-    if (std.mem.eql(u8, args[0], "--detach") or std.mem.eql(u8, args[0], "-d")) {
-        detach_mode = true;
-        arg_idx = 1;
+    // Parse flags
+    while (arg_idx < args.len) {
+        if (std.mem.eql(u8, args[arg_idx], "--detach") or std.mem.eql(u8, args[arg_idx], "-d")) {
+            detach_mode = true;
+            arg_idx += 1;
+        } else if (std.mem.eql(u8, args[arg_idx], "--auto-name") or std.mem.eql(u8, args[arg_idx], "-a")) {
+            auto_name = true;
+            arg_idx += 1;
+        } else {
+            break;
+        }
     }
 
-    if (args.len < arg_idx + 2) {
-        try writeAll(STDERR_FILENO, "Usage: vanish new [--detach] <name> <command> [args...]\n");
+    // With --auto-name, we need at least a command; without it, name + command
+    const min_args = if (auto_name) arg_idx + 1 else arg_idx + 2;
+    if (args.len < min_args) {
+        try writeAll(STDERR_FILENO, "Usage: vanish new [--detach] [--auto-name] <name> <command> [args...]\n");
         std.process.exit(1);
     }
 
-    const session_name = args[arg_idx];
+    var name_buf: [64]u8 = undefined;
+    const session_name = if (auto_name) blk: {
+        // Command is the first non-flag arg (or after --)
+        var cmd_idx = arg_idx;
+        if (cmd_idx < args.len and std.mem.eql(u8, args[cmd_idx], "--")) cmd_idx += 1;
+        if (cmd_idx >= args.len) {
+            try writeAll(STDERR_FILENO, "Missing command\n");
+            std.process.exit(1);
+        }
+        const socket_dir = try paths.getDefaultSocketDir(alloc, cfg);
+        defer alloc.free(socket_dir);
+        break :blk naming.generateUnique(&name_buf, args[cmd_idx], socket_dir);
+    } else args[arg_idx];
+
     const socket_path = try paths.resolveSocketPath(alloc, session_name, cfg);
     defer alloc.free(socket_path);
 
-    var cmd_start: usize = arg_idx + 1;
+    // With --auto-name, command starts at arg_idx (no name arg consumed)
+    var cmd_start: usize = if (auto_name) arg_idx else arg_idx + 1;
     // Skip optional "--" separator
     if (cmd_start < args.len and std.mem.eql(u8, args[cmd_start], "--")) {
         cmd_start += 1;
@@ -333,6 +358,12 @@ fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config
         // Child closed pipe without writing = failed to start
         try writeAll(STDERR_FILENO, "Session failed to start\n");
         std.process.exit(1);
+    }
+
+    if (auto_name) {
+        var msg_buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&msg_buf, "{s}\n", .{session_name}) catch session_name;
+        try writeAll(STDERR_FILENO, msg);
     }
 
     // Auto-attach unless --detach was specified
