@@ -15,6 +15,12 @@ Inbox: keep this up to date
 
 New:
 
+- config option / flag to autostart the http daemon when a session is started
+- a flag to auto name a new session (maybe just like, adjective-noun), trying to
+  go from A-A to Z - Z? (have the adjective progress through A-Z (with some
+  randomness) with minutes in an hour, and have the noun track hours in a day
+  (24 is basically 26, right?)). don't duplicate names, but we can just like,
+  pick another one in case of conflict, should be fine.
 - revamp the status bar. it's a bit garish and dense, imagine a few alternatives
   (zellij, helix, mini.nvim all come to mind).
 
@@ -36,12 +42,20 @@ Current:
 - Man page, readme. Minimal, to the point.
 - Arch PKGBUILD.
 
+Done (Session 36):
+
+- ✓ Fixed Ctrl+Space leader key - The is_ctrl detection in client.zig only
+  covered bytes 1-26. Ctrl+Space (0x00) and Ctrl+\/]/^/_ (0x1C-0x1F) were
+  excluded, so they never matched as leader despite config parsing being
+  correct since session 28. One-line fix.
+- ✓ Architecture review (3-session checkpoint). See notes.
+
 Done (Session 35):
 
 - ✓ Fixed cell gaps in browser terminal. Each cell span now gets explicit width,
   height, and line-height matching measured character dimensions. Without this,
-  spans only covered text content area, leaving visible gaps between rows.
-  CSS + JS fix in index.html (+6 lines).
+  spans only covered text content area, leaving visible gaps between rows. CSS +
+  JS fix in index.html (+6 lines).
 
 Done (Session 34):
 
@@ -218,6 +232,223 @@ lightweight libghostty terminal session multiplexer with web access
 
 # Progress Notes
 
+## 2026-02-07: Session 36 - Ctrl+Space Fix + Architecture Review
+
+### Bug Fix: Ctrl+Space Leader Key
+
+The user reported Ctrl+Space still doesn't work as leader despite session 28
+claiming to fix it. Session 28 fixed config *parsing* (correctly storing 0x00 as
+the leader byte) but missed the actual input detection in client.zig.
+
+**Root cause:** `client.zig:131` had `const is_ctrl = byte >= 1 and byte <= 26`.
+This excludes 0x00 (Ctrl+Space) from being recognized as a control key. When
+Ctrl+Space arrives as byte 0x00, `is_ctrl` was `false`, so `isLeaderKey(0x00,
+false)` didn't match the config's `(0x00, true)`.
+
+**Fix:** Extended the range to also cover 0x00 and 0x1C-0x1F:
+`const is_ctrl = byte == 0 or (byte >= 1 and byte <= 26) or (byte >= 0x1C and byte <= 0x1F);`
+
+This was a classic case of fixing the parser but not the consumer. The config
+system, keybind state machine, and JSON serialization were all correct - only
+the byte-to-ctrl classification at the point of input was wrong.
+
+### Architecture Review (3-session checkpoint)
+
+Last review was session 33.
+
+### Codebase Stats
+
+| File         | Lines     | Change from S33 | Purpose                     |
+| ------------ | --------- | --------------- | --------------------------- |
+| main.zig     | 942       | 0               | CLI entry point              |
+| http.zig     | 898       | +36             | Web server, SSE, routing     |
+| client.zig   | 620       | 0               | Native client, viewport      |
+| auth.zig     | 556       | 0               | JWT/HMAC, OTP exchange       |
+| session.zig  | 526       | 0               | Daemon, poll loop            |
+| config.zig   | 454       | 0               | JSON config parsing          |
+| vthtml.zig   | 375       | 0               | VT→HTML, delta computation   |
+| terminal.zig | 335       | 0               | ghostty-vt wrapper           |
+| index.html   | 220       | +35             | Web frontend                 |
+| protocol.zig | 192       | 0               | Wire format                  |
+| keybind.zig  | 174       | 0               | Input state machine          |
+| pty.zig      | 140       | 0               | PTY operations               |
+| signal.zig   | 48        | 0               | Signal handling              |
+| paths.zig    | 43        | 0               | Shared utilities             |
+| **Total**    | **5,523** | **+71**         | 14 files                     |
+
+Build: Clean. Tests: All passing.
+
+### Codebase Health
+
+**Excellent.** Growth from session 33 to 36 is +71 lines, entirely from the
+web resize endpoint (http.zig +36) and frontend resize/measurement (index.html
++35). The Zig source files have been essentially unchanged for 6 sessions. This
+is a healthy sign - the core architecture is stable.
+
+### What's Working Well
+
+**1. Core is rock solid.** No changes needed to protocol, session, terminal,
+keybind, pty, signal, or paths in 6 sessions. These modules are done.
+
+**2. Module boundaries are excellent.** No file exceeds 942 lines. No circular
+dependencies. Each module has single responsibility. The dependency graph flows
+cleanly downward.
+
+**3. Web terminal is functional.** Delta streaming, resize, input routing
+through SSE client - all working. The architectural choice to route web input
+through the SSE client's session socket (session 32) was correct and simplified
+the code.
+
+**4. Bug density is low.** The Ctrl+Space bug was a classification oversight,
+not an architectural problem. The fix was a one-line change.
+
+### New Inbox Items Analysis
+
+**1. Autostart HTTP daemon on session start**
+
+Would require: a config flag (`"autostart_serve": true` or CLI
+`--serve`/`--with-http`), and `cmdNew()` spawning the HTTP server as a
+background process alongside the session daemon. Could fork twice (once for
+session daemon, once for HTTP server), or have the session daemon optionally
+embed the HTTP server.
+
+Assessment: The cleanest approach is a `--serve` flag on `vanish new` that
+forks an additional process for the HTTP server. Or better: a config option
+that makes `vanish new` automatically run `vanish serve` in the background if
+not already running. Check if a serve process exists first (PID file or try
+binding the port).
+
+Complexity: Low. Implementation is straightforward.
+
+**2. Auto-name sessions (adjective-noun, A→Z progression)**
+
+The user wants a `--auto-name` or similar flag that generates names like
+"amber-nest", progressing A→Z through the hour for adjectives and tracking
+hours for nouns. This is a fun, deterministic naming scheme.
+
+Design: Embed two wordlists (26 adjectives A-Z, 24-26 nouns A-Z). Map current
+minute (0-59) to letter index with some jitter. Map current hour (0-23) to
+noun index. Check for conflicts, pick adjacent if needed.
+
+Complexity: Low. Self-contained function, no architectural impact. Maybe 30-40
+lines for the wordlists + generation logic.
+
+**3. Revamp status bar**
+
+Current status bar: full-width inverse video bar showing session name (left)
+and role (right). User says it's "garish and dense."
+
+Alternatives to consider:
+
+- **Zellij style**: Tab-like segments, subtle colors, only key info. Bottom
+  bar with mode indicator and session name.
+- **Helix style**: Minimal mode indicator on the left, file/position info on
+  the right. Very clean, muted colors.
+- **mini.nvim style**: Ultra-minimal, just colored mode word + filename. No
+  full-width bar, just the text needed.
+
+Recommendation: Go with a helix-like approach. Instead of full inverse video
+bar, use subtle colored text. Show mode only when relevant (viewer vs primary
+only when it matters). The status bar should feel like it belongs to a terminal
+tool, not a full IDE.
+
+Possible redesign:
+```
+ vanish ─ mysession                              viewer ─ 80×24
+```
+With muted colors (dim white, maybe a subtle accent for the session name).
+No inverse video. Just text.
+
+Or even more minimal - only show when something is noteworthy. If you're the
+primary on a normal-sized session, show nothing. If you're a viewer, show
+"viewer" somewhere unobtrusive.
+
+**4. Render deduplication across viewer sizes**
+
+The idea: if we're rendering 80×24 and 120×50 for two viewers, the 80×24
+render could be derived from the 120×50 render (it's a subset). Currently
+each SSE client has its own ScreenBuffer and does its own diff against the
+VTerminal.
+
+Assessment: The current approach is already efficient. Each ScreenBuffer is
+~7.5KB. The diff computation is O(cols × rows) per client, which is trivial
+(< 2000 cells). The actual VTerminal reading is the shared part, and we
+already only have one VTerminal per session.
+
+The optimization would save: one vthtml.updateFromVTerm() call per additional
+viewer of the same or smaller size. Given that we expect few concurrent web
+viewers, this optimization would add complexity for negligible benefit.
+
+Verdict: Not worth it. The current per-client ScreenBuffer approach is already
+O(n) where n is cells, and the constant is tiny.
+
+**5. Brotli compression on HTTP server**
+
+Would reduce SSE payload sizes. The cells JSON is repetitive (lots of
+`data-x`, `data-y`, `<span>` patterns). Brotli would compress well.
+
+Assessment: This requires linking a brotli library or implementing compression.
+Zig doesn't have brotli in std. Could use gzip (available in std.compress) as
+a simpler alternative. The `Accept-Encoding` header negotiation is
+straightforward.
+
+Complexity: Medium. Need to handle content negotiation, buffer management for
+compressed output, and flush semantics for SSE (each event must be a complete
+compressed frame). SSE + compression has subtleties around flushing.
+
+Verdict: Nice-to-have, not urgent. The current payloads are small (delta
+updates are typically a few hundred bytes). Could use gzip from std instead of
+requiring an external brotli dependency.
+
+### Simple vs Complected Analysis
+
+**Simple (good):**
+
+- Everything from previous reviews remains simple
+- The Ctrl+Space fix shows the system is well-factored: the bug was isolated
+  to one line in one file
+
+**Watch items:**
+
+- index.html at 220 lines. Adding mobile modifier buttons will push it past
+  250. Consider splitting JS into a separate file when that happens.
+- The "autostart serve" feature could add complexity to cmdNew(). Keep the
+  logic clean - check if server is running, spawn if not, don't try to embed
+  the server in the session daemon.
+
+**No complected code found.** The architecture remains clean.
+
+### Inbox Status
+
+| Item                     | Status   | Priority | Notes                       |
+| ------------------------ | -------- | -------- | --------------------------- |
+| Ctrl+Space leader        | ✓ Done   | -        | Session 36                  |
+| Autostart HTTP daemon    | ○ Todo   | Medium   | Config flag + spawn logic   |
+| Auto-name sessions       | ○ Todo   | Low      | Fun, self-contained         |
+| Revamp status bar        | ○ Todo   | Medium   | Design first, then impl    |
+| Render deduplication     | ✗ Skip   | -        | Not worth the complexity    |
+| Brotli/gzip compression  | ○ Todo   | Low      | Nice-to-have                |
+| Mobile modifier buttons  | ○ Todo   | Medium   | Ctrl/Alt/Esc toolbar        |
+| Web refresh button       | ○ Todo   | Medium   | Close+reopen SSE, simple    |
+| Cursor position (narrow) | ○ Todo   | Low      | Needs investigation         |
+| Session list SSE         | ○ Todo   | Low      | Reactive web session list   |
+| Man page, readme         | ○ Todo   | Medium   | Documentation               |
+| Arch PKGBUILD            | ○ Todo   | Low      | Packaging                   |
+
+### Recommendations for Next Sessions
+
+1. **Session 37:** Status bar revamp. Design and implement a cleaner, more
+   minimal status bar. This affects both native experience and user perception.
+   Good design task.
+
+2. **Session 38:** Auto-name sessions. Fun feature, self-contained, low risk.
+   Also a good time to add the `--serve` flag for autostarting the HTTP daemon.
+
+3. **Session 39 (review):** Mobile modifier buttons for web terminal. By then
+   we'll have the status bar sorted and can focus on the web experience.
+
+---
+
 ## 2026-02-07: Session 35 - Fix Cell Gaps in Browser Terminal
 
 Fixed the user-reported visual bug: gaps between rows in the web terminal.
@@ -261,8 +492,8 @@ Total codebase: ~5,524 lines.
 
 ### What's Next
 
-- Session 36 (review): Architecture review. Assess mobile experience, status
-  bar revamp options, render deduplication design.
+- Session 36 (review): Architecture review. Assess mobile experience, status bar
+  revamp options, render deduplication design.
 
 ---
 
