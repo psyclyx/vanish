@@ -128,7 +128,7 @@ const Client = struct {
         var i: usize = 0;
         while (i < buf.len) {
             const byte = buf[i];
-            const is_ctrl = byte >= 1 and byte <= 26;
+            const is_ctrl = byte == 0 or (byte >= 1 and byte <= 26) or (byte >= 0x1C and byte <= 0x1F);
 
             if (self.keys.processKey(byte, is_ctrl)) |action| {
                 try self.executeAction(action);
