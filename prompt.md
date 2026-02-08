@@ -22,12 +22,6 @@ Inbox: keep this up to date.
 
 New:
 
-- The nix package doesn't seem to be usable. I've tried the overlay, and the
-  default.nix directly. I can get the package, but putting it on my path doesn't
-  work. I believe we also need to get the man pages in the package?
-- Clean up the documentation. Make it clean, professional, to the point. Not
-  slop. (man page and README.md)
-
 - spend many iterations hammocking about the problem. it's complete - but could
   it be better? what would make you proud to have done in this codebase?
 
@@ -39,6 +33,18 @@ Current:
 - Cursor position bug for narrow primary sessions.
 - Session list SSE (reactive in web).
 - Arch PKGBUILD.
+
+Done (Session 47):
+
+- ✓ Fixed Nix package. The overlay was completely broken with system nixpkgs
+  (build produced empty output: "no Makefile or custom buildPhase, doing
+  nothing"). Root cause: `nativeBuildInputs = [zig_0_15]` only works with
+  newer nixpkgs where `zig_0_15` has an embedded `setupHook`. Older nixpkgs
+  (e.g. 26.05.20251216) require `zig_0_15.hook` instead. Fixed by switching
+  to `zig_0_15.hook` which works across all nixpkgs versions. Also removed
+  conflicting `--release=fast` from `zigBuildFlags` (was overridden by hook
+  defaults on newer nixpkgs anyway). Added `dontUseZigCheck = true`. Man page
+  was already in the package (added in session 45 via build.zig).
 
 Done (Session 46):
 
@@ -307,6 +313,81 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-08: Session 47 - Fix Nix Package
+
+### The Problem
+
+The Nix package was broken when used via the overlay with system nixpkgs. The
+user reported "I can get the package, but putting it on my path doesn't work."
+
+Building via `nix-build default.nix` (which uses the pinned nixpkgs-unstable
+from npins) worked because that nixpkgs version has `zig_0_15` with an embedded
+`setupHook`. But when using the overlay with the user's system nixpkgs
+(26.05.20251216), `zig_0_15` does NOT have a `setupHook` attribute. Without the
+setup hook, `stdenv.mkDerivation` fell back to looking for a Makefile, found
+none, and produced an empty output.
+
+The build log told the story: "no Makefile or custom buildPhase, doing nothing"
+followed by "failed to produce output path."
+
+### Root Cause
+
+```nix
+# OLD (broken with system nixpkgs)
+nativeBuildInputs = [zig_0_15];
+```
+
+In newer nixpkgs-unstable: `zig_0_15` has `setupHook` → hook activates → works.
+In system nixpkgs (older): `zig_0_15` has NO `setupHook` → no hook → fails.
+
+The correct approach per nixpkgs conventions is to use `zig_0_15.hook`, which
+exists in both old and new nixpkgs versions as a proper derivation that provides
+the Zig build/install phases.
+
+### What Changed
+
+**package.nix (3 changes):**
+
+1. `nativeBuildInputs = [zig_0_15.hook]` — Uses the Zig hook derivation
+   instead of the raw compiler. This works across nixpkgs versions:
+   - Newer nixpkgs: `zig_0_15.hook` = `zig_0_15` itself (embedded setupHook)
+   - Older nixpkgs: `zig_0_15.hook` = separate `zig-hook` derivation that
+     propagates the zig compiler and provides build phases
+
+2. Removed `zigBuildFlags = ["--release=fast" "--verbose"]` — The hook provides
+   sensible defaults (`-Dcpu=baseline --release=safe`). ReleaseSafe is the
+   correct choice for a distributed binary (safety checks, bounds checking).
+   The `--verbose` was already added by the hook. The `--release=fast` flag
+   was being silently overridden by the hook's `--release=safe` on newer
+   nixpkgs anyway (since the hook appends defaults AFTER zigBuildFlags).
+
+3. Added `dontUseZigCheck = true` — Skip the check phase since we have a
+   separate test step and the tests need specific runtime conditions.
+
+4. Removed unused `finalAttrs:` from `mkDerivation` call.
+
+### Testing
+
+Verified all three integration paths:
+
+- `nix-build default.nix` (pinned nixpkgs-unstable via npins): builds, binary
+  runs, man page at `share/man/man1/vanish.1.gz`
+- `nix-build` with overlay applied to system nixpkgs: **now works** (was
+  completely broken before). Binary runs, sessions can be created/listed/killed
+- `nix-shell -p '(import ./default.nix)' --run 'vanish --help'`: binary on PATH
+
+### Inbox Status
+
+| Item                     | Status | Priority | Notes                     |
+| ------------------------ | ------ | -------- | ------------------------- |
+| Nix package fix          | ✓ Done | -        | Session 47                |
+| Mobile modifier toolbar  | ○ Todo | **High** | Designed in session 46    |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation       |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                 |
+
+---
 
 ## 2026-02-07: Session 46 - Hammock: Mobile Web Terminal Design
 

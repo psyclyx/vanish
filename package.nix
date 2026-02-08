@@ -33,7 +33,7 @@
       cd $src
       zig build --fetch=all
 
-      # We don't actually need most of these, but ghostty pulls them in at build time, which makes the sandbox unhappy.
+      # Ghostty pulls these in at build time even though vanish doesn't need them.
       zig fetch "https://deps.files.ghostty.org/libxev-34fa50878aec6e5fa8f532867001ab3c36fae23e.tar.gz"
       zig fetch "https://deps.files.ghostty.org/vaxis-7dbb9fd3122e4ffad262dd7c151d80d863b68558.tar.gz"
       zig fetch "https://github.com/vancluever/z2d/archive/refs/tags/v0.10.0.tar.gz"
@@ -61,7 +61,7 @@
       mv $ZIG_GLOBAL_CACHE_DIR/p $out
     '';
 in
-  stdenv.mkDerivation (finalAttrs: {
+  stdenv.mkDerivation {
     inherit pname version src;
 
     postUnpack = ''
@@ -70,9 +70,9 @@ in
       ln -s ${deps} $ZIG_GLOBAL_CACHE_DIR/p
     '';
 
-    nativeBuildInputs = [zig_0_15];
+    nativeBuildInputs = [zig_0_15.hook];
 
-    zigBuildFlags = ["--release=fast" "--verbose"];
+    dontUseZigCheck = true;
 
     meta = with lib; {
       description = "Lightweight terminal session multiplexer using libghostty";
@@ -80,4 +80,4 @@ in
       platforms = platforms.linux;
       mainProgram = "vanish";
     };
-  })
+  }
