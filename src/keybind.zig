@@ -87,23 +87,34 @@ pub const State = struct {
         const writer = fbs.writer();
 
         if (self.in_leader) {
-            try writer.writeAll("\x1b[7m");
-            try writer.writeAll(" ^A: ");
+            // Show curated bindings, not all. Pan binds omitted (shown in help).
+            // Deduplicate by action - only show first bind per action.
+            try writer.writeAll("\x1b[2m \xe2\x94\x80\x1b[0m "); // dim " ─ "
+            var seen = [_]bool{false} ** @typeInfo(Action).@"enum".fields.len;
             var first = true;
             for (self.config.binds) |bind| {
-                if (bind.action == .cancel) continue;
-                if (!first) try writer.writeAll(" | ");
-                first = false;
-                if (bind.ctrl) {
-                    try writer.print("^{c}:{s}", .{ bind.key + 'A' - 1, bind.desc });
-                } else {
-                    try writer.print("{c}:{s}", .{ bind.key, bind.desc });
+                const idx = @intFromEnum(bind.action);
+                if (isHintBind(bind.action) and !seen[idx]) {
+                    seen[idx] = true;
+                    if (!first) try writer.writeAll("\x1b[2m\xe2\x94\x82\x1b[0m"); // dim "│"
+                    first = false;
+                    if (bind.ctrl) {
+                        try writer.print("\x1b[1m^{c}\x1b[22m {s} ", .{ bind.key + 'A' - 1, bind.desc });
+                    } else {
+                        try writer.print("\x1b[1m{c}\x1b[22m {s} ", .{ bind.key, bind.desc });
+                    }
                 }
             }
-            try writer.writeAll(" \x1b[0m");
         }
 
         return fbs.getWritten();
+    }
+
+    fn isHintBind(action: Action) bool {
+        return switch (action) {
+            .detach, .toggle_status, .takeover, .help, .scrollback => true,
+            else => false,
+        };
     }
 };
 

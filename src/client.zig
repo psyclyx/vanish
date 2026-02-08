@@ -233,7 +233,7 @@ const Client = struct {
 
     fn showHint(self: *Client, hint: []const u8) void {
         var buf: [512]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "\x1b7\x1b[{d};1H{s}\x1b8", .{ self.rows, hint }) catch return;
+        const msg = std.fmt.bufPrint(&buf, "\x1b7\x1b[{d};1H\x1b[K{s}\x1b8", .{ self.rows, hint }) catch return;
         _ = posix.write(STDOUT, msg) catch {};
     }
 
@@ -273,29 +273,45 @@ const Client = struct {
         const w = fbs.writer();
 
         w.writeAll("\x1b7") catch return; // save cursor
-        w.print("\x1b[{d};1H", .{self.rows}) catch return; // move to last line
-        w.writeAll("\x1b[7m") catch return; // inverse video
+        w.print("\x1b[{d};1H\x1b[K", .{self.rows}) catch return; // move to last line, clear it
 
-        w.print(" {s} ", .{self.session_name}) catch return;
-        var left_len = self.session_name.len + 2;
+        // Left: session name in dim context
+        w.writeAll("\x1b[2m \xe2\x94\x80 \x1b[0m") catch return; // dim " ─ "
+        w.writeAll(self.session_name) catch return;
 
-        // Show viewport offset if panning is active
+        // Right side: build info string, then pad
+        var right_buf: [64]u8 = undefined;
+        var right_fbs = std.io.fixedBufferStream(&right_buf);
+        const rw = right_fbs.writer();
+        var right_cols: usize = 0;
+
         if (self.viewport.needsPanning() and (self.viewport.offset_x > 0 or self.viewport.offset_y > 0)) {
-            const offset_len = std.fmt.count("[+{d},+{d}] ", .{ self.viewport.offset_x, self.viewport.offset_y });
-            w.print("[+{d},+{d}] ", .{ self.viewport.offset_x, self.viewport.offset_y }) catch return;
-            left_len += offset_len;
+            const n = std.fmt.count("+{d},+{d}  ", .{ self.viewport.offset_x, self.viewport.offset_y });
+            rw.print("+{d},+{d}  ", .{ self.viewport.offset_x, self.viewport.offset_y }) catch {};
+            right_cols += n;
         }
 
-        const right_text = switch (self.role) {
-            .primary => " primary ",
-            .viewer => " viewer ",
-        };
-        const right_len = right_text.len;
-        const total_len = left_len + right_len;
-        const padding: usize = if (self.cols > total_len) self.cols - total_len else 0;
+        if (self.role == .viewer) {
+            rw.writeAll("viewer  ") catch {};
+            right_cols += 8;
+        }
+
+        if (self.viewport.needsPanning()) {
+            // "NNNxNNN " - use ascii x to keep byte/col count equal
+            const n = std.fmt.count("{d}x{d} ", .{ self.viewport.session_cols, self.viewport.session_rows });
+            rw.print("{d}x{d} ", .{ self.viewport.session_cols, self.viewport.session_rows }) catch {};
+            right_cols += n;
+        }
+
+        const right = right_fbs.getWritten();
+        // left visible len: 3 (" ─ ") + session_name.len
+        const left_len = 3 + self.session_name.len;
+        const total = left_len + right_cols;
+        const padding: usize = if (self.cols > total) self.cols - total else 1;
 
         w.writeByteNTimes(' ', padding) catch return;
-        w.writeAll(right_text) catch return;
+        w.writeAll("\x1b[2m") catch return; // dim for right side
+        w.writeAll(right) catch return;
         w.writeAll("\x1b[0m\x1b8") catch return; // reset, restore cursor
 
         _ = posix.write(STDOUT, fbs.getWritten()) catch {};
