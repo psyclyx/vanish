@@ -11,15 +11,15 @@ Ongoing:
   What's simple, and what's complected? Think about the long term. You'll have
   to maintain this, don't make that hard on yourself.
 
-Inbox: keep this up to date
+Inbox: keep this up to date.
 
 New:
 
-- for each size that we're rendering and sending of a particular type, perhaps
-  we could deduplicate? larger viewers should get the benefits of smaller
-  renders, even, making this even better.
+- Clean up the documentation. Make it clean, professional, to the point. Not
+  slop. (man page and README.md)
 
-- nice-to-have: brotli compression on the http server. make it even faster!
+- spend many iterations hammocking about the problem. it's complete - but could
+  it be better? what would make you proud to have done in this codebase?
 
 Current:
 
@@ -28,16 +28,32 @@ Current:
   bad.
 - Cursor position bug for narrow primary sessions.
 - Session list SSE (reactive in web).
-- Man page, readme. Minimal, to the point.
 - Arch PKGBUILD.
+
+Done (Session 46):
+
+- ✓ Hammock session: mobile web terminal design. Designed the modifier button
+  toolbar, responsive layout changes, and touch interaction model. Identified
+  the minimal set of changes needed. See notes below.
+
+Done (Session 45):
+
+- ✓ Documentation cleanup. Rewrote README.md: removed outdated info, added web
+  access section, configuration section, all 11 commands documented in a table.
+  98 → 151 lines, denser and more complete. Created man page (doc/vanish.1):
+  covers all commands, flags, keybindings, configuration, environment variables,
+  and files. Renders cleanly. Rewrote DESIGN.md: updated protocol table (added
+  KillSession 0x09), added Web Terminal section, updated source file listing to
+  all 15 files, removed stale "Implementation Status" checklist. 225 → 133
+  lines.
 
 Done (Session 44):
 
-- ✓ Web refresh button. Added "Refresh" button to terminal header that
-  closes and reopens the SSE connection, getting a fresh keyframe. Extracted
+- ✓ Web refresh button. Added "Refresh" button to terminal header that closes
+  and reopens the SSE connection, getting a fresh keyframe. Extracted
   `openSse()` helper to deduplicate SSE setup between `connect()` and
-  `refresh()`. Resets `isPrimary` on refresh since the new connection starts
-  as viewer. index.html: 220 → 231 lines (+11). No server changes needed.
+  `refresh()`. Resets `isPrimary` on refresh since the new connection starts as
+  viewer. index.html: 220 → 231 lines (+11). No server changes needed.
 
 Done (Session 43):
 
@@ -65,9 +81,9 @@ Done (Session 40):
 - ✓ Expanded naming.zig wordlists from 4 to 16 words per bucket (832 total
   words, up from 208). Fixed Q-nouns duplicate. Changed array type from
   `[]const []const u8` to `[16][]const u8` for compile-time size enforcement.
-  Decorrelated adjective/noun selection: adjective uses `second % 16`, noun
-  uses `(epoch_secs / 4) % 16`. Added uniqueness test that validates all 52
-  buckets have no duplicate words. naming.zig: 209 -> 166 lines (denser format).
+  Decorrelated adjective/noun selection: adjective uses `second % 16`, noun uses
+  `(epoch_secs / 4) % 16`. Added uniqueness test that validates all 52 buckets
+  have no duplicate words. naming.zig: 209 -> 166 lines (denser format).
 
 Done (Session 39):
 
@@ -282,6 +298,321 @@ lightweight libghostty terminal session multiplexer with web access
 
 # Progress Notes
 
+## 2026-02-07: Session 46 - Hammock: Mobile Web Terminal Design
+
+The user asked for "many iterations hammocking about the problem" and to think
+about what would make this codebase something to be proud of. This session
+focuses on the mobile web experience - the highest priority remaining feature.
+
+### The Problem
+
+The web terminal works well on desktop but is barely usable on mobile. The
+target audience "falls back to termux if bad." That's a high bar. To beat
+termux for quick SSH-style access, the web terminal needs to be:
+
+1. Functional enough to run commands, edit files, use vim/nano
+2. Not annoying - no accidental taps, no obscured terminal
+3. Fast - no input lag, no rendering jank
+
+What it does NOT need to be: a full termux replacement. This is for quick
+access from a phone/tablet when you don't have termux installed. The user
+already said "not UX slop" - no unnecessary chrome, no "app-like" UI nonsense.
+
+### What's Currently Broken on Mobile
+
+1. **No way to send Ctrl+anything.** Mobile keyboards don't have Ctrl. Without
+   Ctrl+C, Ctrl+D, Ctrl+A (the leader key!), the terminal is nearly useless.
+   This is the critical gap.
+
+2. **No way to send Escape, Tab, or function keys.** Same issue. Mobile
+   keyboards lack these. Can't exit vim, can't tab-complete, can't use Ctrl+Z.
+
+3. **Font is too small.** 14px monospace on a phone is unreadable. Need larger
+   default on small screens, or let the user control it.
+
+4. **Touch targets are too small.** The header buttons are tiny. The OTP input
+   works fine but the terminal header buttons need bigger hit areas.
+
+5. **Soft keyboard may cover the terminal.** When the keyboard appears, the
+   visible terminal area shrinks dramatically. Need to handle this.
+
+6. **No way to scroll the terminal output.** `overflow: auto` on `#term`
+   should allow scrolling, but on mobile this might conflict with the
+   viewport/page scrolling.
+
+### Design: Modifier Button Toolbar
+
+The core addition: a floating toolbar with modifier buttons. Here's the design.
+
+**Buttons needed (minimal set):**
+
+- **Ctrl** - Toggle. Tapping Ctrl makes the next keypress send Ctrl+key.
+  Auto-resets after one keypress (like a phone's Shift key).
+- **Esc** - One-shot. Sends `\x1b` immediately on tap.
+- **Tab** - One-shot. Sends `\t` immediately on tap.
+- **Arrows** - Left/Right/Up/Down. These are often missing or awkward on mobile
+  keyboards. But four arrow buttons add a lot of chrome...
+
+**Rejected alternatives:**
+
+- Alt button: Rarely needed in terminal use. Skip.
+- F-key row: Too many buttons, rarely used. Skip. (Can always use escape
+  sequences typed manually.)
+- Separate Ctrl+C / Ctrl+D / Ctrl+Z buttons: Too specific. A generic Ctrl
+  toggle covers all cases with one button.
+- Swipe gestures for arrows: Discoverable only if documented, fragile, conflict
+  with scrolling. Skip.
+
+**Arrow key decision:** Include them. Four small buttons in a row. On mobile,
+arrow keys are the most painful gap after Ctrl. Tab-completing a path and then
+moving the cursor is basic terminal usage. Without arrows, editing command lines
+is miserable.
+
+**Toolbar layout:**
+
+```
+[ Esc ] [ Tab ] [ Ctrl ] [ ← ] [ → ] [ ↑ ] [ ↓ ]
+```
+
+Position: Bottom of screen, above the soft keyboard. Fixed position. Thin
+(~40px height). Semi-transparent dark background. Only visible on touch devices
+(or togglable).
+
+**Detection:** Use `'ontouchstart' in window` or similar to detect touch
+capability. Show toolbar only on touch devices. This avoids cluttering the
+desktop experience.
+
+**Ctrl toggle behavior:**
+
+1. User taps Ctrl button → button highlights (active state)
+2. User types a key on keyboard → key sent as Ctrl+key, Ctrl auto-deactivates
+3. If user taps Ctrl again before typing → Ctrl deactivates (cancel)
+4. This mirrors iOS/Android Shift behavior. Intuitive.
+
+**One-shot button behavior (Esc, Tab, Arrows):**
+
+1. User taps button → character sent immediately
+2. No toggle state. Tap = send.
+
+### Design: Responsive Layout
+
+**Font scaling:**
+
+- Desktop (>768px): 14px (current)
+- Tablet (481-768px): 13px
+- Phone (≤480px): 12px
+
+Or: just let the user pinch-to-zoom and rely on `measureChar()` to adapt. The
+grid rendering already uses measured dimensions. If the user zooms in, the
+characters get bigger, `measureChar()` reports bigger dimensions, and
+`sendResize()` sends fewer cols/rows to the session.
+
+Actually, this is elegant. **Don't fight the browser's zoom.** Let the user
+control font size with pinch-to-zoom. The existing `measureChar()` +
+`sendResize()` pipeline handles it automatically. Just make sure we don't
+prevent zoom with `maximum-scale=1` or `user-scalable=no`.
+
+Current viewport meta: `width=device-width, initial-scale=1.0`. Good - no
+zoom restrictions.
+
+**Header on mobile:**
+
+Make header buttons taller (min-height: 44px for Apple touch guidelines).
+Consider icon-only buttons on small screens to save horizontal space.
+
+**Soft keyboard handling:**
+
+The `visualViewport` API reports the visible area excluding the keyboard. Use
+`visualViewport.resize` event to trigger `sendResize()`. This way, when the
+keyboard appears, we automatically resize the session to fit the remaining
+visible area.
+
+```js
+if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', sendResize);
+}
+```
+
+And `sendResize()` should use `visualViewport.height` instead of
+`term.clientHeight` when available, to get the actual visible area.
+
+### Design: Touch Interaction
+
+**Focus management:**
+
+When user taps the terminal area, show the soft keyboard. The `#term` div
+already has `tabindex="0"` which makes it focusable. But we might need an
+invisible `<textarea>` or `<input>` to reliably trigger the mobile keyboard,
+since `div[tabindex]` doesn't always trigger it.
+
+Common pattern in web terminals (xterm.js, hterm): hidden textarea that
+captures input. The div is purely for display. The textarea triggers the
+keyboard and captures keystrokes.
+
+**Current approach:** `term.onkeydown = handleKey`. This works on desktop but
+is unreliable on mobile. Mobile browsers fire different events:
+
+- `keydown` fires for some keys but not all on mobile
+- `input` / `beforeinput` events are more reliable on mobile
+- Composition events (for CJK input) complicate things
+
+**Pragmatic approach:** Add a hidden `<input>` element that stays focused. On
+mobile, this triggers the keyboard. Use the `input` event to capture typed
+characters. Keep `keydown` for special keys (Enter, Backspace, arrows). This
+is the standard web terminal pattern.
+
+But... is this scope creep? The user's target audience falls back to termux.
+The bar is "functional enough to be useful, not annoying." Do we need
+production-grade IME support? No. Do we need the keyboard to appear when you
+tap the terminal? Yes.
+
+**Minimal approach:** Keep `keydown` handler. Add the modifier toolbar. Add a
+`touchstart` listener on the terminal that focuses the `#term` div. Test on
+actual mobile browsers. If `keydown` works (it does on most modern
+Android/iOS browsers for ASCII), ship it. If not, add the hidden input later.
+
+### Implementation Plan (For Future Sessions)
+
+**Session 47: Modifier toolbar**
+
+Add the touch toolbar to index.html:
+
+1. Detect touch device: `const isTouch = 'ontouchstart' in window`
+2. If touch, show toolbar div at bottom of terminal view
+3. Toolbar: Esc, Tab, Ctrl (toggle), ←, →, ↑, ↓
+4. Wire Ctrl toggle into handleKey
+5. Wire one-shot buttons to send input directly
+6. CSS: position above keyboard, min-height 44px touch targets
+7. Use `visualViewport` API for resize handling on mobile
+
+Estimated: ~50-60 lines added to index.html. No server changes.
+
+**Session 48: Architecture review**
+
+Review the mobile implementation. Test on actual devices.
+
+**Session 49: Polish**
+
+- Fix any mobile issues found in testing
+- Header button touch targets
+- Consider the hidden input approach if keydown is unreliable
+
+### What Would Make Me Proud
+
+Stepping back from mobile specifically: what would make this codebase something
+to be proud of?
+
+**What's already good:**
+
+- The architecture is clean. 15 files, clear boundaries, no circular deps.
+- The protocol is simple and stable. 9+8 message types, 5-byte header.
+- The native client is polished. Leader key, status bar, viewport panning.
+- The web terminal works. Delta streaming, auth, takeover.
+- The naming system is delightful. "dark-knot-zsh" is a good name.
+- The code is short. ~5,800 lines total for a terminal multiplexer with web
+  access. tmux is 70,000+.
+
+**What would push it over the line:**
+
+1. **The mobile experience working well.** This is the remaining big gap.
+   When you can SSH into your box from your phone via the web terminal and
+   actually get work done, that's a meaningful capability that dtach/tmux
+   don't offer.
+
+2. **The Arch PKGBUILD.** Making it installable via `makepkg -si` or an AUR
+   package would make it real. Currently it's a project; with packaging it's
+   a tool.
+
+3. **The cursor position bug being fixed.** This is a correctness issue.
+   Narrow primary sessions with wrong cursor position undermines trust.
+
+4. **Session list SSE.** The web session list polling feels janky. When you
+   create a session from the terminal and the web UI updates live, that's
+   polished.
+
+**What I'd cut:**
+
+- Brotli/gzip compression: already decided to skip. Correct.
+- Render deduplication: already decided to skip. Correct.
+- Splitting index.html into separate JS: not yet needed at 230 lines. The
+  modifier toolbar will push it to ~290. Still manageable in one file if the
+  code stays clean.
+
+### Inbox Status
+
+| Item                     | Status | Priority | Notes                     |
+| ------------------------ | ------ | -------- | ------------------------- |
+| Mobile modifier toolbar  | ○ Todo | **High** | Designed this session     |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation       |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                 |
+
+---
+
+## 2026-02-07: Session 45 - Documentation Cleanup
+
+Addressed the user's request: "Clean up the documentation. Make it clean,
+professional, to the point. Not slop."
+
+### What Changed
+
+**README.md (98 → 151 lines, complete rewrite)**
+
+The old README was outdated - missing web terminal, configuration, auto-naming,
+kill command, serve command, otp/revoke commands. The new README:
+
+- Opens with a one-line description and a two-sentence explanation
+- Quick start section with 5 commands showing the core workflow
+- All 11 commands in a single reference table
+- Keybindings table (complete)
+- Web access section with auth flow
+- Configuration section with example JSON and all leader key formats/actions
+- Removed the "Implementation Status" checklist (project is feature-complete)
+- Removed verbose design section (that's what DESIGN.md is for)
+
+**doc/vanish.1 (new, man page)**
+
+Created a proper Unix man page covering:
+
+- SYNOPSIS, DESCRIPTION
+- All 11 COMMANDS with flags
+- Global OPTIONS
+- KEYBINDINGS section
+- CONFIGURATION with example JSON
+- ENVIRONMENT (XDG_RUNTIME_DIR, XDG_CONFIG_HOME)
+- FILES
+- SEE ALSO (dtach, tmux, screen)
+
+Renders cleanly with `man ./doc/vanish.1`.
+
+**DESIGN.md (225 → 133 lines, rewrite)**
+
+The old DESIGN.md had stale information:
+
+- Missing KillSession (0x09) from protocol table
+- File structure listed only 8 of 15 source files
+- "Implementation Status" section with incomplete checklist
+- Missing Web Terminal section entirely
+- CLI examples used old syntax (`vanish new <name> -- <command>`)
+- "Leader Key: Ctrl-A (configurable when config is implemented)" - config has
+  been implemented since session 16
+
+The new DESIGN.md is focused: architecture diagram, protocol tables, web
+terminal overview, viewport panning, source file listing, design principles.
+No checklists, no open questions, no implementation status.
+
+### Inbox Status
+
+| Item                     | Status | Priority | Notes                     |
+| ------------------------ | ------ | -------- | ------------------------- |
+| Documentation            | ✓ Done | -        | Session 45                |
+| Mobile modifier buttons  | ○ Todo | Medium   | Ctrl/Alt/Esc toolbar      |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation       |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                 |
+
+---
+
 ## 2026-02-07: Session 44 - Web Refresh Button
 
 Added a "Refresh" button to the web terminal that force-reconnects the SSE
@@ -350,16 +681,16 @@ Total codebase: 15 files, ~5,763 lines.
 
 ### Inbox Status
 
-| Item                     | Status    | Priority | Notes                    |
-| ------------------------ | --------- | -------- | ------------------------ |
-| Web refresh button       | ✓ Done    | -        | Session 44               |
-| Mobile modifier buttons  | ○ Todo    | Medium   | Ctrl/Alt/Esc toolbar     |
-| Cursor position (narrow) | ○ Todo    | Low      | Needs investigation      |
-| Session list SSE         | ○ Todo    | Low      | Reactive web session list|
-| Man page, readme         | ○ Todo    | Medium   | Documentation            |
-| Arch PKGBUILD            | ○ Todo    | Low      | Packaging                |
-| Render deduplication     | ✗ Skip    | -        | Not worth the complexity |
-| Brotli/gzip compression  | ✗ Skip    | -        | Not worth the complexity |
+| Item                     | Status | Priority | Notes                     |
+| ------------------------ | ------ | -------- | ------------------------- |
+| Web refresh button       | ✓ Done | -        | Session 44                |
+| Mobile modifier buttons  | ○ Todo | Medium   | Ctrl/Alt/Esc toolbar      |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation       |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list |
+| Man page, readme         | ○ Todo | Medium   | Documentation             |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                 |
+| Render deduplication     | ✗ Skip | -        | Not worth the complexity  |
+| Brotli/gzip compression  | ✗ Skip | -        | Not worth the complexity  |
 
 ---
 
@@ -377,6 +708,7 @@ Two new helper functions:
 
 **`daemonize()`** (10 lines): The setsid + close stdio + open /dev/null + dup2
 pattern that appeared identically in three places:
+
 - `cmdNew` child fork (line 326)
 - `maybeStartServe` child fork (line 787)
 - `cmdServe` daemonize fork (line 861)
@@ -384,8 +716,9 @@ pattern that appeared identically in three places:
 All three call sites replaced with `daemonize()`.
 
 **`connectAsViewer()`** (21 lines): The viewer handshake pattern (create Hello
-as viewer → send → read welcome → check denied → read welcome struct → skip
-full state) that appeared identically in three places:
+as viewer → send → read welcome → check denied → read welcome struct → skip full
+state) that appeared identically in three places:
+
 - `cmdClients` (lines 554-585)
 - `cmdKick` (lines 674-697)
 - `cmdKill` (lines 723-746)
@@ -394,7 +727,8 @@ All three call sites replaced with `connectAsViewer()`. Error handling at call
 sites now uses `error.ConnectionDenied` to distinguish denial from connection
 failure.
 
-**Variable rename**: `var daemonize` in `cmdServe` renamed to `var
+**Variable rename**: `var daemonize` in `cmdServe` renamed to
+`var
 run_as_daemon` to avoid shadowing the new `daemonize()` function.
 
 ### Why This Matters
@@ -407,9 +741,9 @@ run_as_daemon` to avoid shadowing the new `daemonize()` function.
 
 ### Line Count Impact
 
-| File     | Before | After | Change  |
-| -------- | ------ | ----- | ------- |
-| main.zig | 1,041  | 972   | -69     |
+| File     | Before | After | Change |
+| -------- | ------ | ----- | ------ |
+| main.zig | 1,041  | 972   | -69    |
 
 Total codebase: 15 files, ~5,752 lines (down from 5,821).
 
@@ -420,17 +754,17 @@ Total codebase: 15 files, ~5,752 lines (down from 5,821).
 
 ### Inbox Status
 
-| Item                     | Status    | Priority | Notes                    |
-| ------------------------ | --------- | -------- | ------------------------ |
-| main.zig dedup cleanup   | ✓ Done    | -        | Session 43               |
-| Mobile modifier buttons  | ○ Todo    | Medium   | Ctrl/Alt/Esc toolbar     |
-| Web refresh button       | ○ Todo    | Medium   | Close+reopen SSE         |
-| Cursor position (narrow) | ○ Todo    | Low      | Needs investigation      |
-| Session list SSE         | ○ Todo    | Low      | Reactive web session list|
-| Man page, readme         | ○ Todo    | Medium   | Documentation            |
-| Arch PKGBUILD            | ○ Todo    | Low      | Packaging                |
-| Render deduplication     | ✗ Skip    | -        | Not worth the complexity |
-| Brotli/gzip compression  | ✗ Skip    | -        | Not worth the complexity |
+| Item                     | Status | Priority | Notes                     |
+| ------------------------ | ------ | -------- | ------------------------- |
+| main.zig dedup cleanup   | ✓ Done | -        | Session 43                |
+| Mobile modifier buttons  | ○ Todo | Medium   | Ctrl/Alt/Esc toolbar      |
+| Web refresh button       | ○ Todo | Medium   | Close+reopen SSE          |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation       |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list |
+| Man page, readme         | ○ Todo | Medium   | Documentation             |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                 |
+| Render deduplication     | ✗ Skip | -        | Not worth the complexity  |
+| Brotli/gzip compression  | ✗ Skip | -        | Not worth the complexity  |
 
 ---
 
@@ -452,8 +786,8 @@ when a session is started.
 - Added `--serve` / `-s` flag to `cmdNew()`
 - Added `maybeStartServe()`: checks if HTTP server is already running on the
   configured port, forks a daemonized server if not
-- Added `isPortListening()`: probes the configured bind address and port via
-  TCP connect. Handles both IPv4 and IPv6 addresses.
+- Added `isPortListening()`: probes the configured bind address and port via TCP
+  connect. Handles both IPv4 and IPv6 addresses.
 - Usage text updated to show `--serve` flag
 
 ### How It Works
@@ -535,10 +869,12 @@ Added `bucket_size` constant to avoid magic number 16.
 **Word selection math:**
 
 Before (4-word buckets):
+
 - Adjective: `second % 4` (cycles every 4 seconds)
 - Noun: `(second / 4) % 4` (cycles every 16 seconds, correlated with adj)
 
 After (16-word buckets):
+
 - Adjective: `second % 16` (cycles every 16 seconds, covers full bucket)
 - Noun: `(epoch_secs / 4) % 16` (decorrelated from second, shifts every 4s)
 
@@ -568,6 +904,7 @@ duplicates within each bucket using O(n^2) comparison.
 ### Combinatorics
 
 With 16 words per bucket:
+
 - 16 adj × 16 noun = 256 combinations per letter-pair
 - 26 × 26 = 676 letter-pairs (hour × minute mapping)
 - 256 × 676 = 173,056 unique adj-noun combinations
@@ -639,8 +976,8 @@ to the rest of the system. Three tests. Only imported by main.zig. This is how
 new features should land.
 
 **3. Status bar revamp (session 37) improved UX significantly.** Moving from
-full inverse video to dim text was the right call. The curated leader hint
-(5 actions vs 14) reduces noise without losing discoverability.
+full inverse video to dim text was the right call. The curated leader hint (5
+actions vs 14) reduces noise without losing discoverability.
 
 **4. Bug density remains very low.** No bugs reported in sessions 37-38. The
 only fix in this window was the Ctrl+Space fix in session 36, which was a
@@ -655,40 +992,39 @@ reduces the effective vocabulary. Will be fixed when expanding to 16 words.
 
 **2. naming.zig word selection math with 16-word buckets**
 
-Currently: `adj_bucket[second % 4]` and `noun_bucket[(second / 4) % 4]`.
-With 16 words: `second % 16` covers 0-15 directly (60 seconds, 16 words =
-each word maps to ~3.75 seconds). For nouns: `(second / 4) % 16` gives 0-14
-range (since second/4 maxes at 14). Need to rethink the jitter for 16-word
-buckets.
+Currently: `adj_bucket[second % 4]` and `noun_bucket[(second / 4) % 4]`. With 16
+words: `second % 16` covers 0-15 directly (60 seconds, 16 words = each word maps
+to ~3.75 seconds). For nouns: `(second / 4) % 16` gives 0-14 range (since
+second/4 maxes at 14). Need to rethink the jitter for 16-word buckets.
 
-Better approach with 16 words: use `second % 16` for adjective selection and
-a different time component (or hash) for noun selection. Since we have 16×16 =
-256 combinations per letter-pair per command, collisions become very unlikely.
-Could use `(epoch_secs / 4) % 16` for nouns to get different cycling.
+Better approach with 16 words: use `second % 16` for adjective selection and a
+different time component (or hash) for noun selection. Since we have 16×16 = 256
+combinations per letter-pair per command, collisions become very unlikely. Could
+use `(epoch_secs / 4) % 16` for nouns to get different cycling.
 
 **3. executeAction repetition in client.zig**
 
 Lines 173-212: Eight scroll actions all follow the same pattern:
-`self.viewport.moveX(); self.renderViewport(); self.renderStatusBar();`. This
-is 40 lines that could be 5 with a helper or grouping the scroll actions.
+`self.viewport.moveX(); self.renderViewport(); self.renderStatusBar();`. This is
+40 lines that could be 5 with a helper or grouping the scroll actions.
 
 Not critical, but it's the kind of thing that Rich Hickey would notice as
-"incidental complexity." The viewport operation varies, but the render +
-status pattern is identical across all 8.
+"incidental complexity." The viewport operation varies, but the render + status
+pattern is identical across all 8.
 
 ### New Inbox Items Analysis
 
 **1. 16 words per bucket (naming.zig)**
 
-Currently 4 words × 26 letters × 2 lists = 208 words.
-With 16 words: 16 × 26 × 2 = 832 words.
+Currently 4 words × 26 letters × 2 lists = 208 words. With 16 words: 16 × 26 × 2
+= 832 words.
 
 This is a content task, not an architecture task. The module structure doesn't
 change. The word selection math needs adjustment (see issue #2 above).
 
 Combinatorics: 16 adj × 16 noun × N commands = 256N unique names per
-letter-pair. With 26×26 = 676 letter-pairs, that's 173,056 × N names before
-any suffix probing. Collisions become essentially impossible in normal use.
+letter-pair. With 26×26 = 676 letter-pairs, that's 173,056 × N names before any
+suffix probing. Collisions become essentially impossible in normal use.
 
 Assessment: Straightforward. ~350 lines of wordlists (up from ~110), plus a
 small math change. naming.zig will grow to ~450 lines, which is fine for a
@@ -699,17 +1035,17 @@ Priority: Do it next session (40). The user explicitly asked for it.
 **2. Autostart HTTP daemon**
 
 Still in inbox from session 36. The cleanest approach: a `--serve` flag on
-`vanish new` that checks if an HTTP server is already running (try binding
-the port or checking a PID file), and spawns one if not.
+`vanish new` that checks if an HTTP server is already running (try binding the
+port or checking a PID file), and spawns one if not.
 
 Alternative: config option `"auto_serve": true`. Checked in cmdNew().
 
 Implementation: ~30-40 lines in main.zig. Need to decide: fork a separate
 process (like the session daemon), or embed in the session daemon.
 
-Embedding in the session daemon would mean each session runs its own HTTP
-server on a different port. That's wrong - the HTTP server should be shared
-across all sessions. So it must be a separate process.
+Embedding in the session daemon would mean each session runs its own HTTP server
+on a different port. That's wrong - the HTTP server should be shared across all
+sessions. So it must be a separate process.
 
 Flow: `vanish new --serve -a zsh` → fork session daemon → check if HTTP server
 is running → if not, fork HTTP server → attach.
@@ -719,8 +1055,8 @@ Priority: Medium. Useful but not blocking anything.
 **3. Render deduplication across viewer sizes**
 
 Analyzed in session 36, verdict was "not worth it." The per-client ScreenBuffer
-is ~7.5KB and the diff is O(cells), which is trivial. The optimization would
-add complexity for negligible benefit with few concurrent web viewers.
+is ~7.5KB and the diff is O(cells), which is trivial. The optimization would add
+complexity for negligible benefit with few concurrent web viewers.
 
 Assessment unchanged. Skip.
 
@@ -730,8 +1066,8 @@ Also analyzed in session 36. SSE + compression has flush semantics issues. The
 current delta payloads are small (few hundred bytes typically). Not worth the
 complexity.
 
-Could revisit if someone reports slow web terminal over high-latency links.
-But even then, the delta approach already minimizes data transfer.
+Could revisit if someone reports slow web terminal over high-latency links. But
+even then, the delta approach already minimizes data transfer.
 
 Assessment unchanged. Skip unless user reports performance issues.
 
@@ -751,29 +1087,29 @@ Assessment unchanged. Skip unless user reports performance issues.
   generation or compression.
 
 - client.zig executeAction scroll repetition (noted above). Consider a
-  `handleScroll(comptime fn)` helper if adding more scroll variants, but
-  don't refactor now since the current 8 are stable.
+  `handleScroll(comptime fn)` helper if adding more scroll variants, but don't
+  refactor now since the current 8 are stable.
 
 - index.html at 220 lines. Mobile modifier buttons will push this past 250.
-  Previous reviews noted splitting JS into a separate file at that point.
-  Still valid advice.
+  Previous reviews noted splitting JS into a separate file at that point. Still
+  valid advice.
 
 **No complected code found.** Architecture remains clean.
 
 ### Inbox Status
 
-| Item                     | Status | Priority  | Notes                       |
-| ------------------------ | ------ | --------- | --------------------------- |
-| 16 words per bucket      | ○ Todo | **High**  | User explicitly asked       |
-| Autostart HTTP daemon    | ○ Todo | Medium    | Config flag + spawn logic   |
-| Render deduplication     | ✗ Skip | -         | Not worth the complexity    |
-| Brotli/gzip compression  | ✗ Skip | -         | Not worth the complexity    |
-| Mobile modifier buttons  | ○ Todo | Medium    | Ctrl/Alt/Esc toolbar        |
-| Web refresh button       | ○ Todo | Medium    | Close+reopen SSE            |
-| Cursor position (narrow) | ○ Todo | Low       | Needs investigation         |
-| Session list SSE         | ○ Todo | Low       | Reactive web session list   |
-| Man page, readme         | ○ Todo | Medium    | Documentation               |
-| Arch PKGBUILD            | ○ Todo | Low       | Packaging                   |
+| Item                     | Status | Priority | Notes                     |
+| ------------------------ | ------ | -------- | ------------------------- |
+| 16 words per bucket      | ○ Todo | **High** | User explicitly asked     |
+| Autostart HTTP daemon    | ○ Todo | Medium   | Config flag + spawn logic |
+| Render deduplication     | ✗ Skip | -        | Not worth the complexity  |
+| Brotli/gzip compression  | ✗ Skip | -        | Not worth the complexity  |
+| Mobile modifier buttons  | ○ Todo | Medium   | Ctrl/Alt/Esc toolbar      |
+| Web refresh button       | ○ Todo | Medium   | Close+reopen SSE          |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation       |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list |
+| Man page, readme         | ○ Todo | Medium   | Documentation             |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                 |
 
 ### Recommendations for Next Sessions
 
@@ -4443,6 +4779,7 @@ auth, naming, vthtml, pty, main) cover the correctness-critical paths.
 **1. Daemonization boilerplate duplicated 3× in main.zig**
 
 The 9-line setsid/close/devnull/dup2 block appears identically at:
+
 - Lines 326-336 (cmdNew child fork)
 - Lines 787-795 (maybeStartServe child fork)
 - Lines 861-869 (cmdServe daemonize fork)
@@ -4454,6 +4791,7 @@ function would eliminate 18 lines and make intent clearer.
 
 The pattern: create viewer Hello → send → read welcome → check denied → read
 welcome struct → skip full state appears near-identically in:
+
 - cmdClients (lines 554-585)
 - cmdKick (lines 674-697)
 - cmdKill (lines 723-746)
@@ -4464,13 +4802,13 @@ Each copy is ~25 lines. A `connectAsViewer(socket_path)` helper returning
 **3. connectToSession duplicated across 3 files**
 
 The UNIX socket connect function exists in:
+
 - main.zig:754 (connectToSession)
 - http.zig:889 (connectToSession)
 - client.zig:576 (connectSocket)
 
-All three are functionally identical. This could live in paths.zig alongside
-the other shared utilities, though the current duplication is mild (~10 lines
-each).
+All three are functionally identical. This could live in paths.zig alongside the
+other shared utilities, though the current duplication is mild (~10 lines each).
 
 **4. main.zig has crossed 1,000 lines**
 
@@ -4478,9 +4816,8 @@ main.zig grew from 973 (session 39) to 1,041. It now handles 11 CLI commands
 plus the autostart serve logic. The `cmdNew` function alone is 132 lines.
 
 This isn't critical - CLI entry points are naturally large - but it's worth
-noting as the largest file. The duplication issues (#1 and #2 above) account
-for ~70 of those lines. Addressing the duplication would bring it back under
-1,000.
+noting as the largest file. The duplication issues (#1 and #2 above) account for
+~70 of those lines. Addressing the duplication would bring it back under 1,000.
 
 **5. executeAction scroll repetition in client.zig**
 
@@ -4517,6 +4854,7 @@ urgent since these actions are stable and unlikely to change.
 **1. Session 43: Extract daemonize() and connectAsViewer() helpers in main.zig**
 
 This is the most impactful cleanup available. Two small helper functions would:
+
 - Remove ~50 lines of duplication
 - Bring main.zig back under 1,000 lines
 - Make cmdNew, cmdKick, cmdKill, cmdClients, cmdServe all more readable
@@ -4537,14 +4875,14 @@ modifiers done and can document everything together.
 
 ### Inbox Status
 
-| Item                     | Status | Priority  | Notes                          |
-| ------------------------ | ------ | --------- | ------------------------------ |
-| main.zig dedup cleanup   | ○ Todo | **High**  | 3× daemonize, 3× handshake    |
-| Mobile modifier buttons  | ○ Todo | Medium    | Ctrl/Alt/Esc toolbar           |
-| Web refresh button       | ○ Todo | Medium    | Close+reopen SSE               |
-| Cursor position (narrow) | ○ Todo | Low       | Needs investigation            |
-| Session list SSE         | ○ Todo | Low       | Reactive web session list      |
-| Man page, readme         | ○ Todo | Medium    | Documentation                  |
-| Arch PKGBUILD            | ○ Todo | Low       | Packaging                      |
-| Render deduplication     | ✗ Skip | -         | Not worth the complexity       |
-| Brotli/gzip compression  | ✗ Skip | -         | Not worth the complexity       |
+| Item                     | Status | Priority | Notes                      |
+| ------------------------ | ------ | -------- | -------------------------- |
+| main.zig dedup cleanup   | ○ Todo | **High** | 3× daemonize, 3× handshake |
+| Mobile modifier buttons  | ○ Todo | Medium   | Ctrl/Alt/Esc toolbar       |
+| Web refresh button       | ○ Todo | Medium   | Close+reopen SSE           |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation        |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list  |
+| Man page, readme         | ○ Todo | Medium   | Documentation              |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                  |
+| Render deduplication     | ✗ Skip | -        | Not worth the complexity   |
+| Brotli/gzip compression  | ✗ Skip | -        | Not worth the complexity   |
