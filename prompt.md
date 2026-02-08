@@ -25,6 +25,14 @@ Current:
 - Man page, readme. Minimal, to the point.
 - Arch PKGBUILD.
 
+Done (Session 34):
+
+- ✓ Web terminal resize + runtime char measurement. Replaced hardcoded
+  charWidth/charHeight with runtime font measurement via probe element.
+  Implemented /resize endpoint (was a stub) - routes through SSE client's
+  session socket like input/takeover. Browser sends resize on window change and
+  after takeover. http.zig: 862→898 (+36), index.html: 185→215 (+30).
+
 Done (Session 33):
 
 - ✓ Architecture review (3-session checkpoint). Codebase stable at 5,452 lines
@@ -191,6 +199,84 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-07: Session 34 - Web Terminal Resize + Char Measurement
+
+Addressed the foundational piece for mobile support: runtime character dimension
+measurement and a working `/resize` endpoint.
+
+### The Problem
+
+1. **Hardcoded character dimensions**: `charWidth = 8.4, charHeight = 17` in
+   index.html assumed a specific font rendering. Different browsers, font sizes,
+   and devices would have wrong cell positioning.
+
+2. **Stubbed `/resize` endpoint**: `handleResize()` accepted the request but did
+   nothing - just returned `{ok: true}`. When a web client takes over as
+   primary, the session had no way to know the browser's terminal size.
+
+3. **No resize on window change**: Resizing the browser window or rotating a
+   mobile device didn't update the session's terminal dimensions.
+
+### The Fix
+
+**index.html (185 → 215 lines, +30):**
+
+- `measureChar()`: Creates a hidden probe `<span>` inside the terminal
+  container, measures its `getBoundingClientRect()` width/height, removes it.
+  Called on connect and before each resize computation.
+- `sendResize()`: Computes cols/rows from `#term` container dimensions divided
+  by measured char size. POSTs `COLSxROWS` to `/resize` if dimensions changed.
+  Only sends when client is primary.
+- Window `resize` event listener calls `sendResize()`.
+- After successful takeover, `sendResize()` is called to inform the session of
+  the browser's terminal size.
+- Added `currentSession` state variable to track connected session name.
+
+**http.zig (862 → 898 lines, +36):**
+
+- `handleResize()` now parses the `COLSxROWS` body format, validates dimensions,
+  finds the primary SSE client for the session, and sends a
+  `protocol.ClientMsg.resize` through its `session_fd`. Same routing pattern as
+  `handleInput` and `handleTakeover`.
+- Auth scope checking added (same pattern as other endpoints).
+- Returns 409 if no primary SSE client exists.
+
+### How It Works (Full Flow)
+
+1. User opens web terminal, connects to session as viewer
+2. `measureChar()` measures actual monospace character dimensions
+3. User starts typing → auto-takeover makes them primary
+4. `sendResize()` fires → computes cols/rows from viewport → POSTs to `/resize`
+5. Server parses dimensions, sends `protocol.Resize` through SSE session socket
+6. Session daemon resizes PTY and terminal, notifies all viewers
+7. On browser window resize, `sendResize()` recomputes and sends if changed
+
+### Line Count Impact
+
+| File       | Before | After | Change |
+| ---------- | ------ | ----- | ------ |
+| http.zig   | 862    | 898   | +36    |
+| index.html | 185    | 215   | +30    |
+| **Net**    |        |       | **+66**|
+
+Total codebase: ~5,518 lines.
+
+### Testing
+
+- Build: Clean
+- Unit tests: All passing
+
+### What's Next
+
+This is foundational for mobile support. Next steps:
+
+1. **Session 35**: Refresh keybind (Ctrl+A r) for native + refresh button for
+   web. Quick wins for garbled text issue.
+2. **Session 36 (review)**: Architecture review. Mobile modifier buttons
+   (Ctrl, Alt, Esc, Tab toolbar for touch devices). Assess resize in practice.
+
+---
 
 ## 2026-02-07: Session 33 - Architecture Review (3-session checkpoint)
 

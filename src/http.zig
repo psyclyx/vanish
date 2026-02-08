@@ -496,18 +496,54 @@ fn handleInput(self: *HttpServer, client: *HttpClient, headers: []const u8, body
 }
 
 fn handleResize(self: *HttpServer, client: *HttpClient, headers: []const u8, body: []const u8, session_name: []const u8) !void {
-    _ = body;
-    _ = session_name;
-
     const payload = self.validateAuth(headers) catch {
         try self.sendError(client, 401, "Unauthorized");
         return;
     };
     defer if (payload.session) |s| self.alloc.free(s);
 
-    // Resize is handled per-SSE client, not globally
-    // For now, just acknowledge
-    try self.sendJson(client, "{\"ok\":true}");
+    if (payload.scope == .session) {
+        if (payload.session) |allowed| {
+            if (!std.mem.eql(u8, session_name, allowed)) {
+                try self.sendError(client, 403, "Session not allowed");
+                return;
+            }
+        }
+    }
+
+    // Parse cols and rows from body (format: "COLSxROWS", e.g. "80x24")
+    const sep = std.mem.indexOfScalar(u8, body, 'x') orelse {
+        try self.sendError(client, 400, "Invalid format (expected COLSxROWS)");
+        return;
+    };
+    const cols = std.fmt.parseInt(u16, body[0..sep], 10) catch {
+        try self.sendError(client, 400, "Invalid cols");
+        return;
+    };
+    const rows = std.fmt.parseInt(u16, body[sep + 1 ..], 10) catch {
+        try self.sendError(client, 400, "Invalid rows");
+        return;
+    };
+
+    if (cols == 0 or rows == 0) {
+        try self.sendError(client, 400, "Dimensions must be non-zero");
+        return;
+    }
+
+    // Find SSE client for this session that is primary, send resize through its connection
+    for (self.sse_clients.items) |*sse| {
+        if (std.mem.eql(u8, sse.session_name, session_name) and sse.is_primary) {
+            const resize = protocol.Resize{ .cols = cols, .rows = rows };
+            protocol.writeStruct(sse.session_fd, @intFromEnum(protocol.ClientMsg.resize), resize) catch {
+                try self.sendError(client, 500, "Failed to send resize");
+                return;
+            };
+            try self.sendJson(client, "{\"ok\":true}");
+            return;
+        }
+    }
+
+    try self.sendError(client, 409, "No active primary connection (use takeover first)");
 }
 
 fn handleTakeover(self: *HttpServer, client: *HttpClient, headers: []const u8, session_name: []const u8) !void {

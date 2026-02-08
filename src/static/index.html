@@ -79,8 +79,21 @@
         let sse = null;
         let isPrimary = false;
         let termCols = 80, termRows = 24;
-        const charWidth = 8.4, charHeight = 17;  // Approximate monospace char size
+        let charWidth = 8.4, charHeight = 17;
+        let currentSession = null;
         const cellMap = new Map();  // "x,y" -> DOM element
+
+        // Measure actual character dimensions from rendered font
+        function measureChar() {
+            const term = document.getElementById('term');
+            const probe = document.createElement('span');
+            probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;';
+            probe.textContent = 'X';
+            term.appendChild(probe);
+            charWidth = probe.getBoundingClientRect().width;
+            charHeight = probe.getBoundingClientRect().height;
+            term.removeChild(probe);
+        }
 
         // Check auth on load
         fetch('/api/sessions').then(r => r.ok ? showSessions(r.json()) : null);
@@ -99,11 +112,13 @@
             document.getElementById('terminal').classList.remove('hidden');
             document.getElementById('session-name').textContent = name;
             isPrimary = false;
+            currentSession = name;
 
             const term = document.getElementById('term');
             const grid = document.getElementById('term-grid');
             grid.innerHTML = '';
             cellMap.clear();
+            measureChar();
             term.focus();
             term.onkeydown = e => handleKey(e, name);
 
@@ -162,14 +177,29 @@
         function disconnect() {
             sse?.close();
             sse = null;
+            currentSession = null;
             document.getElementById('terminal').classList.add('hidden');
             document.getElementById('sessions').classList.remove('hidden');
         }
 
+        function sendResize() {
+            if (!currentSession || !isPrimary) return;
+            const term = document.getElementById('term');
+            measureChar();
+            const cols = Math.floor(term.clientWidth / charWidth);
+            const rows = Math.floor(term.clientHeight / charHeight);
+            if (cols > 0 && rows > 0 && (cols !== termCols || rows !== termRows)) {
+                fetch(`/api/sessions/${encodeURIComponent(currentSession)}/resize`,
+                    { method: 'POST', body: `${cols}x${rows}` });
+            }
+        }
+
+        window.addEventListener('resize', sendResize);
+
         function takeover() {
             const name = document.getElementById('session-name').textContent;
             fetch(`/api/sessions/${encodeURIComponent(name)}/takeover`, { method: 'POST' })
-                .then(r => { if (r.ok) isPrimary = true; });
+                .then(r => { if (r.ok) { isPrimary = true; sendResize(); } });
         }
 
         function handleKey(e, session) {
