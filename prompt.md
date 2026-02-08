@@ -15,7 +15,6 @@ Inbox: keep this up to date
 
 New:
 
-- Let's try and have 16 words per bucket.
 - config option / flag to autostart the http daemon when a session is started
 - for each size that we're rendering and sending of a particular type, perhaps
   we could deduplicate? larger viewers should get the benefits of smaller
@@ -34,6 +33,15 @@ Current:
 - Session list SSE (reactive in web).
 - Man page, readme. Minimal, to the point.
 - Arch PKGBUILD.
+
+Done (Session 40):
+
+- ✓ Expanded naming.zig wordlists from 4 to 16 words per bucket (832 total
+  words, up from 208). Fixed Q-nouns duplicate. Changed array type from
+  `[]const []const u8` to `[16][]const u8` for compile-time size enforcement.
+  Decorrelated adjective/noun selection: adjective uses `second % 16`, noun
+  uses `(epoch_secs / 4) % 16`. Added uniqueness test that validates all 52
+  buckets have no duplicate words. naming.zig: 209 -> 166 lines (denser format).
 
 Done (Session 39):
 
@@ -247,6 +255,87 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-07: Session 40 - Expand Naming Wordlists to 16 Per Bucket
+
+Addressed the user's explicit request: "Let's try and have 16 words per bucket."
+
+### What Changed
+
+**naming.zig: Wordlist expansion**
+
+- Adjective buckets: 4 → 16 words each (416 total adjectives)
+- Noun buckets: 4 → 16 words each (416 total nouns)
+- Total vocabulary: 208 → 832 words
+
+**Array type change:**
+
+Changed from `[26][]const []const u8` (runtime-sized inner slices) to
+`[26][16][]const u8` (compile-time fixed-size buckets). This means the compiler
+enforces exactly 16 words per bucket. A bucket with 15 or 17 words is now a
+compile error, not a runtime surprise.
+
+Added `bucket_size` constant to avoid magic number 16.
+
+**Word selection math:**
+
+Before (4-word buckets):
+- Adjective: `second % 4` (cycles every 4 seconds)
+- Noun: `(second / 4) % 4` (cycles every 16 seconds, correlated with adj)
+
+After (16-word buckets):
+- Adjective: `second % 16` (cycles every 16 seconds, covers full bucket)
+- Noun: `(epoch_secs / 4) % 16` (decorrelated from second, shifts every 4s)
+
+The old noun selection was `(second / 4) % bucket_len`, which with 4-word
+buckets gave range 0-3 (fine), but was correlated with the adjective since both
+derived from `second`. With 16-word buckets, using `second` for both would
+create a fixed offset pattern. Using `epoch_secs / 4` breaks the correlation -
+the noun cycles independently from the adjective.
+
+**Bugs fixed:**
+
+- Q-nouns: "quay" appeared twice. Now all 16 Q-nouns are unique.
+- I-nouns: "ivory" appeared twice. Fixed.
+
+**Quality improvements:**
+
+- Removed non-adjectives from adjective list (e.g., "elm", "awl", "alms")
+- Removed non-nouns from noun list (e.g., "upon", "utile")
+- All words are recognizable English (X-words get creative license)
+
+**New test:**
+
+Added `"all buckets have exactly 16 unique words"` test that iterates all 52
+buckets, verifies each has exactly `bucket_size` entries, and checks for
+duplicates within each bucket using O(n^2) comparison.
+
+### Combinatorics
+
+With 16 words per bucket:
+- 16 adj × 16 noun = 256 combinations per letter-pair
+- 26 × 26 = 676 letter-pairs (hour × minute mapping)
+- 256 × 676 = 173,056 unique adj-noun combinations
+- × N commands = 173,056 × N total unique names
+
+Collisions are effectively impossible in normal use.
+
+### Line Count Impact
+
+| File       | Before | After | Change |
+| ---------- | ------ | ----- | ------ |
+| naming.zig | 209    | 166   | -43    |
+
+The file is actually shorter despite 4× more words because: removed per-line
+comments (letter comments moved to end of line), removed doc comment verbosity,
+and the fixed-size array declaration is more compact.
+
+### Testing
+
+- Build: Clean
+- Unit tests: All passing (4 tests in naming.zig, including new uniqueness test)
+
+---
 
 ## 2026-02-07: Session 39 - Architecture Review (3-session checkpoint)
 
