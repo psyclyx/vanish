@@ -45,6 +45,8 @@
         #term-grid span {
             position: absolute;
             white-space: pre;
+            display: inline-block;
+            overflow: hidden;
         }
     </style>
 </head>
@@ -159,9 +161,12 @@
                 temp.innerHTML = cellHtml;
                 const newSpan = temp.firstChild;
 
-                // Position the span
+                // Position and size the span to fill its grid cell
                 newSpan.style.left = (x * charWidth) + 'px';
                 newSpan.style.top = (y * charHeight) + 'px';
+                newSpan.style.width = charWidth + 'px';
+                newSpan.style.height = charHeight + 'px';
+                newSpan.style.lineHeight = charHeight + 'px';
 
                 // Replace or add
                 const existing = cellMap.get(key);
