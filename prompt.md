@@ -15,6 +15,7 @@ Inbox: keep this up to date
 
 New:
 
+- Let's try and have 16 words per bucket.
 - config option / flag to autostart the http daemon when a session is started
 - for each size that we're rendering and sending of a particular type, perhaps
   we could deduplicate? larger viewers should get the benefits of smaller
@@ -34,24 +35,28 @@ Current:
 - Man page, readme. Minimal, to the point.
 - Arch PKGBUILD.
 
+Done (Session 39):
+
+- ✓ Architecture review (3-session checkpoint). See notes below.
+
 Done (Session 38):
 
-- ✓ Auto-name sessions (`--auto-name` / `-a` flag). Generates adjective-noun-command
-  names (e.g. "dark-knot-zsh"). Adjective letter keyed to hour, noun letter to
-  minute, specific word chosen with second-based jitter. Linear probes with
-  numeric suffix on collision. New naming.zig module (~170 lines, 3 tests).
-  Name printed to stderr so user knows what was created.
+- ✓ Auto-name sessions (`--auto-name` / `-a` flag). Generates
+  adjective-noun-command names (e.g. "dark-knot-zsh"). Adjective letter keyed to
+  hour, noun letter to minute, specific word chosen with second-based jitter.
+  Linear probes with numeric suffix on collision. New naming.zig module (~170
+  lines, 3 tests). Name printed to stderr so user knows what was created.
 
 Done (Session 37):
 
 - ✓ Revamped status bar and leader hint. Replaced full-width inverse video bar
-  with minimal, dim-styled text. Status bar now shows dim " ─ " prefix +
-  session name (left), with role/offset/dimensions (right) in dim text. Only
-  shows "viewer" when not primary (primary is expected, not worth showing).
-  Leader hint now shows curated bindings (detach, scrollback, status, takeover,
-  help) with bold keys and dim separators, instead of all 14 bindings crammed
-  into inverse video. Deduplicated by action to avoid showing `d` and `^A^A`
-  both for detach.
+  with minimal, dim-styled text. Status bar now shows dim " ─ " prefix + session
+  name (left), with role/offset/dimensions (right) in dim text. Only shows
+  "viewer" when not primary (primary is expected, not worth showing). Leader
+  hint now shows curated bindings (detach, scrollback, status, takeover, help)
+  with bold keys and dim separators, instead of all 14 bindings crammed into
+  inverse video. Deduplicated by action to avoid showing `d` and `^A^A` both for
+  detach.
 
 Done (Session 36):
 
@@ -243,6 +248,203 @@ lightweight libghostty terminal session multiplexer with web access
 
 # Progress Notes
 
+## 2026-02-07: Session 39 - Architecture Review (3-session checkpoint)
+
+Last review was session 36. This is the fourth consecutive architecture review
+where the codebase is fundamentally healthy. The project is mature.
+
+### Codebase Stats
+
+| File         | Lines     | Change from S36 | Purpose                    |
+| ------------ | --------- | --------------- | -------------------------- |
+| main.zig     | 973       | +31             | CLI entry point            |
+| http.zig     | 898       | 0               | Web server, SSE, routing   |
+| client.zig   | 636       | +16             | Native client, viewport    |
+| auth.zig     | 556       | 0               | JWT/HMAC, OTP exchange     |
+| session.zig  | 526       | 0               | Daemon, poll loop          |
+| config.zig   | 454       | 0               | JSON config parsing        |
+| vthtml.zig   | 375       | 0               | VT→HTML, delta computation |
+| terminal.zig | 335       | 0               | ghostty-vt wrapper         |
+| index.html   | 220       | 0               | Web frontend               |
+| naming.zig   | 209       | new             | Auto-name generation       |
+| protocol.zig | 192       | 0               | Wire format                |
+| keybind.zig  | 185       | +11             | Input state machine        |
+| pty.zig      | 140       | 0               | PTY operations             |
+| signal.zig   | 48        | 0               | Signal handling            |
+| paths.zig    | 43        | 0               | Shared utilities           |
+| **Total**    | **5,790** | **+267**        | 15 files                   |
+
+Build: Clean. Tests: All passing.
+
+### Codebase Health
+
+**Good.** The +267 line growth from session 36 is almost entirely from two
+additions: naming.zig (209 lines, new module) and the status bar/leader hint
+revamp (keybind +11, client +16, main +31). No file exceeds 973 lines. No
+circular dependencies. Module boundaries remain clean.
+
+11 of 15 files are completely unchanged since session 36. The core is done.
+
+### What's Working Well
+
+**1. Stability.** Protocol, session, terminal, pty, signal, paths, auth, config,
+vthtml, http - 10 modules unchanged for 6+ sessions. These are finished code.
+
+**2. naming.zig is well-isolated.** New module added cleanly with zero coupling
+to the rest of the system. Three tests. Only imported by main.zig. This is how
+new features should land.
+
+**3. Status bar revamp (session 37) improved UX significantly.** Moving from
+full inverse video to dim text was the right call. The curated leader hint
+(5 actions vs 14) reduces noise without losing discoverability.
+
+**4. Bug density remains very low.** No bugs reported in sessions 37-38. The
+only fix in this window was the Ctrl+Space fix in session 36, which was a
+one-line classification error.
+
+### Issues Found
+
+**1. naming.zig Q-nouns bucket has a duplicate**
+
+Line 92: `&.{ "quay", "quad", "quay", "quiz" }` - "quay" appears twice. This
+reduces the effective vocabulary. Will be fixed when expanding to 16 words.
+
+**2. naming.zig word selection math with 16-word buckets**
+
+Currently: `adj_bucket[second % 4]` and `noun_bucket[(second / 4) % 4]`.
+With 16 words: `second % 16` covers 0-15 directly (60 seconds, 16 words =
+each word maps to ~3.75 seconds). For nouns: `(second / 4) % 16` gives 0-14
+range (since second/4 maxes at 14). Need to rethink the jitter for 16-word
+buckets.
+
+Better approach with 16 words: use `second % 16` for adjective selection and
+a different time component (or hash) for noun selection. Since we have 16×16 =
+256 combinations per letter-pair per command, collisions become very unlikely.
+Could use `(epoch_secs / 4) % 16` for nouns to get different cycling.
+
+**3. executeAction repetition in client.zig**
+
+Lines 173-212: Eight scroll actions all follow the same pattern:
+`self.viewport.moveX(); self.renderViewport(); self.renderStatusBar();`. This
+is 40 lines that could be 5 with a helper or grouping the scroll actions.
+
+Not critical, but it's the kind of thing that Rich Hickey would notice as
+"incidental complexity." The viewport operation varies, but the render +
+status pattern is identical across all 8.
+
+### New Inbox Items Analysis
+
+**1. 16 words per bucket (naming.zig)**
+
+Currently 4 words × 26 letters × 2 lists = 208 words.
+With 16 words: 16 × 26 × 2 = 832 words.
+
+This is a content task, not an architecture task. The module structure doesn't
+change. The word selection math needs adjustment (see issue #2 above).
+
+Combinatorics: 16 adj × 16 noun × N commands = 256N unique names per
+letter-pair. With 26×26 = 676 letter-pairs, that's 173,056 × N names before
+any suffix probing. Collisions become essentially impossible in normal use.
+
+Assessment: Straightforward. ~350 lines of wordlists (up from ~110), plus a
+small math change. naming.zig will grow to ~450 lines, which is fine for a
+self-contained wordlist module.
+
+Priority: Do it next session (40). The user explicitly asked for it.
+
+**2. Autostart HTTP daemon**
+
+Still in inbox from session 36. The cleanest approach: a `--serve` flag on
+`vanish new` that checks if an HTTP server is already running (try binding
+the port or checking a PID file), and spawns one if not.
+
+Alternative: config option `"auto_serve": true`. Checked in cmdNew().
+
+Implementation: ~30-40 lines in main.zig. Need to decide: fork a separate
+process (like the session daemon), or embed in the session daemon.
+
+Embedding in the session daemon would mean each session runs its own HTTP
+server on a different port. That's wrong - the HTTP server should be shared
+across all sessions. So it must be a separate process.
+
+Flow: `vanish new --serve -a zsh` → fork session daemon → check if HTTP server
+is running → if not, fork HTTP server → attach.
+
+Priority: Medium. Useful but not blocking anything.
+
+**3. Render deduplication across viewer sizes**
+
+Analyzed in session 36, verdict was "not worth it." The per-client ScreenBuffer
+is ~7.5KB and the diff is O(cells), which is trivial. The optimization would
+add complexity for negligible benefit with few concurrent web viewers.
+
+Assessment unchanged. Skip.
+
+**4. Brotli/gzip compression**
+
+Also analyzed in session 36. SSE + compression has flush semantics issues. The
+current delta payloads are small (few hundred bytes typically). Not worth the
+complexity.
+
+Could revisit if someone reports slow web terminal over high-latency links.
+But even then, the delta approach already minimizes data transfer.
+
+Assessment unchanged. Skip unless user reports performance issues.
+
+### Simple vs Complected Analysis
+
+**Simple (good):**
+
+- Everything from session 36 remains simple
+- naming.zig: pure function, no I/O except timestamp, no side effects
+- Status bar revamp: less code, better UX
+- Leader hint deduplication: clean seen-array approach
+
+**Watch items:**
+
+- naming.zig will grow significantly with 16 words per bucket. Keep the
+  structure flat (just bigger arrays). Don't try to get clever with word
+  generation or compression.
+
+- client.zig executeAction scroll repetition (noted above). Consider a
+  `handleScroll(comptime fn)` helper if adding more scroll variants, but
+  don't refactor now since the current 8 are stable.
+
+- index.html at 220 lines. Mobile modifier buttons will push this past 250.
+  Previous reviews noted splitting JS into a separate file at that point.
+  Still valid advice.
+
+**No complected code found.** Architecture remains clean.
+
+### Inbox Status
+
+| Item                     | Status | Priority  | Notes                       |
+| ------------------------ | ------ | --------- | --------------------------- |
+| 16 words per bucket      | ○ Todo | **High**  | User explicitly asked       |
+| Autostart HTTP daemon    | ○ Todo | Medium    | Config flag + spawn logic   |
+| Render deduplication     | ✗ Skip | -         | Not worth the complexity    |
+| Brotli/gzip compression  | ✗ Skip | -         | Not worth the complexity    |
+| Mobile modifier buttons  | ○ Todo | Medium    | Ctrl/Alt/Esc toolbar        |
+| Web refresh button       | ○ Todo | Medium    | Close+reopen SSE            |
+| Cursor position (narrow) | ○ Todo | Low       | Needs investigation         |
+| Session list SSE         | ○ Todo | Low       | Reactive web session list   |
+| Man page, readme         | ○ Todo | Medium    | Documentation               |
+| Arch PKGBUILD            | ○ Todo | Low       | Packaging                   |
+
+### Recommendations for Next Sessions
+
+1. **Session 40:** Expand naming.zig to 16 words per bucket. User explicitly
+   requested this. Fix the Q-nouns duplicate. Adjust word selection math for
+   larger buckets. Content-heavy but architecturally simple.
+
+2. **Session 41:** Mobile modifier buttons for web terminal. Or autostart HTTP
+   daemon. Both are medium priority.
+
+3. **Session 42 (review):** Assess documentation needs. By then we'll have the
+   naming expansion done and can focus on polish.
+
+---
+
 ## 2026-02-07: Session 38 - Auto-Name Sessions
 
 Implemented the `--auto-name` / `-a` flag for `vanish new`.
@@ -295,7 +497,8 @@ vanish new myshell zsh
   adjective letter. Names created in the same ~2-minute window share the same
   noun letter. This gives rough temporal ordering when listing sessions.
 - **Jitter**: The second component picks which word from the 4-word bucket,
-  preventing two sessions created in quick succession from getting the same name.
+  preventing two sessions created in quick succession from getting the same
+  name.
 - **Collision handling**: Linear probe with numeric suffix. With 4×4=16 possible
   combinations per time bucket plus suffix probing, collisions in normal usage
   are negligible.
@@ -304,11 +507,11 @@ vanish new myshell zsh
 
 ### Line Count Impact
 
-| File       | Before | After | Change  |
-| ---------- | ------ | ----- | ------- |
-| naming.zig | -      | 170   | +170    |
-| main.zig   | 942    | 962   | +20     |
-| **Net**    |        |       | **+190**|
+| File       | Before | After | Change   |
+| ---------- | ------ | ----- | -------- |
+| naming.zig | -      | 170   | +170     |
+| main.zig   | 942    | 962   | +20      |
+| **Net**    |        |       | **+190** |
 
 ### Testing
 
@@ -331,8 +534,9 @@ Before: Full-width inverse video bar (`\x1b[7m`). Session name padded to fill
 entire line. "primary" or "viewer" always shown on right. Dense, high-contrast,
 visually heavy.
 
-After: No background/inverse. Dim `─` prefix, normal session name. Right side
-in dim text. Only shows contextually relevant info:
+After: No background/inverse. Dim `─` prefix, normal session name. Right side in
+dim text. Only shows contextually relevant info:
+
 - "viewer" only when in viewer mode (primary is the default, no need to say it)
 - Panning offset only when offset is non-zero
 - Session dimensions only when panning is possible
@@ -342,8 +546,8 @@ Also added `\x1b[K` (clear line) on positioning to prevent leftover characters.
 **keybind.zig - `formatHint()`:**
 
 Before: All 14 bindings crammed into one inverse video bar with `|` separators.
-Included pan binds (h/j/k/l/g/G/^U/^D) which are only relevant for viewers
-with smaller terminals. Two detach binds shown (`d` and `^A`).
+Included pan binds (h/j/k/l/g/G/^U/^D) which are only relevant for viewers with
+smaller terminals. Two detach binds shown (`d` and `^A`).
 
 After: Curated set of 5 actions (detach, scrollback, status, takeover, help).
 Bold keys with dim `│` separators, no inverse video. Deduplicated by action
@@ -359,36 +563,44 @@ hint would leave stale characters from previous renders.
 ### Visual Comparison
 
 Before (status bar):
+
 ```
- mysession                                                        primary
+mysession                                                        primary
 ```
+
 (full inverse video, entire line)
 
 After (status bar):
+
 ```
- ─ mysession                                              viewer  120x50
+─ mysession                                              viewer  120x50
 ```
+
 (dim framing, only relevant info, no background)
 
 Before (leader hint):
+
 ```
- ^A: d:detach | ^A:detach | [:scrollback | h:pan left | j:pan down | ...
+^A: d:detach | ^A:detach | [:scrollback | h:pan left | j:pan down | ...
 ```
+
 (all bindings, inverse video, overflows on narrow terminals)
 
 After (leader hint):
+
 ```
- ─  d detach │[ scrollback │s toggle status │t takeover │? help
+─  d detach │[ scrollback │s toggle status │t takeover │? help
 ```
+
 (curated, bold keys, dim separators)
 
 ### Line Count Impact
 
-| File        | Before | After | Change |
-| ----------- | ------ | ----- | ------ |
-| client.zig  | 621    | 625   | +4     |
-| keybind.zig | 175    | 185   | +10    |
-| **Net**     |        |       | **+14**|
+| File        | Before | After | Change  |
+| ----------- | ------ | ----- | ------- |
+| client.zig  | 621    | 625   | +4      |
+| keybind.zig | 175    | 185   | +10     |
+| **Net**     |        |       | **+14** |
 
 ### Testing
 
