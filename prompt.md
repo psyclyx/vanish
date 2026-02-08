@@ -26,12 +26,18 @@ Current:
 - Mobile web: resizable terminal, modifier buttons (Ctrl, etc.), generally more
   mobile-friendly without being UX slop. Target audience falls back to termux if
   bad.
-- Web refresh: force-refresh button, and/or periodic keyframes for native
-  clients. Garbled text on connect sometimes.
 - Cursor position bug for narrow primary sessions.
 - Session list SSE (reactive in web).
 - Man page, readme. Minimal, to the point.
 - Arch PKGBUILD.
+
+Done (Session 44):
+
+- ✓ Web refresh button. Added "Refresh" button to terminal header that
+  closes and reopens the SSE connection, getting a fresh keyframe. Extracted
+  `openSse()` helper to deduplicate SSE setup between `connect()` and
+  `refresh()`. Resets `isPrimary` on refresh since the new connection starts
+  as viewer. index.html: 220 → 231 lines (+11). No server changes needed.
 
 Done (Session 43):
 
@@ -275,6 +281,87 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-07: Session 44 - Web Refresh Button
+
+Added a "Refresh" button to the web terminal that force-reconnects the SSE
+stream, getting a fresh keyframe from the server. This addresses the "garbled
+text on connect" issue reported in the inbox.
+
+### What Changed
+
+**index.html (220 → 231 lines, +11)**
+
+**`openSse(name)`** (10 lines): Extracted SSE connection setup into a helper
+function. Closes any existing SSE, clears the cell grid, creates new
+EventSource, wires up keyframe/delta/exit/error handlers. Used by both
+`connect()` and `refresh()`, eliminating the duplication that would otherwise
+exist.
+
+**`refresh()`** (3 lines): Resets `isPrimary` to false (the new SSE connection
+starts as viewer), then calls `openSse(currentSession)`.
+
+**Refresh button**: Added to terminal header alongside existing Takeover and
+Disconnect buttons.
+
+**`connect()` simplified**: Now delegates SSE setup to `openSse()` instead of
+doing it inline. Reduced from 12 lines to 8.
+
+### How It Works
+
+1. User clicks "Refresh" in the terminal header
+2. `refresh()` resets `isPrimary` and calls `openSse()`
+3. `openSse()` closes the old SSE connection (server detects hangup, cleans up
+   the SseClient and its session socket)
+4. New SSE EventSource connects to `/api/sessions/{name}/stream`
+5. Server creates new SseClient, connects to session as viewer, sends initial
+   keyframe with full screen state
+6. Browser receives fresh keyframe, renders all cells from scratch
+7. If user was previously primary, they can click Takeover or type (auto-
+   takeover on first keypress) to regain primary status
+
+### Design Decisions
+
+- **No server changes needed**: The existing SSE lifecycle already handles
+  reconnection correctly. Server sends a keyframe on every new SSE connection.
+  Closing and reopening the EventSource is sufficient.
+- **Extracted `openSse()` helper**: The SSE wiring code (EventSource creation,
+  event listeners) was already 5 lines in `connect()`. Adding `refresh()` would
+  have duplicated it. The helper keeps both callers clean.
+- **Reset isPrimary**: The old SSE connection's session socket gets closed on
+  the server side. The new connection starts as a viewer. Without resetting
+  isPrimary, the client would incorrectly think it's still primary and try to
+  send input without taking over first.
+- **Grid cleared on refresh**: `openSse()` clears the grid and cellMap before
+  reconnecting. The incoming keyframe will repopulate all cells from scratch.
+
+### Line Count Impact
+
+| File       | Before | After | Change |
+| ---------- | ------ | ----- | ------ |
+| index.html | 220    | 231   | +11    |
+
+Total codebase: 15 files, ~5,763 lines.
+
+### Testing
+
+- Build: Clean
+- Unit tests: All passing
+
+### Inbox Status
+
+| Item                     | Status    | Priority | Notes                    |
+| ------------------------ | --------- | -------- | ------------------------ |
+| Web refresh button       | ✓ Done    | -        | Session 44               |
+| Mobile modifier buttons  | ○ Todo    | Medium   | Ctrl/Alt/Esc toolbar     |
+| Cursor position (narrow) | ○ Todo    | Low      | Needs investigation      |
+| Session list SSE         | ○ Todo    | Low      | Reactive web session list|
+| Man page, readme         | ○ Todo    | Medium   | Documentation            |
+| Arch PKGBUILD            | ○ Todo    | Low      | Packaging                |
+| Render deduplication     | ✗ Skip    | -        | Not worth the complexity |
+| Brotli/gzip compression  | ✗ Skip    | -        | Not worth the complexity |
+
+---
 
 ## 2026-02-07: Session 43 - Deduplicate main.zig
 

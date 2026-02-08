@@ -68,6 +68,7 @@
         <div class="terminal-header">
             <span id="session-name"></span>
             <div>
+                <button onclick="refresh()">Refresh</button>
                 <button onclick="takeover()">Takeover</button>
                 <button onclick="disconnect()">Disconnect</button>
             </div>
@@ -109,26 +110,29 @@
                 .join('') || '<p>No sessions</p>';
         }
 
+        function openSse(name) {
+            sse?.close();
+            const grid = document.getElementById('term-grid');
+            grid.innerHTML = '';
+            cellMap.clear();
+            sse = new EventSource(`/api/sessions/${encodeURIComponent(name)}/stream`);
+            sse.addEventListener('keyframe', e => handleUpdate(JSON.parse(e.data), true));
+            sse.addEventListener('delta', e => handleUpdate(JSON.parse(e.data), false));
+            sse.addEventListener('exit', disconnect);
+            sse.onerror = disconnect;
+        }
+
         function connect(name) {
             document.getElementById('sessions').classList.add('hidden');
             document.getElementById('terminal').classList.remove('hidden');
             document.getElementById('session-name').textContent = name;
             isPrimary = false;
             currentSession = name;
-
-            const term = document.getElementById('term');
-            const grid = document.getElementById('term-grid');
-            grid.innerHTML = '';
-            cellMap.clear();
             measureChar();
+            const term = document.getElementById('term');
             term.focus();
             term.onkeydown = e => handleKey(e, name);
-
-            sse = new EventSource(`/api/sessions/${encodeURIComponent(name)}/stream`);
-            sse.addEventListener('keyframe', e => handleUpdate(JSON.parse(e.data), true));
-            sse.addEventListener('delta', e => handleUpdate(JSON.parse(e.data), false));
-            sse.addEventListener('exit', disconnect);
-            sse.onerror = disconnect;
+            openSse(name);
         }
 
         function handleUpdate(data, isKeyframe) {
@@ -200,6 +204,12 @@
         }
 
         window.addEventListener('resize', sendResize);
+
+        function refresh() {
+            if (!currentSession) return;
+            isPrimary = false;
+            openSse(currentSession);
+        }
 
         function takeover() {
             const name = document.getElementById('session-name').textContent;
