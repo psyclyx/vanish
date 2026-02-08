@@ -13,6 +13,17 @@ Ongoing:
 
 Inbox: keep this up to date
 
+New:
+
+- revamp the status bar. it's a bit garish and dense, imagine a few alternatives
+  (zellij, helix, mini.nvim all come to mind).
+
+- for each size that we're rendering and sending of a particular type, perhaps
+  we could deduplicate? larger viewers should get the benefits of smaller
+  renders, even, making this even better.
+
+- nice-to-have: brotli compression on the http server. make it even faster!
+
 Current:
 
 - Mobile web: resizable terminal, modifier buttons (Ctrl, etc.), generally more
@@ -24,6 +35,13 @@ Current:
 - Session list SSE (reactive in web).
 - Man page, readme. Minimal, to the point.
 - Arch PKGBUILD.
+
+Done (Session 35):
+
+- ✓ Fixed cell gaps in browser terminal. Each cell span now gets explicit width,
+  height, and line-height matching measured character dimensions. Without this,
+  spans only covered text content area, leaving visible gaps between rows.
+  CSS + JS fix in index.html (+6 lines).
 
 Done (Session 34):
 
@@ -200,6 +218,54 @@ lightweight libghostty terminal session multiplexer with web access
 
 # Progress Notes
 
+## 2026-02-07: Session 35 - Fix Cell Gaps in Browser Terminal
+
+Fixed the user-reported visual bug: gaps between rows in the web terminal.
+
+### The Problem
+
+Each terminal cell is an absolutely-positioned `<span>` in a grid. The spans
+were positioned at `(x * charWidth, y * charHeight)` but had no explicit
+dimensions. The browser sized each span to fit its text content, which could be
+smaller than the grid cell, leaving visible gaps between rows. The font's
+natural line-height, subpixel rounding, and varying glyph heights all
+contributed.
+
+### The Fix
+
+**CSS (2 lines):**
+
+- Added `display: inline-block` to `#term-grid span` so `width`/`height` are
+  respected
+- Added `overflow: hidden` to clip any glyph overflow
+
+**JS (3 lines in `handleUpdate()`):**
+
+- Set `width: charWidth + 'px'` on each span
+- Set `height: charHeight + 'px'` on each span
+- Set `lineHeight: charHeight + 'px'` to vertically align text within the cell
+
+Each cell span now fills its entire grid slot. Cells tile perfectly with no gaps
+regardless of font metrics or browser rendering.
+
+### Line Count Impact
+
+index.html: 217 → 222 (+5 net, +6 added, -1 comment changed)
+
+Total codebase: ~5,524 lines.
+
+### Testing
+
+- Build: Clean
+- Unit tests: All passing
+
+### What's Next
+
+- Session 36 (review): Architecture review. Assess mobile experience, status
+  bar revamp options, render deduplication design.
+
+---
+
 ## 2026-02-07: Session 34 - Web Terminal Resize + Char Measurement
 
 Addressed the foundational piece for mobile support: runtime character dimension
@@ -254,11 +320,11 @@ measurement and a working `/resize` endpoint.
 
 ### Line Count Impact
 
-| File       | Before | After | Change |
-| ---------- | ------ | ----- | ------ |
-| http.zig   | 862    | 898   | +36    |
-| index.html | 185    | 215   | +30    |
-| **Net**    |        |       | **+66**|
+| File       | Before | After | Change  |
+| ---------- | ------ | ----- | ------- |
+| http.zig   | 862    | 898   | +36     |
+| index.html | 185    | 215   | +30     |
+| **Net**    |        |       | **+66** |
 
 Total codebase: ~5,518 lines.
 
@@ -273,8 +339,8 @@ This is foundational for mobile support. Next steps:
 
 1. **Session 35**: Refresh keybind (Ctrl+A r) for native + refresh button for
    web. Quick wins for garbled text issue.
-2. **Session 36 (review)**: Architecture review. Mobile modifier buttons
-   (Ctrl, Alt, Esc, Tab toolbar for touch devices). Assess resize in practice.
+2. **Session 36 (review)**: Architecture review. Mobile modifier buttons (Ctrl,
+   Alt, Esc, Tab toolbar for touch devices). Assess resize in practice.
 
 ---
 
@@ -339,12 +405,14 @@ Three new items from the user. Let me think through each carefully.
 **1. Mobile-friendly web terminal**
 
 What's requested:
+
 - Resizable terminal
 - Modifier buttons (Ctrl, etc.) for mobile
 - Generally more mobile-friendly
 - NOT UX slop - target audience prefers termux
 
 What exists:
+
 - `<meta name="viewport">` is set correctly
 - Character dimensions are hardcoded: `charWidth = 8.4, charHeight = 17`
 - No touch event handling
@@ -368,6 +436,7 @@ need to be measured at runtime from the actual font rendering. For mobile:
   change), send a resize to the session. Need to compute how many cols/rows fit.
 
 Implementation plan (for a future session):
+
 1. Measure char dimensions at runtime instead of hardcoding
 2. On window resize, compute cols/rows that fit, POST to `/resize`
 3. Add a small modifier toolbar (Ctrl, Alt, Esc, Tab) - visible on touch devices
@@ -377,11 +446,13 @@ Implementation plan (for a future session):
 **2. Periodic keyframes / force refresh**
 
 What's requested:
+
 - Garbled text appears at top on connect sometimes
 - Periodic full refresh would help
 - Button to force a refresh
 
 What exists:
+
 - Web SSE clients already get 30s periodic keyframes (http.zig:712)
 - Native clients do NOT get periodic refreshes
 - On native connect, `sendTerminalState()` dumps the full screen
@@ -392,6 +463,7 @@ contains sequences that interact poorly with the viewer's terminal (e.g., the
 viewer's terminal is in a different mode), garbage can appear.
 
 Options:
+
 - **Native refresh keybind**: Ctrl+A r = clear screen, re-request full state.
   Simple, no protocol change needed. Client just writes `\x1b[2J\x1b[H` to its
   own terminal, then requests scrollback/full.
@@ -423,8 +495,8 @@ restores cursor position.
 
 **Acceptable complexity:**
 
-- index.html at 185 lines handles auth, session list, and terminal rendering.
-  As mobile features are added, this could grow. Consider splitting JS into a
+- index.html at 185 lines handles auth, session list, and terminal rendering. As
+  mobile features are added, this could grow. Consider splitting JS into a
   separate file when it exceeds ~250 lines.
 
 **Potential concern:**
@@ -434,14 +506,14 @@ restores cursor position.
 
 ### Inbox Status
 
-| Item                      | Status | Notes                                  |
-| ------------------------- | ------ | -------------------------------------- |
-| Mobile web terminal       | ○ Todo | Char measurement, modifiers, resize    |
-| Web/native refresh        | ○ Todo | Keybind + button, simple               |
-| Cursor position (narrow)  | ○ Todo | Investigate dumpScreen cursor handling  |
-| Session list SSE          | ○ Todo | Would need SSE for list                |
-| Man page, readme          | ○ Todo |                                        |
-| Arch PKGBUILD             | ○ Todo |                                        |
+| Item                     | Status | Notes                                  |
+| ------------------------ | ------ | -------------------------------------- |
+| Mobile web terminal      | ○ Todo | Char measurement, modifiers, resize    |
+| Web/native refresh       | ○ Todo | Keybind + button, simple               |
+| Cursor position (narrow) | ○ Todo | Investigate dumpScreen cursor handling |
+| Session list SSE         | ○ Todo | Would need SSE for list                |
+| Man page, readme         | ○ Todo |                                        |
+| Arch PKGBUILD            | ○ Todo |                                        |
 
 ### Recommendations for Next Sessions
 
