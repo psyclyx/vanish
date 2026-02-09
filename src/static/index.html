@@ -147,7 +147,6 @@
             const grid = document.getElementById('term-grid');
 
             if (isKeyframe) {
-                // Clear existing cells if dimensions changed
                 if (data.cols !== termCols || data.rows !== termRows) {
                     grid.innerHTML = '';
                     cellMap.clear();
@@ -158,37 +157,21 @@
                 }
             }
 
-            // Process each cell
-            for (const cellHtml of data.cells) {
-                // Parse the span to extract position
-                const match = cellHtml.match(/data-x="(\d+)"\s+data-y="(\d+)"/);
-                if (!match) continue;
-
-                const x = parseInt(match[1], 10);
-                const y = parseInt(match[2], 10);
-                const key = `${x},${y}`;
-
-                // Create temp element to parse the HTML
-                const temp = document.createElement('div');
-                temp.innerHTML = cellHtml;
-                const newSpan = temp.firstChild;
-
-                // Position and size the span to fill its grid cell
-                newSpan.style.left = (x * charWidth) + 'px';
-                newSpan.style.top = (y * charHeight) + 'px';
-                newSpan.style.width = charWidth + 'px';
-                newSpan.style.height = charHeight + 'px';
-                newSpan.style.lineHeight = charHeight + 'px';
-
-                // Replace or add
+            const frag = document.createDocumentFragment();
+            for (const cell of data.cells) {
+                const key = `${cell.x},${cell.y}`;
                 const existing = cellMap.get(key);
-                if (existing) {
-                    grid.replaceChild(newSpan, existing);
-                } else {
-                    grid.appendChild(newSpan);
+                const span = existing || document.createElement('span');
+
+                span.textContent = cell.c;
+                span.style.cssText = `left:${cell.x * charWidth}px;top:${cell.y * charHeight}px;width:${charWidth}px;height:${charHeight}px;line-height:${charHeight}px;${cell.s || ''}`;
+
+                if (!existing) {
+                    frag.appendChild(span);
+                    cellMap.set(key, span);
                 }
-                cellMap.set(key, newSpan);
             }
+            grid.appendChild(frag);
         }
 
         function disconnect() {

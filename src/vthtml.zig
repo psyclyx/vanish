@@ -1,7 +1,6 @@
 const std = @import("std");
 const ghostty_vt = @import("ghostty-vt");
 const VTerminal = @import("terminal.zig");
-const paths = @import("paths.zig");
 
 /// Represents the rendered state of a single cell
 pub const Cell = struct {
@@ -204,80 +203,48 @@ fn cellFromVT(vtcell: *const ghostty_vt.Cell, row_pin: anytype) Cell {
     return cell;
 }
 
-/// Render a cell update to an HTML span element
-pub fn cellToHtml(alloc: std.mem.Allocator, update: CellUpdate) ![]u8 {
-    var html: std.ArrayList(u8) = .empty;
-    errdefer html.deinit(alloc);
+/// Append CSS style string for a cell to the writer
+fn appendCellStyle(alloc: std.mem.Allocator, out: *std.ArrayList(u8), cell: Cell) !void {
+    if (cell.bold) try out.appendSlice(alloc, "font-weight:bold;");
+    if (cell.italic) try out.appendSlice(alloc, "font-style:italic;");
+    if (cell.underline) try out.appendSlice(alloc, "text-decoration:underline;");
+    if (cell.inverse) try out.appendSlice(alloc, "filter:invert(1);");
 
-    // Position: using data attributes for row/col
-    try html.appendSlice(alloc, "<span data-x=\"");
-    try std.fmt.format(html.writer(alloc), "{d}", .{update.x});
-    try html.appendSlice(alloc, "\" data-y=\"");
-    try std.fmt.format(html.writer(alloc), "{d}", .{update.y});
-    try html.appendSlice(alloc, "\"");
-
-    // Style
-    var has_style = false;
-    if (update.cell.bold or update.cell.italic or update.cell.underline or
-        update.cell.inverse or update.cell.fg != .none or update.cell.bg != .none)
-    {
-        has_style = true;
-        try html.appendSlice(alloc, " style=\"");
-    }
-
-    if (update.cell.bold) try html.appendSlice(alloc, "font-weight:bold;");
-    if (update.cell.italic) try html.appendSlice(alloc, "font-style:italic;");
-    if (update.cell.underline) try html.appendSlice(alloc, "text-decoration:underline;");
-    if (update.cell.inverse) try html.appendSlice(alloc, "filter:invert(1);");
-
-    switch (update.cell.fg) {
+    switch (cell.fg) {
         .none => {},
         .palette => |idx| {
-            try html.appendSlice(alloc, "color:");
-            try html.appendSlice(alloc, &color256ToHex(idx));
-            try html.append(alloc, ';');
+            try out.appendSlice(alloc, "color:");
+            try out.appendSlice(alloc, &color256ToHex(idx));
+            try out.append(alloc, ';');
         },
         .rgb => |rgb| {
             var buf: [24]u8 = undefined;
             const s = std.fmt.bufPrint(&buf, "color:#{x:0>2}{x:0>2}{x:0>2};", .{ rgb.r, rgb.g, rgb.b }) catch "";
-            try html.appendSlice(alloc, s);
+            try out.appendSlice(alloc, s);
         },
     }
 
-    switch (update.cell.bg) {
+    switch (cell.bg) {
         .none => {},
         .palette => |idx| {
-            try html.appendSlice(alloc, "background:");
-            try html.appendSlice(alloc, &color256ToHex(idx));
-            try html.append(alloc, ';');
+            try out.appendSlice(alloc, "background:");
+            try out.appendSlice(alloc, &color256ToHex(idx));
+            try out.append(alloc, ';');
         },
         .rgb => |rgb| {
             var buf: [30]u8 = undefined;
             const s = std.fmt.bufPrint(&buf, "background:#{x:0>2}{x:0>2}{x:0>2};", .{ rgb.r, rgb.g, rgb.b }) catch "";
-            try html.appendSlice(alloc, s);
+            try out.appendSlice(alloc, s);
         },
     }
-
-    if (has_style) try html.append(alloc, '"');
-    try html.append(alloc, '>');
-
-    // Character (HTML escaped)
-    const char_slice = update.cell.char[0..update.cell.char_len];
-    for (char_slice) |c| {
-        switch (c) {
-            '<' => try html.appendSlice(alloc, "&lt;"),
-            '>' => try html.appendSlice(alloc, "&gt;"),
-            '&' => try html.appendSlice(alloc, "&amp;"),
-            ' ' => try html.appendSlice(alloc, "&nbsp;"),
-            else => try html.append(alloc, c),
-        }
-    }
-
-    try html.appendSlice(alloc, "</span>");
-    return html.toOwnedSlice(alloc);
 }
 
-/// Render multiple updates to a JSON array of HTML spans
+fn cellHasStyle(cell: Cell) bool {
+    return cell.bold or cell.italic or cell.underline or
+        cell.inverse or cell.fg != .none or cell.bg != .none;
+}
+
+/// Render multiple updates to a JSON array of structured cell objects
 pub fn updatesToJson(alloc: std.mem.Allocator, updates: []const CellUpdate, cols: u16, rows: u16) ![]u8 {
     var json: std.ArrayList(u8) = .empty;
     errdefer json.deinit(alloc);
@@ -293,12 +260,40 @@ pub fn updatesToJson(alloc: std.mem.Allocator, updates: []const CellUpdate, cols
         if (!first) try json.append(alloc, ',');
         first = false;
 
-        const cell_html = try cellToHtml(alloc, update);
-        defer alloc.free(cell_html);
+        try json.appendSlice(alloc, "{\"x\":");
+        try std.fmt.format(json.writer(alloc), "{d}", .{update.x});
+        try json.appendSlice(alloc, ",\"y\":");
+        try std.fmt.format(json.writer(alloc), "{d}", .{update.y});
 
+        // Character (JSON-escaped)
+        try json.appendSlice(alloc, ",\"c\":\"");
+        const char_slice = update.cell.char[0..update.cell.char_len];
+        for (char_slice) |c| {
+            switch (c) {
+                '"' => try json.appendSlice(alloc, "\\\""),
+                '\\' => try json.appendSlice(alloc, "\\\\"),
+                '\n' => try json.appendSlice(alloc, "\\n"),
+                '\r' => try json.appendSlice(alloc, "\\r"),
+                '\t' => try json.appendSlice(alloc, "\\t"),
+                else => if (c < 0x20) {
+                    var buf: [6]u8 = undefined;
+                    _ = std.fmt.bufPrint(&buf, "\\u{x:0>4}", .{c}) catch continue;
+                    try json.appendSlice(alloc, &buf);
+                } else {
+                    try json.append(alloc, c);
+                },
+            }
+        }
         try json.append(alloc, '"');
-        try paths.appendJsonEscaped(alloc, &json, cell_html);
-        try json.append(alloc, '"');
+
+        // Style (only if non-empty)
+        if (cellHasStyle(update.cell)) {
+            try json.appendSlice(alloc, ",\"s\":\"");
+            try appendCellStyle(alloc, &json, update.cell);
+            try json.append(alloc, '"');
+        }
+
+        try json.append(alloc, '}');
     }
 
     try json.appendSlice(alloc, "]}");
@@ -342,10 +337,10 @@ test "cell equality" {
     try std.testing.expect(!a.eql(c));
 }
 
-test "cell to html" {
+test "cell to json" {
     const alloc = std.testing.allocator;
 
-    const update = CellUpdate{
+    const updates = [_]CellUpdate{.{
         .x = 5,
         .y = 10,
         .cell = .{
@@ -354,15 +349,15 @@ test "cell to html" {
             .bold = true,
             .fg = .{ .palette = 1 }, // red
         },
-    };
+    }};
 
-    const html = try cellToHtml(alloc, update);
-    defer alloc.free(html);
+    const json = try updatesToJson(alloc, &updates, 80, 24);
+    defer alloc.free(json);
 
-    try std.testing.expect(std.mem.indexOf(u8, html, "data-x=\"5\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, html, "data-y=\"10\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, html, "font-weight:bold") != null);
-    try std.testing.expect(std.mem.indexOf(u8, html, ">A</span>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"x\":5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"y\":10") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "\"c\":\"A\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json, "font-weight:bold") != null);
 }
 
 test "screen buffer init" {

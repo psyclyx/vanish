@@ -31,8 +31,8 @@ New: (triaged in session 48)
 - ✓ Pressing a key in the browser takes over a session automatically - fixed in
   session 49: input blocked for non-primary, explicit takeover required.
 - We should have some notion of read-only OTPs.
-- Browser feels laggier than it should on localhost (innerHTML parsing
-  bottleneck on keyframes - see session 48 analysis)
+- ✓ Browser feels laggier than it should on localhost - fixed in session 50:
+  replaced innerHTML HTML-string parsing with structured JSON + createElement.
 - Rendering architecture redesign: abstract rendering commands, echo/noecho
   modes, server-side VTerm → structured commands instead of raw bytes. Drop
   HTTP client in favor of thread-per-connection. Multi-iteration hammock task.
@@ -45,12 +45,24 @@ Current:
 
 - Investigate and fix: TUI viewer rendering breakage and keybind issues.
 - Read-only OTPs.
-- Browser localhost lag investigation.
 - Mobile web: modifier buttons (Ctrl, etc.).
 - Rendering architecture redesign (multi-iteration hammock - see inbox idea).
 - Cursor position bug for narrow primary sessions.
 - Session list SSE (reactive in web).
 - Arch PKGBUILD.
+
+Done (Session 50):
+
+- ✓ Fixed browser localhost lag. Replaced the innerHTML-based rendering pipeline
+  with structured JSON + createElement. Server now sends `{"x":5,"y":10,"c":"A",
+  "s":"font-weight:bold;"}` instead of HTML strings. Client builds DOM elements
+  directly with createElement + textContent + style.cssText, and batches new
+  elements in a DocumentFragment. Eliminates per-cell innerHTML parsing (1,920
+  HTML parses on a keyframe), regex position extraction, and throwaway div
+  creation. Also reuses existing DOM elements on updates instead of always
+  creating new ones. vthtml.zig: 376 → 370 (-6), index.html: 240 → 222 (-18).
+  Net -24 lines while fixing the perf issue. Removed unused paths.zig import
+  from vthtml.zig.
 
 Done (Session 49):
 
@@ -347,6 +359,133 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 50 - Fix Browser Localhost Lag
+
+### The Problem
+
+The web terminal felt sluggish on localhost, especially on keyframes (initial
+render or refresh). A keyframe for an 80x24 terminal sends 1,920 cells. The
+old rendering pipeline per cell:
+
+1. Regex match the HTML string to extract x,y coordinates
+2. Create a throwaway `<div>`, set `innerHTML` to parse the HTML string
+3. Extract the first child from the parsed DOM
+4. Set position/size styles
+5. `replaceChild` or `appendChild`
+
+`innerHTML` forces the browser's HTML parser per call. 1,920 innerHTML parses on
+a keyframe is the primary bottleneck. Delta updates (typically tens of cells) are
+fast, but the initial render and any refresh triggers the full keyframe path.
+
+### What Changed
+
+**vthtml.zig (376 → 370 lines, -6)**
+
+Replaced the `cellToHtml` function (which rendered `<span data-x="5" data-y="10"
+style="...">A</span>` HTML strings) with two smaller helpers:
+
+- `appendCellStyle()`: Writes CSS properties for a cell (bold, italic,
+  underline, colors) to an output buffer. Extracted from the style portion of
+  `cellToHtml`.
+- `cellHasStyle()`: Quick check for whether a cell has any styling.
+
+`updatesToJson()` now emits structured JSON objects instead of HTML strings:
+
+**Old format:** `{"cells":["<span data-x=\"5\" data-y=\"10\">A</span>", ...]}`
+
+**New format:** `{"cells":[{"x":5,"y":10,"c":"A","s":"font-weight:bold;"}, ...]}`
+
+The `c` field is the raw UTF-8 character (JSON-escaped, not HTML-escaped). The
+`s` field is the CSS style string, omitted when empty. This is both smaller on
+the wire and cheaper to generate (no HTML-escaping of `<>&`, no JSON-escaping of
+the HTML string which itself contains escaped quotes).
+
+Removed the `paths.zig` import (was only used for `appendJsonEscaped` on the
+old HTML strings).
+
+**index.html (240 → 222 lines, -18)**
+
+`handleUpdate()` rewritten:
+
+- No more regex extraction of x,y from HTML strings
+- No more `innerHTML` parsing via throwaway divs
+- Uses `document.createElement('span')` for new cells
+- Uses `textContent` instead of innerHTML (safe, no HTML parsing needed)
+- Sets `style.cssText` directly from the server's `s` field
+- **Reuses existing DOM elements**: on delta updates, existing spans are updated
+  in-place (`textContent` + `style.cssText`) instead of creating replacements
+- **DocumentFragment batching**: new elements are collected in a fragment and
+  appended in one DOM operation
+
+### Performance Impact
+
+**Keyframe (80x24 = 1,920 cells):**
+
+| Operation          | Old (per cell)    | New (per cell)       |
+| ------------------ | ----------------- | -------------------- |
+| Position extract   | Regex match       | Direct property read |
+| DOM element create | innerHTML parse   | createElement        |
+| Text content       | Part of innerHTML | textContent assign   |
+| Styling            | Part of innerHTML | cssText assign       |
+| DOM insertion      | Individual ops    | Fragment batch       |
+
+The innerHTML parse was the dominant cost. Each one invokes the browser's full
+HTML parser (tokenizer → tree builder → DOM). createElement + textContent skips
+all of that.
+
+**Delta updates (typically 5-50 cells):**
+
+Existing spans are now reused instead of replaced. `replaceChild` allocates a
+new DOM node; updating `textContent` + `style.cssText` on the existing node
+does not. This also avoids orphaning the old node (less GC pressure).
+
+### Wire Format Change
+
+This is a breaking change in the SSE protocol. Old browsers that cache the page
+won't work with the new server. Since vanish doesn't use service workers or
+aggressive caching, and the page is served directly by the vanish HTTP server,
+this is fine - a page reload fetches the new code.
+
+### Line Count Impact
+
+| File       | Before | After | Change |
+| ---------- | ------ | ----- | ------ |
+| vthtml.zig | 376    | 370   | -6     |
+| index.html | 240    | 222   | -18    |
+| **Net**    |        |       | **-24** |
+
+Total codebase: 15 files, ~5,747 lines.
+
+### Testing
+
+- Build: Clean
+- Unit tests: All passing (updated "cell to html" test → "cell to json" test)
+
+### Inbox Status
+
+| Item                     | Status | Priority | Notes                        |
+| ------------------------ | ------ | -------- | ---------------------------- |
+| Browser localhost lag     | ✓ Done | -        | Session 50                   |
+| TUI viewer breakage      | ○ Todo | Medium   | Needs reproduction           |
+| TUI viewer keybinds      | ○ Todo | Medium   | Likely rendering, not input  |
+| Read-only OTPs           | ○ Todo | Medium   | Auth scope extension         |
+| Mobile modifier toolbar  | ○ Todo | Medium   | Designed in session 46       |
+| Rendering redesign       | ○ Todo | Low urg  | Multi-session hammock        |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation          |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list    |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                    |
+
+### Recommendations for Next Sessions
+
+1. **Session 51 (review):** Architecture review (3-session checkpoint). Start
+   hammocking the rendering architecture redesign.
+
+2. **Session 52:** Read-only OTPs or mobile modifier toolbar.
+
+3. **Session 53:** TUI viewer breakage investigation (needs repro steps).
+
+---
 
 ## 2026-02-09: Session 49 - Fix Browser Auto-Takeover
 
