@@ -1,4 +1,4 @@
-# Vanish Session Notes Archive (Sessions 1-58)
+# Vanish Session Notes Archive (Sessions 1-65)
 
 These session notes were archived from prompt.md. They cover the project
 from initial implementation through the Arch PKGBUILD (session 58).
@@ -6025,3 +6025,84 @@ an external brotli dependency.
 
 > Earlier session notes (1-35) archived to
 > [doc/sessions-archive.md](doc/sessions-archive.md).
+
+---
+
+## 2026-02-09: Session 59 - Session List SSE
+
+New `GET /api/sessions/stream` SSE endpoint pushes live session list updates to
+connected browsers. Server polls the socket directory every 2 seconds and sends
+events only when the list changes (Wyhash-based change detection). Refactored
+`handleListSessions` to share `buildSessionListJson` with the new SSE path.
+Web frontend subscribes on auth instead of one-shot fetch. http.zig: 936 → 1070
+(+134 net). index.html: 304 → 312 (+8).
+
+---
+
+## 2026-02-09: Session 60 - Architecture Review (3-session checkpoint)
+
+Architecture review. Codebase at 6,076 lines across 15 files. 44 unit tests.
+Zero TODO/FIXME/HACK. Build clean. http.zig grew to 1,070 lines - assessed and
+determined it does NOT need splitting. Event loop grew by ~15 lines for session
+list clients, well-structured. Remaining duplication (connectToSession 3 copies,
+auth validation 6 copies, scroll actions 8 copies, TCP socket creation 2 copies)
+unchanged and stable. Wrote devil's advocate case for splitting http.zig and
+inline response. index.html at 312 lines - watch item but not actionable.
+Recommended v1 tag.
+
+---
+
+## 2026-02-09: Session 61 - Devil's Advocate Reflection + Archive Cleanup
+
+Reflection on http.zig splitting debate. Concluded the real question was about
+coupling, not file length. The coupling between SSE, auth, routing, and the
+event loop is essential (not incidental), so splitting would create the illusion
+of modularity without actual decoupling. Split trigger should be "understanding
+concern A requires understanding concern B," not a line count threshold. Archived
+sessions 36-55 to doc/sessions-archive.md. prompt.md: 4,056 → ~1,100 lines.
+
+---
+
+## 2026-02-09: Session 62 - Documentation Audit + Dual-Bind Fix + Architecture Review
+
+Pre-v1 documentation audit. Fixed README missing flags (`--read-only` for otp,
+`--temporary`/`--session` for revoke). Man page: added `--read-only`, fixed
+serve description. Fixed IPv6 dual-bind bug: `vanish serve` only bound IPv4.
+Restructured `start()` to bind IPv4 then best-effort IPv6 on localhost.
+http.zig: 1,070 → 1,082 (+12). Architecture review (3-session checkpoint):
+13/15 files unchanged. Project declared v1-ready.
+
+---
+
+## 2026-02-09: Session 63 - v1.0.0 Tag
+
+Tagged v1.0.0. Committed outstanding work from sessions 58-62 in 4 logical
+commits (LICENSE+PKGBUILD, docs fixes, dual-bind fix, session notes). Build
+clean, 44 tests passing. PKGBUILD version derivation verified.
+
+---
+
+## 2026-02-09: Session 64 - Devil's Advocate: Splitting index.html
+
+7-point case for splitting index.html: (1) three languages in one file is three
+concerns, (2) JS is doing real work (6 subsystems in 189 lines), (3) global
+mutable state (11 globals) is the coupling mechanism, (4) ES modules require no
+build step, (5) the "one HTTP request" argument is weaker than it appears, (6)
+testability would improve, (7) the 400-line threshold is arbitrary. Also
+documented what splitting would cost: more files, import/export ceremony, embed
+changes, loss of view-source simplicity, migration effort.
+
+---
+
+## 2026-02-09: Session 65 - Response: The Case Against Splitting index.html
+
+Point-by-point response to the 7-point case. Key conclusions: (1) the Zig file
+separation analogy is false - HTML/CSS/JS in a browser is one deployment unit,
+not three independent concerns; (2) 189 lines across 6 subsystems is ~31 lines
+each, too small to warrant files; (3) the 11 globals are UI state, inherently
+shared; (4) splitting requires non-trivial server changes - @embedFile is
+single-file, not directory-based, so a static file server would need to be
+built; (5) the real benefit is zero static file serving infrastructure, not "one
+request"; (6) testability is the only valid point but insufficient - the
+testable surface is 8 lines of key mapping; (7) maintenance hasn't been harder,
+so the threshold question is moot. Verdict: don't split.
