@@ -65,7 +65,7 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
-Done (Sessions 55-71): Resize re-render fix (S55), cursor position fix (S56),
+Done (Sessions 55-73): Resize re-render fix (S55), cursor position fix (S56),
 architecture review (S57), Arch PKGBUILD + LICENSE (S58), session list SSE
 (S59), architecture review + http.zig devil's advocate (S60), http.zig
 reflection + archive cleanup (S61), docs audit + dual-bind fix (S62), v1.0.0 tag
@@ -73,7 +73,7 @@ reflection + archive cleanup (S61), docs audit + dual-bind fix (S62), v1.0.0 tag
 reflection + architecture review (S66), protocol devil's advocate (S67), protocol
 defense (S68), protocol reflection + struct size tests + protocol comment (S69),
 abstraction interrogation + function decomposition analysis (S70), cmdNew
-decomposition (S71), specification document (S72).
+decomposition (S71), specification document (S72), architecture review (S73).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -168,6 +168,174 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 73 - Architecture Review
+
+### Context
+
+3 sessions since S70 (the last architecture review). S71 decomposed `cmdNew`,
+S72 created the specification document. This review checks: has the codebase
+stayed healthy? Are the remaining decomposition candidates still valid? Any new
+concerns?
+
+### The Survey
+
+| File | Lines | Change since S70 | Notes |
+|------|-------|------------------|-------|
+| http.zig | 1,082 | +0 | Still the largest file |
+| main.zig | 987 | ~0 (cmdNew refactored) | Better decomposed now |
+| client.zig | 648 | +0 | Clean |
+| auth.zig | 585 | +0 | Clean |
+| session.zig | 526 | +0 | Gold standard |
+| config.zig | 461 | +0 | Clean |
+| vthtml.zig | 374 | +0 | See observation below |
+| terminal.zig | 351 | +0 | See observation below |
+| protocol.zig | 213 | +0 | Tight, well-tested |
+| keybind.zig | 185 | +0 | Clean |
+| naming.zig | 165 | +0 | Clean |
+| pty.zig | 140 | +0 | Clean |
+| signal.zig | 48 | +0 | Minimal |
+| paths.zig | 43 | +0 | Minimal |
+| index.html | 312 | +0 | Clean |
+| **Total** | **6,120** | | |
+
+No code changes since S71. The codebase has been stable. This is expected —
+v1.0.0 is tagged, the work has been documentation and analysis.
+
+### S71 decomposition assessment
+
+The `cmdNew` → `parseCmdNewArgs` + `forkSession` decomposition from S71 holds
+up well. Re-reading `main.zig` lines 252-384:
+
+- `parseCmdNewArgs` (65 lines): focused, testable (though untested — it calls
+  `process.exit` on errors, making unit testing hard; this is a broader pattern
+  in main.zig).
+- `forkSession` (32 lines): clean process management.
+- `cmdNew` (22 lines): thin orchestrator. Reads well.
+
+The pattern works. The name_buf pointer trick (avoiding the Zig struct-returning-
+slice-into-own-buffer footgun) is documented in the S71 notes and is correct.
+
+### Remaining decomposition candidate #2: `processRequest` (http.zig:348-421)
+
+Re-reading with fresh eyes. The repetition is in lines 369-417: four blocks that
+each do:
+```
+startsWith "/api/sessions/" and endsWith "/{action}"
+  check method
+  extract name_start / name_end
+  validate name_end > name_start
+  call handler
+  else send error
+```
+
+A `parseSessionRoute` helper would take the path and return
+`?struct { name: []const u8, action: []const u8 }`. The dispatch would become:
+
+```
+if (parseSessionRoute(path)) |route| {
+    if (eql(route.action, "stream")) { ... }
+    else if (eql(route.action, "input")) { ... }
+    ...
+}
+```
+
+This would reduce the function from 73 to ~45 lines and eliminate 4 instances of
+the name extraction logic. The explicit routing (no table) stays. This is still
+worth doing.
+
+**Verdict: Still valid. Low-risk, moderate-payoff refactor.**
+
+### Remaining decomposition candidate #3: `dumpViewport` → `writeCell`
+
+Re-reading terminal.zig:138-169. The cell rendering switch is 31 lines. Moving
+it to `writeCell(writer, cell, row_pin)` would make `dumpViewport`'s inner loop
+3 lines (style check, writeCell, space fallback) instead of ~35. This makes
+the viewport loop structure much more visible.
+
+**Verdict: Still valid. Worth doing for readability.**
+
+### New observation: `updateFromVTerm` / `fullScreen` duplication (vthtml.zig)
+
+`ScreenBuffer.updateFromVTerm` (lines 88-121) and `ScreenBuffer.fullScreen`
+(lines 124-154) are structurally identical. Same row/cell iteration, same
+`cellFromVT` call, same appending to an ArrayList. The only difference:
+`updateFromVTerm` checks `if (!buf_cell.eql(new_cell))` before appending.
+
+Both could be unified into a single `scan(vterm, force_all: bool)` method that
+takes a boolean parameter. But: the two functions are each ~30 lines, the intent
+is clear from the function names, and a boolean parameter arguably hurts
+readability more than the duplication. The standard heuristic: extract when
+duplication would cause the implementations to diverge (one gets a fix, the
+other doesn't). Here, they share `cellFromVT`, so a bug in cell extraction
+gets fixed once. The iteration is trivial — unlikely to have bugs. The
+duplication is safe.
+
+**Verdict: Leave as-is. The duplication is small, intentional, and the function
+names are more descriptive than `scan(vterm, true/false)`.**
+
+### Architecture health
+
+**Module boundaries: sound.** The dependency graph remains acyclic:
+- protocol ← session, client, http, main
+- terminal ← client, http (via vthtml)
+- keybind ← client, config
+- auth ← http, main
+- paths ← main, http, session
+- vthtml ← http
+
+No file imports more than 6 other project modules. http.zig imports the most (6:
+auth, protocol, terminal, config, paths, vthtml), which is appropriate for the
+integration layer.
+
+**Coupling: low.** The protocol module defines data types with no behavior beyond
+serialization. The session module owns its event loop and delegates nothing
+upward. The client module handles its own rendering. The HTTP module is the most
+coupled (it bridges protocol, terminal, auth, and vthtml), but this is inherent
+to its role as the web integration layer.
+
+**What's simple:** The protocol. The session model. The keybind state machine.
+The viewport. The cell delta system.
+
+**What's complected (necessarily):** http.zig's event loop (4 client types
+sharing poll). The SSE pipeline (auth → protocol → vterm → HTML).
+
+**What's complected (fixably):** `processRequest`'s repeated name extraction.
+`dumpViewport`'s inline cell rendering.
+
+**Biggest risk:** main.zig at 987 lines. It's the CLI entry point with 11
+commands. Each command is a separate function (good), but many share patterns
+(arg parsing, socket resolution, connect-as-viewer) that are repeated. The
+`parseCmdNewArgs` extraction in S71 is the right direction. However, the
+remaining commands are each short enough (30-70 lines) that extracting shared
+helpers might not be worth the indirection. The risk is low — main.zig is a
+leaf node, not imported by anything. Its complexity doesn't leak.
+
+### What would make this codebase better
+
+1. **`processRequest` decomposition** — the remaining S70 candidate. Clear win.
+2. **`writeCell` extraction** — the other S70 candidate. Small win.
+3. The code is otherwise in good shape. No new decomposition candidates found.
+
+### What's working well
+
+- The debate cycle (devil's advocate → response → reflection) has been
+  genuinely useful. Every cycle has produced concrete actions (struct size tests,
+  protocol comment) or validated existing decisions (http.zig monolith,
+  index.html monolith, protocol design).
+- The spec document (S72) fills a real gap. It's the authoritative behavioral
+  reference for between-session context resets.
+- The codebase has stabilized. 6,120 lines of source, 15 files, clear
+  boundaries. Changes since v1.0.0 have been pure quality improvements.
+
+### Next session recommendations
+
+Session 74: Implement the `processRequest` decomposition (extract
+`parseSessionRoute`). This is the last clear refactoring candidate from S70.
+After that, the next 3-session architecture check would be S76.
+
+Alternatively, S74 could do the `writeCell` extraction — smaller, faster,
+independently committable. Both are valid; `processRequest` has higher payoff.
 
 ## 2026-02-09: Session 71 - cmdNew Decomposition
 
