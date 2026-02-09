@@ -1,3 +1,15 @@
+// Wire protocol for vanish session IPC over Unix domain sockets.
+//
+// Assumptions:
+// - Both endpoints are on the same host (UDS guarantees this).
+// - Native byte order. No endian conversion — same-host means same arch.
+// - All structs are extern for C-compatible layout. Sizes include alignment
+//   padding and are pinned by tests ("wire struct sizes"). Reordering fields
+//   or changing types will fail the size assertions.
+// - Client message types: 0x01-0x09. Server message types: 0x81-0x88.
+//   The high bit distinguishes direction. Unknown types: skip header.len bytes.
+// - No version negotiation. Client and server are the same binary.
+
 const std = @import("std");
 const posix = std.posix;
 
@@ -182,8 +194,17 @@ test "hello term truncation" {
     try std.testing.expect(hello.getTerm().len < 64);
 }
 
-test "header size" {
-    try std.testing.expectEqual(@as(usize, 5), @sizeOf(Header));
+test "wire struct sizes" {
+    try std.testing.expectEqual(@as(usize, 8), @sizeOf(Header));
+    try std.testing.expectEqual(@as(usize, 70), @sizeOf(Hello));
+    try std.testing.expectEqual(@as(usize, 22), @sizeOf(Welcome));
+    try std.testing.expectEqual(@as(usize, 4), @sizeOf(Resize));
+    try std.testing.expectEqual(@as(usize, 4), @sizeOf(Exit));
+    try std.testing.expectEqual(@as(usize, 1), @sizeOf(Denied));
+    try std.testing.expectEqual(@as(usize, 1), @sizeOf(RoleChange));
+    try std.testing.expectEqual(@as(usize, 4), @sizeOf(SessionResize));
+    try std.testing.expectEqual(@as(usize, 12), @sizeOf(ClientInfo));
+    try std.testing.expectEqual(@as(usize, 4), @sizeOf(KickClient));
 }
 
 test "message types" {

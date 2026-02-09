@@ -65,12 +65,13 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
-Done (Sessions 55-66): Resize re-render fix (S55), cursor position fix (S56),
+Done (Sessions 55-69): Resize re-render fix (S55), cursor position fix (S56),
 architecture review (S57), Arch PKGBUILD + LICENSE (S58), session list SSE
 (S59), architecture review + http.zig devil's advocate (S60), http.zig
 reflection + archive cleanup (S61), docs audit + dual-bind fix (S62), v1.0.0 tag
 (S63), index.html splitting devil's advocate (S64), response (S65), index.html
-reflection + architecture review (S66).
+reflection + architecture review (S66), protocol devil's advocate (S67), protocol
+defense (S68), protocol reflection + struct size tests + protocol comment (S69).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -475,6 +476,87 @@ doesn't exist yet and isn't needed for a single-implementation project.
 
 Session 69: Reflection on the protocol debate. Then implement the two concrete
 actions (struct size tests + protocol comment).
+
+## 2026-02-09: Session 69 - Reflection: Protocol Debate Settled
+
+### What I learned
+
+The debate validated the protocol design more than it challenged it. Of seven
+points raised, five required no code changes. The two that did — struct size
+tests and a documentation comment — are both things that should have existed from
+the start. They aren't protocol design failures; they're testing and
+documentation gaps.
+
+### The key insight: scope determines rigor
+
+The strongest argument in the defense was the deployment model observation.
+Vanish's protocol runs over UDS between processes compiled from the same source.
+This is not HTTP, not protobuf, not a public API. The critique applied
+internet-protocol rigor to a local IPC protocol, and most of those concerns
+evaporated once the scope was clearly stated.
+
+This is the same heuristic that settled the http.zig and index.html debates:
+context determines the right level of abstraction. A protocol between
+independently-deployed services needs versioning, byte order specification, and
+integrity checks. A protocol between co-compiled processes sharing a Unix socket
+needs... to work.
+
+### Where the critique was genuinely right
+
+**Struct size tests.** This is the one I'm embarrassed about. The Header size
+test was the right instinct — it pins the wire format against regressions. But
+it was the only wire struct with a size test, and it turns out the test was
+*already wrong*: it expected 5 bytes but `@sizeOf(Header)` is actually 8 due
+to alignment padding of the u32 after the u8. The test was failing. This is
+exactly the class of bug the critique predicted: silent assumptions about extern
+struct layout that aren't verified.
+
+The protocol still works because both sides use `@sizeOf` consistently — they
+agree on the padded sizes. But having a failing test that nobody noticed is a
+process smell. Fix it, and add size tests for every wire struct.
+
+**Documentation of assumptions.** The byte order assumption, the high-bit
+message type convention, the unknown-message-skip strategy — these are all
+correct design choices that exist only in the implementer's head. A short
+comment block at the top of protocol.zig costs nothing and prevents the next
+reader from having to reverse-engineer the decisions.
+
+### Where the critique was wrong, and why
+
+**Versioning.** The strongest counterargument: a version byte without negotiation
+semantics is cargo cult. What does version 2 mean? The critique never answered
+this because there is no answer — vanish is a single binary. Adding a version
+field to feel responsible would actually make the protocol worse: it creates the
+illusion of compatibility without the machinery to deliver it.
+
+**Checksums.** The circular argument is decisive: if your framing code has a bug,
+a checksum computed by the same framing code doesn't help. Checksums protect
+against transmission errors, not logic errors. UDS doesn't have transmission
+errors.
+
+**Fixed-size term field.** The C-ism critique is aesthetically valid but
+practically irrelevant. The fixed-size field enables zero-copy deserialization
+for a message sent once per connection. Replacing it with a length-prefixed
+variable field would add complexity to save ~50 bytes in a one-time handshake.
+This is the definition of a wrong trade-off.
+
+### The meta-lesson
+
+Three debates now (http.zig, index.html, protocol) have followed the same arc:
+the devil's advocate raises legitimate concerns, the response filters them
+through the project's actual constraints, and the reflection settles on 1-2
+concrete actions plus a clearer understanding of why the existing design is
+correct. The pattern is productive. The risk is calcification — doing the
+exercise but always concluding "we were right." The guard against this is to
+actually implement the changes when the critique is right, which is what we're
+doing here.
+
+### Concrete actions (implemented this session)
+
+1. Fix the Header size test (expected 5, actual 8) and add `@sizeOf` tests for
+   all wire structs: Hello, Welcome, Resize, Exit, Denied, RoleChange,
+   SessionResize, ClientInfo, KickClient.
+2. Add a protocol assumptions comment block to the top of protocol.zig.
 
 ---
 
