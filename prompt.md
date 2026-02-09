@@ -65,7 +65,7 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
-Done (Sessions 55-74): Resize re-render fix (S55), cursor position fix (S56),
+Done (Sessions 55-76): Resize re-render fix (S55), cursor position fix (S56),
 architecture review (S57), Arch PKGBUILD + LICENSE (S58), session list SSE
 (S59), architecture review + http.zig devil's advocate (S60), http.zig
 reflection + archive cleanup (S61), docs audit + dual-bind fix (S62), v1.0.0 tag
@@ -74,7 +74,8 @@ reflection + architecture review (S66), protocol devil's advocate (S67), protoco
 defense (S68), protocol reflection + struct size tests + protocol comment (S69),
 abstraction interrogation + function decomposition analysis (S70), cmdNew
 decomposition (S71), specification document (S72), architecture review (S73),
-processRequest decomposition (S74).
+processRequest decomposition (S74), writeCell extraction (S75), architecture
+review post-decomposition (S76).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -169,6 +170,192 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 76 - Architecture Review (Post-Decomposition)
+
+### Context
+
+3 sessions since S73 (the last architecture review). Sessions 74 and 75
+completed the remaining S70 decomposition candidates. All three are now done.
+This review assesses: did the decomposition improve things? Are there new
+candidates? What's the overall health?
+
+### The Survey
+
+| File | Lines | Change since S73 | Notes |
+|------|-------|------------------|-------|
+| http.zig | 1,092 | +10 | parseSessionRoute + dispatchSessionRoute (S74) |
+| main.zig | 987 | +0 | Stable (cmdNew decomposed in S71) |
+| client.zig | 648 | +0 | Clean |
+| auth.zig | 585 | +0 | Clean |
+| session.zig | 526 | +0 | Gold standard |
+| config.zig | 461 | +0 | Clean |
+| vthtml.zig | 374 | +0 | Clean |
+| terminal.zig | 348 | -3 | writeCell + writeCodepoint extraction (S75) |
+| protocol.zig | 213 | +0 | Tight, well-tested |
+| keybind.zig | 185 | +0 | Clean |
+| naming.zig | 165 | +0 | Clean |
+| pty.zig | 140 | +0 | Clean |
+| signal.zig | 48 | +0 | Minimal |
+| paths.zig | 43 | +0 | Minimal |
+| index.html | 312 | +0 | Clean |
+| **Total** | **6,127** | | |
+
+### Decomposition Assessment: Did S71/S74/S75 Improve Things?
+
+**1. cmdNew → parseCmdNewArgs + forkSession (S71):** Yes. `cmdNew` dropped from
+122 to 22 lines. The orchestrator reads as a clear sequence: parse args → fork
+session → print name → start serve → attach. `parseCmdNewArgs` is a pure
+function that returns a struct, which is the right pattern. `forkSession`
+isolates the fork/pipe/daemonize mechanics. The `name_buf` pointer pattern
+avoids the Zig struct-returning-slice footgun correctly.
+
+**2. processRequest → parseSessionRoute + dispatchSessionRoute (S74):** Yes.
+`processRequest` dropped from 73 to 25 lines. The 4 instances of session-name
+extraction are gone — `parseSessionRoute` handles it once, returning a
+`SessionRoute` struct. `dispatchSessionRoute` is a clean 15-line dispatcher.
+`parseSessionRoute` has 7 test cases including edge cases. This was the
+highest-value refactor of the three.
+
+**3. dumpViewport → writeCell + writeCodepoint (S75):** Modest improvement.
+`dumpViewport`'s inner loop went from ~35 lines of inline cell rendering to a
+single `writeCell` call. The viewport loop structure (rows → cells → style →
+content) is now immediately visible. `writeCodepoint` replaced 3 instances of
+the encode-to-buffer pattern. Small win, but clean.
+
+**Overall verdict: The decomposition effort was worth it.** Total effort across
+three sessions produced cleaner code without changing behavior. The functions
+follow session.zig's model: small, focused, named for what they do.
+
+### Dependency Graph
+
+```
+protocol    ← session, client, http, main
+terminal    ← client, http (via vthtml)
+keybind     ← client, config
+auth        ← http, main
+paths       ← main, http, config (paths imports config)
+vthtml      ← http
+pty         ← session, main
+signal      ← session, client
+naming      ← main
+config      ← main, client, http, paths
+session     ← main
+http        ← main
+client      ← main
+```
+
+The graph remains acyclic. No file imports more than 6 project modules (http.zig
+imports 6: auth, protocol, terminal, config, paths, vthtml). main.zig imports 10
+modules, which is appropriate for the entry point. No module imports main, http,
+or client — they're leaf nodes.
+
+### Longest Functions (post-decomposition)
+
+| Function | File | Lines | Assessment |
+|----------|------|-------|------------|
+| eventLoop | http.zig | ~136 | Inherent: 4 client types in poll loop |
+| main | main.zig | ~112 | Entry point: arg parsing + dispatch |
+| runClientLoop | client.zig | ~99 | Poll loop with stdin + session |
+| handleSseStream | http.zig | ~96 | Sequential setup pipeline |
+| handleClientInput | session.zig | ~76 | Message dispatch switch |
+| dumpViewport | terminal.zig | ~75 | Down from ~105. Improved. |
+| handleSseSessionOutput | http.zig | ~74 | SSE message dispatch |
+| handleNewConnection | session.zig | ~74 | Handshake validation |
+| validateToken | auth.zig | ~73 | Sequential crypto |
+| cmdList | main.zig | ~70 | List + format output |
+
+Compared to S70, `cmdNew` (122 lines) is gone from this list, replaced by
+`parseCmdNewArgs` (65) which doesn't make the top 10. `processRequest` (73) is
+gone, replaced by `processRequest` (25) + `dispatchSessionRoute` (15).
+`dumpViewport` dropped from 105 to 75.
+
+The remaining long functions fall into three categories:
+
+1. **Poll loops** (eventLoop × 2, runClientLoop): inherently long due to
+   poll-list construction + per-type dispatch. Extracting pieces would fragment
+   the poll-index correspondence. Previously reviewed and left as-is (S70, S73).
+
+2. **Sequential pipelines** (handleSseStream, validateToken, main): each step
+   depends on the previous. Extracting would create functions with many
+   parameters that are harder to follow than the linear sequence. Previously
+   reviewed and left as-is.
+
+3. **Switch dispatchers** (handleClientInput, handleSseSessionOutput,
+   handleNewConnection): message-type switches where each case is 10-15 lines.
+   These are the right size — further splitting would just move the switch cases
+   to separate functions with no structural benefit.
+
+**No new decomposition candidates identified.** The remaining long functions are
+long for structural reasons, not decomposition failures.
+
+### What's Simple
+
+- **The protocol.** 213 lines, 5-byte header, extern structs. Zero-copy
+  serialization. Tested.
+- **The session model.** Primary + viewers. Clear ownership. Clean event loop
+  with named handlers.
+- **The keybind state machine.** Leader key → mode transitions. 185 lines, self-
+  contained.
+- **The viewport.** 12 small methods in client.zig. Pan, scroll, resize. No
+  side effects beyond the struct.
+- **The decomposed functions.** parseCmdNewArgs, parseSessionRoute, writeCell —
+  each does one thing, returns a value, is testable.
+
+### What's Complected (Necessarily)
+
+- **http.zig's eventLoop.** 4 client types sharing one poll loop. This is the
+  architecture — a single-threaded event-driven server. The alternative (threads
+  or multiple servers) would be worse.
+- **The SSE pipeline.** Auth → protocol → vterm → HTML delta → SSE framing. This
+  is inherent to bridging a binary terminal protocol to browser rendering.
+- **main.zig at 987 lines.** 11 commands, each a separate function. They share
+  patterns (arg parsing, socket resolution, connect-as-viewer) that are
+  repeated. But main.zig is a leaf node — its complexity doesn't leak.
+
+### What's Complected (Fixably)
+
+**Nothing new.** The three fixable complections from S70 have been addressed.
+The codebase is in the state where remaining complexity is structural rather
+than incidental.
+
+### Architecture Health: The Bigger Picture
+
+The codebase has been stable at ~6,120 lines for 6 sessions (S71-S76). The work
+since v1.0.0 (S63) has been pure quality: decomposition, documentation, debate
+cycles. No new features, no new bugs, no line count growth.
+
+This is a sign of maturity. The question is: what's next?
+
+**Option A: More hammocking.** The prompt says "spend many iterations hammocking
+about the problem. it's complete — but could it be better? what would make you
+proud to have done in this codebase?" The honest answer: the codebase is clean,
+well-decomposed, well-documented (spec, man page, design doc, session archive).
+The debate cycles validated the major decisions. I'm proud of it as-is.
+
+**Option B: Devil's advocate cycle.** The prompt's rotation says every few
+sessions, write the best case for different decisions. The last debate (protocol,
+S67-69) produced struct size tests and a protocol comment. The one before
+(index.html, S64-66) confirmed the single-file approach. What topic hasn't been
+challenged? The **session model** (primary + viewers) and the **authentication
+design** (OTP → JWT) haven't been formally debated. Either could be a candidate.
+
+**Option C: Usage-driven.** The prompt says "v1.0.0 tagged. Future work driven
+by usage." If there are no bug reports or feature requests, the right thing is
+to wait.
+
+### Recommendation for Next Session
+
+Session 77 could begin a devil's advocate cycle on the **argument parsing
+pattern in main.zig**. Every command function (cmdServe, cmdList, cmdClients,
+cmdOtp, cmdKick, cmdKill, cmdAttach, cmdSend) does its own ad-hoc arg parsing
+with the same while-loop-over-args pattern. The counter-argument is a shared
+arg-parsing helper or declarative approach. This is a concrete, code-level
+question where the current approach might genuinely be wrong.
+
+Alternatively, session 77 could be a hammock session reflecting on what would
+make the codebase proud — not in terms of code quality (which is solid) but in
+terms of user experience, edge case handling, or missing capabilities.
 
 ## 2026-02-09: Session 75 - writeCell Extraction (S70 Decomposition Complete)
 
