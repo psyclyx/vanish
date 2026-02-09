@@ -65,13 +65,24 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
+Done (Session 65):
+
+- ✓ Response to devil's advocate case for splitting index.html. Addressed all 7
+  points. Key conclusions: the analogy to Zig file separation is false (HTML/CSS/
+  JS in a browser is one deployment unit, not three independent concerns), 189
+  lines across 6 subsystems is ~31 lines each (too small to warrant files), the
+  globals are UI state (inherently shared), splitting requires non-trivial server
+  changes (@embedFile is single-file, not directory-based), and testability
+  gains are real but don't justify the cost for 8 lines of key-mapping code.
+  Verdict: don't split. Reflection to be written in session 66.
+
 Done (Session 64):
 
 - ✓ Devil's advocate case for splitting index.html. 7-point argument examining:
   separation of concerns (3 languages in 1 file), JS complexity (6 subsystems in
   189 lines), global mutable state (11 globals), ES modules as zero-build-step
   alternative, marginal benefit of single HTTP request, testability, and
-  threshold methodology. Response to be written in session 65.
+  threshold methodology. Response written in session 65.
 
 Done (Session 63):
 
@@ -411,15 +422,217 @@ organization without a build step, (5) the "one request" benefit is marginal,
 (6) testability would improve, (7) the threshold should be about structure, not
 line count.
 
-**Response to be written next session.**
+**Response written in session 65 (see below).**
 
 ### Recommendations for Next Sessions
 
-1. **Session 65:** Write the response to this case. The response should address
-   each of the 7 points directly.
+1. ~~**Session 65:** Write the response to this case.~~ Done.
 
 2. **Session 66:** Reflection + architecture review (3-session checkpoint since
    S62).
+
+---
+
+## 2026-02-09: Session 65 - Response: The Case Against Splitting index.html
+
+This is the response to the 7-point case made in session 64. Each point is
+addressed directly.
+
+### Point-by-Point Response
+
+**1. "Three languages in one file is three concerns" — This analogy is wrong.**
+
+The comparison to "putting Zig, build config, and man page in one file" is
+misleading. Zig source, build.zig.zon, and a man page are consumed by different
+tools at different times for different purposes. They have genuinely independent
+lifecycles.
+
+HTML, CSS, and JavaScript in a `<style>` and `<script>` tag are not like that.
+They are one deployment unit, consumed together by one runtime (the browser), at
+one time (page load), for one purpose (this specific UI). The browser's rendering
+pipeline treats them as a single document. The `<style>` tag scopes CSS to the
+document. The `<script>` tag has direct access to the DOM the HTML created and
+the styles the CSS defined. They are designed to coexist in one file.
+
+The Zig codebase separates files by _module boundary_: terminal.zig doesn't
+import auth.zig. They have no dependency. But the JavaScript _must_ know about
+the HTML structure (it queries elements by ID) and the CSS _must_ know about the
+HTML structure (it targets classes). Splitting them into files doesn't remove the
+coupling — it just makes you open three files to understand one page.
+
+The real question isn't "how many languages?" but "how many independent things?"
+The answer here is one: the vanish web frontend.
+
+**2. "The JS is doing real work" — Yes, but the work is small.**
+
+Six subsystems in 189 lines is ~31 lines per subsystem. Let's look at what each
+one actually is:
+
+- SSE connections: `openSse()` is 10 lines. `openSessionsSse()` is 6 lines.
+- Terminal renderer: `handleUpdate()` is 34 lines.
+- Char measurement + resize: `measureChar()` is 9 lines. `sendResize()` is 11 lines.
+- Keyboard input: `handleKey()` is 8 lines. `toggleCtrl()` is 3 lines. Toolbar
+  listener is 7 lines.
+- Auth flow: 1 line (`fetch` + `then`).
+- Navigation: `connect()` is 13 lines. `disconnect()` is 7 lines.
+  `showSessions()` is 15 lines.
+
+The case makes these sound like substantial subsystems. They're not. They're
+short functions. The proposed split would create 4 JS files averaging 45 lines
+each, plus import/export boilerplate. A 30-line `sessions.js` file that exports
+two functions is not a meaningful module — it's a fragment.
+
+In the Zig codebase, the smallest module is paths.zig at 43 lines, and it
+exists because it's imported by 4 other modules. The proposed `sessions.js`
+would be imported by one file (main.js) and export two functions. That's not
+modular design — it's filing.
+
+**3. "Global state is the coupling mechanism" — This misidentifies the problem.**
+
+The 11 "mutable globals" are categorized as:
+
+- _UI state_ (6): `isPrimary`, `ctrlActive`, `termCols`, `termRows`,
+  `currentSession`, `isReadOnly`. These describe the current state of the UI.
+  They are inherently shared because the UI is one thing.
+- _Connection handles_ (2): `sse`, `sessionsSse`. These are the active SSE
+  connections. They need to be accessible to connect/disconnect functions.
+- _Rendering state_ (3): `charWidth`, `charHeight`, `cellMap`. These are
+  caches used by the renderer.
+
+The case says "you can't understand `handleKey` without knowing what sets
+`isPrimary`." But `isPrimary` is set in exactly two places: `connect()` (to
+false) and `takeover()` (to true). That's the entire lifecycle. In a 189-line
+file, this is not hard to find.
+
+ES modules would make the imports explicit, but they'd also make the state
+management more complex. Either you pass state through function parameters
+(threading 6+ variables through every call), create a shared state module (one
+more file that everything imports — centralizing the globals with extra steps),
+or use a class (which is just globals with `this.` prefix). None of these reduce
+complexity. They relocate it.
+
+The http.zig splitting debate (session 61) concluded that the right question is
+"can you understand concern A without understanding concern B?" In this 189-line
+file, yes. Each function is self-contained and short. The globals are simple
+flags and dimensions, not complex nested state.
+
+**4. "ES modules require no build step" — True, but they require server changes.**
+
+The case states: "The Zig server already serves static files from an embedded
+directory - adding more files to that directory is free."
+
+This is factually wrong. The server uses `@embedFile("static/index.html")` to
+embed a single file. There is no directory embedding. There is no general static
+file server. The `handleIndex` function serves exactly one file with a hardcoded
+`text/html` content type.
+
+Splitting would require:
+
+1. Changing `@embedFile` to embed multiple files (or using `@embedFile` once per
+   file).
+2. Adding content-type detection (`.css` → `text/css`, `.js` →
+   `application/javascript`).
+3. Adding a route that maps URL paths to embedded files.
+4. Either embedding a directory listing at compile time or hardcoding the file
+   list.
+
+This is not "free." It's a new feature in the HTTP server — a static file
+serving system that doesn't exist today. The current design (one embedded file,
+one route) is simpler than any multi-file alternative. The case for splitting
+the frontend implicitly requires complicating the backend.
+
+**5. "The 'one HTTP request' argument is weaker than it appears" — Misframes the
+benefit.**
+
+The benefit of a single file is not "one HTTP request." The benefit is:
+
+- One `@embedFile` call in the Zig source
+- One route in the router
+- One content type
+- Zero path-traversal attack surface for static file serving
+- Zero questions about cache headers for different file types
+- Zero MIME type sniffing concerns
+
+The case frames this as "one HTTP request vs four." The real comparison is "zero
+static file serving infrastructure vs a static file server." The current design
+has no concept of serving arbitrary files — that's an entire category of code
+(and security surface) that doesn't exist.
+
+HTTP/2 multiplexing is irrelevant because the server uses plain HTTP/1.1 on
+localhost. The caching argument is irrelevant because the page sends
+`Cache-Control: no-cache`.
+
+**6. "Testability" — The only valid point, but insufficient to justify the cost.**
+
+This is the strongest argument in the case, and it's genuinely true: the key
+mapping logic (lines 306-307) is dense, error-prone, and untestable as-is. If
+there were a bug in Ctrl+key translation or special key mapping, the only way
+to test it would be manually in a browser.
+
+However, the key mapping is 8 lines. The total "should really be tested" surface
+is the key mapping object literal plus the Ctrl character computation. That's
+not enough to justify a multi-file restructuring. If testability became a
+priority, the minimal change would be to extract just the key mapping into a
+separate `<script>` tag or a single external file — not a 4-file module system.
+
+Also: the Zig backend has 44 unit tests. The frontend has zero — not because
+it's untestable, but because it's a thin UI layer that's effectively tested by
+using it. The ROI on frontend unit tests for a 189-line file with no complex
+business logic is low.
+
+**7. "The 400-line threshold is arbitrary" — Agreed, but the conclusion doesn't
+follow.**
+
+The case is right that the question isn't about line count. But if the question
+is "does the current structure make maintenance harder than it needs to be?"
+the answer is no. The file has been maintained across 40+ sessions with only
++8 lines of growth in the last 5 sessions. Every change has been straightforward
+to make. No bug has been mislocated or hard to find. No change has required
+understanding unrelated code.
+
+The structure isn't making anything harder. The case identifies theoretical
+concerns (complected state, separation of concerns) but can't point to a
+concrete maintenance problem that splitting would solve, because there isn't one.
+
+### What the Case Gets Right
+
+Two things deserve acknowledgment:
+
+1. **The key mapping logic should be tested.** Lines 306-307 are a one-liner
+   that handles 14 special keys and a Ctrl modifier. A bug here would be silent
+   and painful. But the fix is "add tests for this function," not "restructure
+   into 5 files."
+
+2. **The @embedFile assumption was a useful probe.** The case assumed the server
+   had general static file serving. Discovering it doesn't reveals that splitting
+   has a hidden cost that tips the balance further toward keeping the single
+   file.
+
+### Verdict
+
+Don't split. The case for splitting rests on principles (separation of concerns,
+explicit dependencies, testability) that are good principles — but the costs
+they identify are theoretical, while the costs of splitting are concrete. The
+single-file frontend works. It's maintained easily. The one genuine improvement
+(key mapping tests) doesn't require splitting. The server would need a new
+feature (static file serving) that adds complexity and attack surface.
+
+The http.zig debate concluded that the split trigger is "understanding concern A
+requires understanding concern B." The same test applies here. You can understand
+`handleKey` without understanding `handleUpdate`. You can understand the CSS
+without understanding the JavaScript. The concerns are collocated but not
+complected.
+
+**Reflection to be written in session 66 alongside architecture review.**
+
+### Recommendations for Next Sessions
+
+1. **Session 66:** Reflection on this debate + architecture review (3-session
+   checkpoint since S62).
+
+2. **Session 67:** If the reflection closes the debate cleanly, the project is
+   in maintenance mode. Consider archiving sessions 56-60 to keep prompt.md
+   lean.
 
 ---
 
