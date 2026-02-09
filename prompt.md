@@ -61,7 +61,16 @@ New: (triaged in session 48)
 
 Current:
 
-- None. All major features complete. Project at v1.
+- None. v1.0.0 tagged. Future work driven by usage.
+
+Done (Session 63):
+
+- ✓ Tagged v1.0.0. Committed outstanding work from sessions 58-62 in 4 logical
+  commits (LICENSE+PKGBUILD, docs fixes, dual-bind fix, session notes), then
+  created annotated tag. Build clean, 44 tests passing. PKGBUILD version
+  derivation verified: `1.0.0.r0.ga5d7de1`.
+- ✓ Devil's advocate topic identified for future: single-file web frontend
+  (index.html at 312 lines). See notes below.
 
 Done (Session 62):
 
@@ -248,6 +257,61 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 63 - v1.0.0 Tag
+
+### What Happened
+
+Committed all outstanding work from sessions 58-62 and tagged v1.0.0.
+
+**Commits made (4):**
+
+1. `5711103` - add MIT license and Arch PKGBUILD (from S58)
+2. `20cc9b0` - docs: fix missing flags in README and man page (from S62)
+3. `5cd0093` - fix: bind both IPv4 and IPv6 on localhost by default (from S62)
+4. `a5d7de1` - docs: session notes for sessions 61-62
+
+**Tag:** `v1.0.0` on commit `a5d7de1`. Annotated tag with feature summary.
+
+**Verification:**
+- Build: clean
+- Tests: 44 passing
+- PKGBUILD `pkgver()`: produces `1.0.0.r0.ga5d7de1` (correct)
+
+### Devil's Advocate Topic: Single-File Web Frontend
+
+Session 62 identified this as the next unexamined decision. index.html is 312
+lines with ~190 lines of JS. The project has maintained a single-file frontend
+since the beginning, with the justification that it avoids build steps, module
+loading, and extra HTTP requests.
+
+**The case for splitting (to be written next session):**
+
+This should examine: (1) whether the JS is outgrowing a single `<script>` tag,
+(2) whether separating CSS/JS/HTML would improve maintainability, (3) whether
+the "no build step" constraint is worth the cost, (4) whether ES modules
+(`<script type="module">`) could provide organization without a build step.
+
+### Post-v1 Direction
+
+The project is tagged and complete. From here:
+
+- Bug fixes only, driven by actual usage
+- New features only if users request them
+- Potential small additions: `vanish version`, shell completions, `vanish attach
+  --last`, clipboard integration (OSC 52). None speculative.
+
+### Recommendations for Next Sessions
+
+1. **Session 64:** Devil's advocate case for splitting index.html.
+
+2. **Session 65:** Response to the case.
+
+3. **Session 66:** Reflection + architecture review (3-session checkpoint since
+   S62). At this point, if there are no bug reports or feature requests, the
+   project is in maintenance mode.
+
+---
 
 ## 2026-02-09: Session 62 - Documentation Audit + Dual-Bind Fix + Architecture Review
 
