@@ -16,6 +16,7 @@ pub const TokenPayload = struct {
     session: ?[]const u8 = null, // Only for session-scoped tokens
     exp: ?i64 = null, // Expiration timestamp (null = no expiry)
     iat: i64, // Issued at timestamp
+    read_only: bool = false,
 
     pub fn isExpired(self: TokenPayload) bool {
         if (self.exp) |exp| {
@@ -31,6 +32,7 @@ pub const OtpMeta = struct {
     session: ?[]const u8 = null,
     exp: ?i64 = null,
     created: i64,
+    read_only: bool = false,
 };
 
 pub const Auth = @This();
@@ -170,7 +172,7 @@ pub fn rotateKey(self: *Auth, scope: Scope, session: ?[]const u8) !void {
 }
 
 /// Generate a one-time password
-pub fn generateOtp(self: *Auth, scope: Scope, session: ?[]const u8, duration: ?i64) ![]const u8 {
+pub fn generateOtp(self: *Auth, scope: Scope, session: ?[]const u8, duration: ?i64, read_only: bool) ![]const u8 {
     // Generate random OTP code
     var code_bytes: [16]u8 = undefined;
     crypto.random.bytes(&code_bytes);
@@ -207,6 +209,9 @@ pub fn generateOtp(self: *Auth, scope: Scope, session: ?[]const u8, duration: ?i
     }
     if (exp) |e| {
         try std.fmt.format(writer, ",\"exp\":{d}", .{e});
+    }
+    if (read_only) {
+        try writer.writeAll(",\"read_only\":true");
     }
     try std.fmt.format(writer, ",\"created\":{d}}}", .{now});
 
@@ -251,6 +256,8 @@ pub fn exchangeOtp(self: *Auth, code: []const u8) ![]const u8 {
 
     const exp: ?i64 = if (obj.get("exp")) |v| @intCast(v.integer) else null;
 
+    const read_only = if (obj.get("read_only")) |v| (v == .bool and v.bool) else false;
+
     // Check if OTP itself is expired
     if (exp) |e| {
         if (std.time.timestamp() > e) {
@@ -264,11 +271,11 @@ pub fn exchangeOtp(self: *Auth, code: []const u8) ![]const u8 {
     std.fs.deleteFileAbsolute(meta_path) catch {};
 
     // Generate JWT
-    return try self.createToken(scope, session, exp);
+    return try self.createToken(scope, session, exp, read_only);
 }
 
 /// Create a JWT token
-pub fn createToken(self: *Auth, scope: Scope, session: ?[]const u8, exp: ?i64) ![]const u8 {
+pub fn createToken(self: *Auth, scope: Scope, session: ?[]const u8, exp: ?i64, read_only: bool) ![]const u8 {
     const key = try self.getKey(scope, session);
     const now = std.time.timestamp();
 
@@ -287,6 +294,9 @@ pub fn createToken(self: *Auth, scope: Scope, session: ?[]const u8, exp: ?i64) !
     }
     if (exp) |e| {
         try std.fmt.format(writer, ",\"exp\":{d}", .{e});
+    }
+    if (read_only) {
+        try writer.writeAll(",\"ro\":true");
     }
     try std.fmt.format(writer, ",\"iat\":{d}}}", .{now});
 
@@ -369,11 +379,13 @@ pub fn validateToken(self: *Auth, token: []const u8) !TokenPayload {
     // Build payload struct
     const exp: ?i64 = if (obj.get("exp")) |v| @intCast(v.integer) else null;
     const iat: i64 = @intCast(obj.get("iat").?.integer);
+    const read_only = if (obj.get("ro")) |v| (v == .bool and v.bool) else false;
 
     var payload = TokenPayload{
         .scope = scope,
         .exp = exp,
         .iat = iat,
+        .read_only = read_only,
     };
 
     if (session) |s| {
@@ -493,7 +505,7 @@ test "token creation and validation" {
     var auth = try Auth.init(alloc);
     defer auth.deinit();
 
-    const token = try auth.createToken(.daemon, null, null);
+    const token = try auth.createToken(.daemon, null, null, false);
     defer alloc.free(token);
 
     const payload = try auth.validateToken(token);
@@ -501,6 +513,7 @@ test "token creation and validation" {
 
     try std.testing.expectEqual(Scope.daemon, payload.scope);
     try std.testing.expect(payload.exp == null);
+    try std.testing.expect(!payload.read_only);
 }
 
 test "expired token" {
@@ -511,7 +524,7 @@ test "expired token" {
 
     // Create token that expired 1 second ago
     const exp = std.time.timestamp() - 1;
-    const token = try auth.createToken(.temporary, null, exp);
+    const token = try auth.createToken(.temporary, null, exp, false);
     defer alloc.free(token);
 
     const result = auth.validateToken(token);
@@ -524,7 +537,7 @@ test "session scoped token" {
     var auth = try Auth.init(alloc);
     defer auth.deinit();
 
-    const token = try auth.createToken(.session, "test-session", null);
+    const token = try auth.createToken(.session, "test-session", null, false);
     defer alloc.free(token);
 
     const payload = try auth.validateToken(token);
@@ -540,7 +553,7 @@ test "key rotation invalidates tokens" {
     var auth = try Auth.init(alloc);
     defer auth.deinit();
 
-    const token = try auth.createToken(.temporary, null, null);
+    const token = try auth.createToken(.temporary, null, null, false);
     defer alloc.free(token);
 
     // Token should be valid
@@ -553,4 +566,20 @@ test "key rotation invalidates tokens" {
     // Token should now be invalid
     const result = auth.validateToken(token);
     try std.testing.expectError(error.InvalidSignature, result);
+}
+
+test "read-only token" {
+    const alloc = std.testing.allocator;
+
+    var auth = try Auth.init(alloc);
+    defer auth.deinit();
+
+    const token = try auth.createToken(.daemon, null, null, true);
+    defer alloc.free(token);
+
+    const payload = try auth.validateToken(token);
+    if (payload.session) |s| alloc.free(s);
+
+    try std.testing.expectEqual(Scope.daemon, payload.scope);
+    try std.testing.expect(payload.read_only);
 }

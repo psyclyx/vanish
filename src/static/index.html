@@ -86,6 +86,7 @@
         let charWidth = 8.4, charHeight = 17;
         let currentSession = null;
         const cellMap = new Map();  // "x,y" -> DOM element
+        const isReadOnly = document.cookie.split('; ').some(c => c === 'ro=1');
 
         // Measure actual character dimensions from rendered font
         function measureChar() {
@@ -125,6 +126,7 @@
 
         function updateRoleBadge() {
             const badge = document.getElementById('role-badge');
+            if (isReadOnly) { badge.textContent = 'read-only'; badge.style.background = '#8b4513'; return; }
             badge.textContent = isPrimary ? 'primary' : 'viewer';
             badge.style.background = isPrimary ? '#2d6a4f' : '#444';
         }
@@ -140,6 +142,7 @@
             const term = document.getElementById('term');
             term.focus();
             term.onkeydown = e => handleKey(e, name);
+            if (isReadOnly) document.querySelector('[onclick="takeover()"]').classList.add('hidden');
             openSse(name);
         }
 
@@ -204,6 +207,7 @@
         }
 
         function takeover() {
+            if (isReadOnly) return;
             const name = document.getElementById('session-name').textContent;
             fetch(`/api/sessions/${encodeURIComponent(name)}/takeover`, { method: 'POST' })
                 .then(r => { if (r.ok) { isPrimary = true; updateRoleBadge(); sendResize(); } });

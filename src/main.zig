@@ -67,6 +67,7 @@ const usage_commands =
     \\  --session <name>     Scoped to session
     \\  --daemon             Valid until HTTP server restarts
     \\  --indefinite         Never expires (default)
+    \\  --read-only          View only (no input, takeover, or resize)
     \\
     \\Revoke options:
     \\  --temporary          Revoke all duration-based tokens
@@ -824,6 +825,7 @@ fn cmdOtp(alloc: std.mem.Allocator, args: []const []const u8) !void {
     var scope: Auth.Scope = .indefinite;
     var session: ?[]const u8 = null;
     var duration: ?i64 = null;
+    var read_only = false;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -851,6 +853,8 @@ fn cmdOtp(alloc: std.mem.Allocator, args: []const []const u8) !void {
             scope = .daemon;
         } else if (std.mem.eql(u8, arg, "--indefinite")) {
             scope = .indefinite;
+        } else if (std.mem.eql(u8, arg, "--read-only")) {
+            read_only = true;
         }
     }
 
@@ -862,7 +866,7 @@ fn cmdOtp(alloc: std.mem.Allocator, args: []const []const u8) !void {
     };
     defer auth.deinit();
 
-    const otp = auth.generateOtp(scope, session, duration) catch |err| {
+    const otp = auth.generateOtp(scope, session, duration, read_only) catch |err| {
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Failed to generate OTP: {}\n", .{err}) catch "Failed to generate OTP\n";
         try writeAll(STDERR_FILENO, msg);

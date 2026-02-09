@@ -402,13 +402,23 @@ fn handleAuth(self: *HttpServer, client: *HttpClient, headers: []const u8, body:
     };
     defer self.alloc.free(token);
 
+    // Check if token is read-only to set a client-readable cookie
+    const payload = self.auth.validateToken(token) catch {
+        try self.sendError(client, 500, "Token validation failed");
+        return;
+    };
+    defer if (payload.session) |s| self.alloc.free(s);
+
+    const ro_cookie: []const u8 = if (payload.read_only) "Set-Cookie: ro=1; SameSite=Strict; Path=/\r\n" else "";
+
     // Set JWT as HttpOnly cookie and redirect to /
     const response = try std.fmt.allocPrint(self.alloc,
         "HTTP/1.1 302 Found\r\n" ++
             "Set-Cookie: jwt={s}; HttpOnly; SameSite=Strict; Path=/\r\n" ++
+            "{s}" ++
             "Location: /\r\n" ++
             "Content-Length: 0\r\n" ++
-            "\r\n", .{token});
+            "\r\n", .{ token, ro_cookie });
 
     client.response_buf = response;
     client.response_sent = 0;
@@ -471,6 +481,11 @@ fn handleInput(self: *HttpServer, client: *HttpClient, headers: []const u8, body
     };
     defer if (payload.session) |s| self.alloc.free(s);
 
+    if (payload.read_only) {
+        try self.sendError(client, 403, "Read-only token");
+        return;
+    }
+
     if (payload.scope == .session) {
         if (payload.session) |allowed| {
             if (!std.mem.eql(u8, session_name, allowed)) {
@@ -501,6 +516,11 @@ fn handleResize(self: *HttpServer, client: *HttpClient, headers: []const u8, bod
         return;
     };
     defer if (payload.session) |s| self.alloc.free(s);
+
+    if (payload.read_only) {
+        try self.sendError(client, 403, "Read-only token");
+        return;
+    }
 
     if (payload.scope == .session) {
         if (payload.session) |allowed| {
@@ -552,6 +572,11 @@ fn handleTakeover(self: *HttpServer, client: *HttpClient, headers: []const u8, s
         return;
     };
     defer if (payload.session) |s| self.alloc.free(s);
+
+    if (payload.read_only) {
+        try self.sendError(client, 403, "Read-only token");
+        return;
+    }
 
     if (payload.scope == .session) {
         if (payload.session) |allowed| {
