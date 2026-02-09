@@ -134,39 +134,7 @@ pub fn dumpViewport(
                 last_style = cell_style;
             }
 
-            // Write the character
-            switch (cell.content_tag) {
-                .codepoint => {
-                    const cp = cell.content.codepoint;
-                    if (cp >= 0x20) {
-                        var buf: [4]u8 = undefined;
-                        const len = std.unicode.utf8Encode(cp, &buf) catch continue;
-                        try writer.writeAll(buf[0..len]);
-                    } else {
-                        try writer.writeByte(' ');
-                    }
-                },
-                .codepoint_grapheme => {
-                    if (row_pin.grapheme(cell)) |cps| {
-                        // First codepoint is in the cell itself
-                        const first_cp = cell.content.codepoint;
-                        if (first_cp >= 0x20) {
-                            var buf: [4]u8 = undefined;
-                            const len = std.unicode.utf8Encode(first_cp, &buf) catch continue;
-                            try writer.writeAll(buf[0..len]);
-                        }
-                        // Extra codepoints
-                        for (cps) |cp| {
-                            var buf: [4]u8 = undefined;
-                            const len = std.unicode.utf8Encode(cp, &buf) catch continue;
-                            try writer.writeAll(buf[0..len]);
-                        }
-                    } else {
-                        try writer.writeByte(' ');
-                    }
-                },
-                else => try writer.writeByte(' '),
-            }
+            try writeCell(writer, cell, &row_pin);
         }
 
         // Reset style at end of each row
@@ -193,6 +161,35 @@ fn stylesEqual(a: ghostty_vt.Style, b: ghostty_vt.Style) bool {
         a.flags.underline == b.flags.underline and
         a.fg_color.eql(b.fg_color) and
         a.bg_color.eql(b.bg_color);
+}
+
+fn writeCell(writer: anytype, cell: anytype, row_pin: anytype) !void {
+    switch (cell.content_tag) {
+        .codepoint => {
+            const cp = cell.content.codepoint;
+            if (cp >= 0x20) {
+                try writeCodepoint(writer, cp);
+            } else {
+                try writer.writeByte(' ');
+            }
+        },
+        .codepoint_grapheme => {
+            if (row_pin.grapheme(cell)) |cps| {
+                const first_cp = cell.content.codepoint;
+                if (first_cp >= 0x20) try writeCodepoint(writer, first_cp);
+                for (cps) |cp| try writeCodepoint(writer, cp);
+            } else {
+                try writer.writeByte(' ');
+            }
+        },
+        else => try writer.writeByte(' '),
+    }
+}
+
+fn writeCodepoint(writer: anytype, cp: u21) !void {
+    var buf: [4]u8 = undefined;
+    const len = std.unicode.utf8Encode(cp, &buf) catch return;
+    try writer.writeAll(buf[0..len]);
 }
 
 fn writeStyle(writer: anytype, s: ghostty_vt.Style) !void {
