@@ -60,7 +60,7 @@ vanish list
 | `kick <name> <client-id>` | Disconnect a client |
 | `kill <name>` | Terminate a session |
 | `serve [-b addr] [-p port] [-d]` | Start HTTP server |
-| `otp [--duration time] [--session name] [--read-only]` | Generate auth token |
+| `otp [--duration time] [--session name] [--read-only] [--url]` | Generate auth token |
 | `revoke [--all] [--temporary] [--session name]` | Revoke auth tokens |
 | `print-config` | Show effective config |
 
@@ -87,12 +87,12 @@ Leader key: **Ctrl+A** (configurable).
 # Start the HTTP server
 vanish serve -d
 
-# Generate an auth token
-vanish otp
-# Prints a one-time password
+# Generate a URL and open in browser
+vanish otp --url
+# http://127.0.0.1:7890?otp=...
 
-# Open http://localhost:7890 in a browser
-# Paste the OTP to authenticate
+# Or copy to clipboard
+vanish otp --url | xclip -sel clip
 ```
 
 The web terminal uses server-side VT-to-HTML rendering with cell-level delta

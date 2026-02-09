@@ -68,6 +68,7 @@ const usage_commands =
     \\  --daemon             Valid until HTTP server restarts
     \\  --indefinite         Never expires (default)
     \\  --read-only          View only (no input, takeover, or resize)
+    \\  --url                Print full URL instead of bare token
     \\
     \\Revoke options:
     \\  --temporary          Revoke all duration-based tokens

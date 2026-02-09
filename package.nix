@@ -5,7 +5,7 @@
   zig_0_15,
 }: let
   pname = "vanish";
-  version = "0.1.1";
+  version = "1.0.0";
 
   src = lib.fileset.toSource {
     root = ./.;
