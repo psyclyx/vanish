@@ -31,22 +31,22 @@ argument is not needed.
 .B \-\-serve
 (\fB\-s\fR) starts the HTTP server if not already running.
 .TP
-.B attach \fR[\fB\-\-primary\fR] \fIname\fR
+.B attach \fR[\fB\-p\fR|\fB\-\-primary\fR] \fIname\fR
 Attach to an existing session as a viewer.
 .B \-\-primary
-attaches as the primary client, taking over input control.
+(\fB\-p\fR) attaches as the primary client, taking over input control.
 .TP
-.B list \fR[\fB\-\-json\fR]
+.B list \fR[\fB\-j\fR|\fB\-\-json\fR]
 List active sessions. With
-.BR \-\-json ,
-output is machine-readable.
+.BR \-\-json
+(\fB\-j\fR), output is machine-readable.
 .TP
 .B send \fIname keys\fR
 Send
 .I keys
 to a session. Useful for scripting.
 .TP
-.B clients \fR[\fB\-\-json\fR] \fIname\fR
+.B clients \fR[\fB\-j\fR|\fB\-\-json\fR] \fIname\fR
 List clients connected to a session.
 .TP
 .B kick \fIname client-id\fR
@@ -56,11 +56,11 @@ Disconnect a client by ID (see
 .B kill \fIname\fR
 Terminate a session.
 .TP
-.B serve \fR[\fB\-b\fR \fIaddr\fR] [\fB\-p\fR \fIport\fR] [\fB\-d\fR]
+.B serve \fR[\fB\-b\fR|\fB\-\-bind\fR \fIaddr\fR] [\fB\-p\fR|\fB\-\-port\fR \fIport\fR] [\fB\-d\fR|\fB\-\-daemonize\fR]
 Start the HTTP server for web terminal access. Listens on 127.0.0.1 and ::1
 by default, port 7890.
-.B \-d
-daemonizes.
+.B \-\-daemonize
+(\fB\-d\fR) runs the server as a background daemon.
 .TP
 .B otp \fR[\fB\-\-duration\fR \fItime\fR] [\fB\-\-session\fR \fIname\fR] [\fB\-\-daemon\fR] [\fB\-\-indefinite\fR] [\fB\-\-read\-only\fR]
 Generate a one-time password for HTTP authentication. Tokens are indefinite by

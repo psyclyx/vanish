@@ -10,7 +10,7 @@ _vanish_client_ids() {
     local session="$1"
     [ -z "$session" ] && return
     local -a ids
-    ids=(${(f)"$(vanish clients "$session" 2>/dev/null | awk -F: '/^[0-9]/{print $1}')"})
+    ids=(${(f)"$(vanish clients "$session" 2>/dev/null | awk -F'\t' '/^[0-9]/{print $1}')"})
     _describe 'client id' ids
 }
 

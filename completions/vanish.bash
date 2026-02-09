@@ -7,9 +7,9 @@ _vanish_sessions() {
 _vanish_client_ids() {
     local session="$1"
     [ -z "$session" ] && return
-    vanish clients "$session" 2>/dev/null | while read -r line; do
-        case "$line" in
-            [0-9]*) echo "${line%%:*}" ;;
+    vanish clients "$session" 2>/dev/null | while IFS=$'\t' read -r id _rest; do
+        case "$id" in
+            [0-9]*) echo "$id" ;;
         esac
     done
 }
@@ -54,7 +54,7 @@ _vanish() {
                     serve) case "${words[i]}" in -b|--bind|-p|--port) ((i++)) ;; esac ;;
                     otp) case "${words[i]}" in --duration|--session) ((i++)) ;; esac ;;
                     revoke) case "${words[i]}" in --session) ((i++)) ;; esac ;;
-                    new) case "${words[i]}" in -c|--config) ((i++)) ;; esac ;;
+                    *) ;;
                 esac
                 ;;
             *) ((pos++)) ;;

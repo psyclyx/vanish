@@ -4,8 +4,15 @@ end
 
 function __vanish_needs_command
     set -l cmd (commandline -opc)
+    set -l skip_next 0
     for c in $cmd[2..]
+        if test $skip_next -eq 1
+            set skip_next 0
+            continue
+        end
         switch $c
+            case '-c' '--config'
+                set skip_next 1
             case '-*'
                 continue
             case '*'
@@ -17,8 +24,15 @@ end
 
 function __vanish_using_command
     set -l cmd (commandline -opc)
+    set -l skip_next 0
     for c in $cmd[2..]
+        if test $skip_next -eq 1
+            set skip_next 0
+            continue
+        end
         switch $c
+            case '-c' '--config'
+                set skip_next 1
             case '-*'
                 continue
             case '*'
@@ -32,6 +46,7 @@ end
 # Global options
 complete -c vanish -n __vanish_needs_command -s c -l config -rF -d 'Config file'
 complete -c vanish -n __vanish_needs_command -s v -d 'Verbose output'
+complete -c vanish -n __vanish_needs_command -f -a '-vv' -d 'Debug output'
 complete -c vanish -n __vanish_needs_command -s h -l help -d 'Show help'
 
 # Commands
