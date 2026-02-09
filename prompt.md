@@ -65,14 +65,15 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
-Done (Sessions 55-70): Resize re-render fix (S55), cursor position fix (S56),
+Done (Sessions 55-71): Resize re-render fix (S55), cursor position fix (S56),
 architecture review (S57), Arch PKGBUILD + LICENSE (S58), session list SSE
 (S59), architecture review + http.zig devil's advocate (S60), http.zig
 reflection + archive cleanup (S61), docs audit + dual-bind fix (S62), v1.0.0 tag
 (S63), index.html splitting devil's advocate (S64), response (S65), index.html
 reflection + architecture review (S66), protocol devil's advocate (S67), protocol
 defense (S68), protocol reflection + struct size tests + protocol comment (S69),
-abstraction interrogation + function decomposition analysis (S70).
+abstraction interrogation + function decomposition analysis (S70), cmdNew
+decomposition (S71).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -167,6 +168,46 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 71 - cmdNew Decomposition
+
+### What was done
+
+Implemented decomposition #1 from Session 70's analysis: extracted
+`parseCmdNewArgs` and `forkSession` from the 122-line `cmdNew` function.
+
+- `parseCmdNewArgs` (65 lines): takes args + config + name buffer, returns a
+  `NewCmdArgs` struct with flags, session name, and command args. Handles all
+  flag parsing, auto-name resolution, and `--` separator logic.
+- `forkSession` (32 lines): creates pipe, forks, child daemonizes and runs
+  session, parent waits for ready signal. Pure process management.
+- `cmdNew` (22 lines): orchestrates the two helpers, then handles auto-name
+  printing, serve startup, and auto-attach.
+
+Key design decision: `name_buf` lives on `cmdNew`'s stack and is passed by
+pointer to `parseCmdNewArgs`. The returned `session_name` slice may reference
+either the name buffer (auto-name case) or the args array (explicit name case).
+Both outlive the return. This avoids the Zig footgun of returning a struct with
+a slice pointing into its own buffer (which would dangle after the copy).
+
+Build and tests pass. No behavior changes.
+
+### Remaining decomposition candidates from S70
+
+2. **`processRequest` in http.zig** — Extract `parseSessionRoute`. Medium impact.
+3. **`dumpViewport` in terminal.zig** — Extract `writeCell`. Small impact.
+
+These are still valid but lower priority. The codebase is in good shape. The
+next substantial task from S70 was creating a detailed spec document
+(`doc/spec.md`). This session is the 3rd since the last architecture review
+(S70 was the review), so S73 or S74 should do the next one.
+
+### Next session recommendations
+
+Session 72: Either tackle decomposition #2 (`parseSessionRoute` in http.zig) or
+begin the specification document. The spec is arguably more valuable — it
+captures behavioral contracts that the code doesn't document. The decompositions
+are pure code quality improvements that can wait.
 
 ## 2026-02-09: Session 70 - Abstraction Interrogation: Function Decomposition
 
