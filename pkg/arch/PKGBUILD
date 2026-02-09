@@ -1,0 +1,46 @@
+# Maintainer: psyclyx <https://github.com/psyclyx>
+pkgname=vanish-git
+pkgver=0.1.0.r0.g0000000
+pkgrel=1
+pkgdesc='Lightweight terminal session multiplexer using libghostty'
+arch=('x86_64')
+url='https://github.com/psyclyx/vanish'
+license=('MIT')
+depends=('glibc')
+makedepends=('git' 'zig>=0.15')
+provides=('vanish')
+conflicts=('vanish')
+source=("git+${url}.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd vanish
+  git describe --long --tags 2>/dev/null | sed 's/^v//;s/-/.r/;s/-/./' ||
+    printf '0.1.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd vanish
+  export ZIG_GLOBAL_CACHE_DIR="$srcdir/zig-cache"
+  zig build --fetch=all
+}
+
+build() {
+  cd vanish
+  export ZIG_GLOBAL_CACHE_DIR="$srcdir/zig-cache"
+  zig build \
+    -Doptimize=ReleaseSafe \
+    --prefix "$srcdir/out"
+}
+
+check() {
+  cd vanish
+  export ZIG_GLOBAL_CACHE_DIR="$srcdir/zig-cache"
+  zig build test
+}
+
+package() {
+  install -Dm755 "$srcdir/out/bin/vanish" "$pkgdir/usr/bin/vanish"
+  install -Dm644 "$srcdir/out/share/man/man1/vanish.1" "$pkgdir/usr/share/man/man1/vanish.1"
+  install -Dm644 vanish/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
