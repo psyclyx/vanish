@@ -61,7 +61,18 @@ New: (triaged in session 48)
 
 Current:
 
-- None. All major features complete. Project approaching v1.
+- None. All major features complete. Project at v1.
+
+Done (Session 60):
+
+- ✓ Architecture review (3-session checkpoint since session 57). Codebase at
+  6,076 lines across 15 files (14 .zig + index.html at 312). 44 unit tests.
+  Zero TODO/FIXME/HACK. Build clean. http.zig grew to 1,070 lines - assessed
+  and determined it does NOT need splitting. Event loop grew by ~15 lines for
+  session list clients, well-structured. validateAuth call sites now at 6 (was
+  5). Remaining duplication unchanged and stable. No architectural issues found.
+  Wrote "devil's advocate" section on the decision to keep http.zig monolithic.
+  See detailed notes below.
 
 Done (Session 59):
 
@@ -470,6 +481,275 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 60 - Architecture Review (3-session checkpoint)
+
+### Architecture Review
+
+Last review was session 57. Sessions 58-59 were the Arch PKGBUILD/LICENSE and
+session list SSE respectively.
+
+### Codebase Stats
+
+| File         | Lines     | Change from S57 | Purpose                    |
+| ------------ | --------- | --------------- | -------------------------- |
+| http.zig     | 1,070     | +134            | Web server, SSE, routing   |
+| main.zig     | 976       | 0               | CLI entry point            |
+| client.zig   | 648       | 0               | Native client, viewport    |
+| auth.zig     | 585       | 0               | JWT/HMAC, OTP exchange     |
+| session.zig  | 526       | 0               | Daemon, poll loop          |
+| config.zig   | 461       | 0               | JSON config parsing        |
+| vthtml.zig   | 374       | 0               | VT→JSON, delta computation |
+| terminal.zig | 351       | 0               | ghostty-vt wrapper         |
+| index.html   | 312       | +8              | Web frontend               |
+| protocol.zig | 192       | 0               | Wire format                |
+| keybind.zig  | 185       | 0               | Input state machine        |
+| naming.zig   | 165       | 0               | Auto-name generation       |
+| pty.zig      | 140       | 0               | PTY operations             |
+| signal.zig   | 48        | 0               | Signal handling            |
+| paths.zig    | 43        | 0               | Shared utilities           |
+| **Total**    | **6,076** | **+142**        | 15 files                   |
+
+Build: Clean. Tests: 44 unit tests across 9 files. All passing.
+
+The +142 line growth since session 57 is entirely from session list SSE (+134 in
+http.zig, +8 in index.html). 13 of 15 files unchanged. The growth was well-
+contained: one new SSE concern added to the existing HTTP server.
+
+### What's Working Well
+
+**1. Core stability is absolute.** Protocol, session, terminal, pty, signal,
+paths, auth, config, keybind, naming, main, vthtml, client - 13 modules
+unchanged since session 57 or earlier. Most haven't changed in 10+ sessions.
+These are finished code.
+
+**2. Session list SSE landed cleanly.** The new feature added a 4th struct
+(SessionListClient), 4 new functions, and ~15 lines to the event loop. It
+reused the existing patterns (SSE headers, poll-based multiplexing, auth
+validation) without modifying them. The buildSessionListJson extraction
+actually reduced duplication from the existing handleListSessions.
+
+**3. Zero TODO/FIXME/HACK markers.** Still clean.
+
+**4. No inbox items remain.** Every feature request, bug report, and polish item
+from the inbox has been resolved. The project has reached feature completeness.
+
+### http.zig at 1,070 Lines - Does It Need Splitting?
+
+This is the main question for this review. http.zig is now the largest file by
+a significant margin (1,070 vs main.zig at 976). It grew 134 lines in session
+59.
+
+**Structural analysis of http.zig concerns:**
+
+1. Server core & initialization (lines 1-150): 150 lines
+2. Event loop (lines 152-287): 136 lines
+3. HTTP I/O (lines 289-334): 46 lines
+4. Request routing (lines 336-409): 74 lines
+5. Static serving (lines 411-423): 13 lines
+6. Auth endpoint (lines 425-473): 49 lines
+7. Session list one-shot (lines 475-489): 15 lines
+8. Terminal control endpoints (lines 491-618): 128 lines
+9. Terminal SSE streaming (lines 620-824): 205 lines
+10. Session list SSE streaming (lines 826-946): 121 lines
+11. Auth validation (lines 948-965): 18 lines
+12. Response helpers & socket utils (lines 967-1070): 104 lines
+
+**Assessment: No split needed.**
+
+The file has one clear responsibility: HTTP server. All 12 sections serve that
+responsibility. The event loop coordinates all client types. The routing
+dispatches to handlers. The handlers use shared auth, response, and socket
+utilities. Splitting would force inter-module communication for things that are
+currently simple method calls on `*HttpServer`.
+
+Where would you split? The most natural boundary would be terminal SSE (section
+9) and session list SSE (section 10) into separate files. But both depend on:
+- HttpServer struct (client lists, alloc, auth, config)
+- validateAuth
+- sendError / sendJson
+- connectToSession
+- The event loop (poll fd management)
+
+Extracting them would require either passing HttpServer pointers around (which
+is what method calls already do) or creating an interface/callback system (which
+adds complexity). The benefit would be shorter files. The cost would be more
+files to navigate, more import lines, and the illusion of modularity without
+actual decoupling.
+
+**The file is 1,070 lines with clear internal structure. Every function is
+small (largest is eventLoop at 136 lines). Navigation is straightforward. Leave
+it.**
+
+### Devil's Advocate: The Case for Splitting http.zig
+
+*Per the ongoing request to interrogate decisions:*
+
+**The case for splitting:**
+
+1. **Cognitive load.** 1,070 lines is a lot to hold in your head. When debugging
+   terminal SSE, you don't care about session list SSE or auth endpoints. A
+   developer opening http.zig for the first time faces a 1,070-line wall.
+
+2. **Growth trajectory.** http.zig was 898 lines at session 42, then 923, then
+   936, now 1,070. It's the only file that consistently grows. Every new web
+   feature lands here. If a future feature adds another SSE concern (e.g.,
+   streaming session logs), it adds another 100+ lines.
+
+3. **Test isolation.** http.zig has zero tests. It's the largest file with zero
+   test coverage. If the SSE streaming logic were in a separate module, it could
+   be tested against mock data without needing a full HTTP server.
+
+4. **The event loop is a God function.** At 136 lines, it manages 4 different
+   client types, 6+ index calculations, and dispatches to 5+ handlers. This is
+   the most complex function in the codebase. Splitting client types into
+   separate modules with their own poll handling could simplify it.
+
+**Response (next session should reflect on this):**
+
+These are real concerns. The counter-arguments:
+
+1. Cognitive load: mitigated by clear internal section structure and small
+   functions. Reading eventLoop → handler → utility is linear, not nested.
+
+2. Growth trajectory: true, but the growth is slowing. Session list SSE was the
+   last planned web feature. No new SSE concerns are on the horizon.
+
+3. Test isolation: valid. But the SSE streaming logic is tightly coupled to
+   the HTTP lifecycle (poll fds, client management, protocol reading). Extracting
+   it for testing would require mocking most of what makes it work.
+
+4. God function: 136 lines for a poll-based event loop managing 4 client types
+   is not unreasonable. Each client type's handling is 10-20 lines. The
+   complexity is inherent to multiplexed I/O, not incidental.
+
+The split would be warranted if: (a) http.zig crosses 1,500 lines, (b) a new
+SSE concern is added, or (c) testability becomes a priority. None of these
+conditions exist today.
+
+### Remaining Duplication (unchanged, stable)
+
+1. **connectToSession (3 copies):** main.zig:666, http.zig:1061, client.zig:588.
+   ~8 lines each. Still not worth extracting.
+
+2. **Auth validation pattern (6 copies in http.zig):** Lines 476, 492, 528,
+   584, 623, 829. Up from 5 (session list stream added one). Each ~4 lines. The
+   pattern is consistent and grep-friendly. Not worth a middleware abstraction.
+
+3. **Scroll actions (8 copies in client.zig):** Lines 173-212. Stable. Leave it.
+
+4. **TCP socket creation (2 copies in http.zig):** createTcpSocket4 and
+   createTcpSocket6. Stable. Leave it.
+
+### Simple vs Complected Analysis
+
+**Simple (good):**
+
+- Everything from session 57 remains simple.
+- Session list SSE: simple design. Poll directory, hash JSON, compare, send if
+  changed. No inotify, no file watchers, no pubsub. Just a timer and a hash.
+- The SessionListClient struct is 12 lines. Minimal state.
+- buildSessionListJson shared between one-shot and SSE paths. Clean extraction.
+
+**Watch items:**
+
+- **index.html at 312 lines.** Previous reviews flagged 250-280 as the threshold
+  for considering a JS split. We're past it. The JS section is ~190 lines. But
+  the code remains readable - functions are short, no framework state, linear
+  flow. The same assessment from session 57 holds: the benefit of a single file
+  (no build step, no module loading, one HTTP request) outweighs the cost at
+  this scale. Would reconsider past ~400 lines.
+
+- **eventLoop at 136 lines.** Largest function in the codebase. The session list
+  client disconnect loop (lines 272-283) is nearly identical to the pattern in
+  the SSE client loop. If a third client type were added, extracting a generic
+  "check for disconnect and remove" helper would be warranted. Not yet.
+
+**No complected code found.** Architecture remains clean.
+
+### The v1 Question
+
+All inbox items are resolved. All features from the task description are
+implemented. The project has:
+
+- Core terminal multiplexing with libghostty
+- Session management (create, list, attach, detach, kill, kick, clients)
+- Native client with leader key, status bar, viewport panning, scrollback
+- Web access with JWT/OTP auth, SSE streaming, delta rendering, resize
+- Read-only tokens, mobile toolbar, live session list
+- Auto-naming, auto-serve
+- Config file, man page, README
+- Nix package, Arch PKGBUILD
+
+What remains for a "v1 tag":
+
+1. **Confidence in correctness.** The codebase has been stable for many sessions.
+   Bug reports are resolved. No known issues.
+
+2. **Documentation completeness.** README, DESIGN.md, and man page are all
+   current.
+
+3. **Packaging.** Nix and Arch both work.
+
+4. **The "pride" question.** The user asked "what would make you proud?" The
+   honest answer: this codebase is already something to be proud of. 6,076 lines
+   for a terminal multiplexer with web access, clean architecture, zero tech
+   debt markers, stable for 20+ sessions. The economy of design - 15 files, 44
+   tests, 17 protocol message types - is the kind of minimalism that lasts.
+
+**Recommendation:** Tag v1. The project is done. Future work should be driven by
+actual usage and bug reports, not speculative features.
+
+### Hammock: What Would Make This Even Better?
+
+Since the project is feature-complete, the "pride" hammock shifts from "what's
+missing" to "what's excellent."
+
+**What's excellent:**
+
+- The protocol. 5-byte header, 17 message types. Simple enough to implement in
+  any language. No versioning needed because there's nothing to version.
+- The naming system. "dark-knot-zsh" is delightful.
+- The auth design. OTP → JWT exchange is simple, stateless on the server after
+  exchange, no database.
+- The delta streaming. Cell-level diffs, hash-based change detection. Minimal
+  data on the wire.
+- The single-file frontend. 312 lines of vanilla JS, no dependencies, no build
+  step. Loads instantly.
+
+**What could be polished (if driven by usage):**
+
+- A `vanish version` command that prints build info
+- Shell completions (bash, zsh, fish)
+- A `vanish attach --last` to reattach the most recently detached session
+- Clipboard integration (OSC 52) in the web terminal
+
+None of these are worth doing speculatively. They'd be worth doing if users
+request them.
+
+### Inbox Status
+
+| Item               | Status | Priority | Notes                         |
+| ------------------ | ------ | -------- | ----------------------------- |
+| All features       | ✓ Done | -        | Project at v1                 |
+| Architecture       | ✓ Done | -        | Session 60 review complete    |
+
+No remaining inbox items.
+
+### Recommendations for Next Sessions
+
+1. **Session 61:** Devil's advocate reflection. The case for splitting http.zig
+   was written above. Next session should write the reflection on that debate.
+   Also: consider whether to tag v1. The project meets all stated requirements.
+
+2. **Session 62:** If tagging v1, do final polish pass: verify README accuracy,
+   verify man page accuracy, verify DESIGN.md accuracy. Run a manual smoke test
+   of the full workflow (create session, web access, viewer, takeover, kill).
+
+3. **Session 63:** Archive sessions 43-55 to doc/sessions-archive.md. The prompt
+   file is getting long. Keep sessions 56-60 in the active notes.
+
+---
 
 ## 2026-02-09: Session 59 - Session List SSE
 
