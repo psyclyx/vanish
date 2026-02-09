@@ -65,7 +65,7 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
-Done (Sessions 55-84): Resize re-render fix (S55), cursor position fix (S56),
+Done (Sessions 55-85): Resize re-render fix (S55), cursor position fix (S56),
 architecture review (S57), Arch PKGBUILD + LICENSE (S58), session list SSE
 (S59), architecture review + http.zig devil's advocate (S60), http.zig
 reflection + archive cleanup (S61), docs audit + dual-bind fix (S62), v1.0.0 tag
@@ -79,7 +79,8 @@ review post-decomposition (S76), UX hammock (S77), socket clobbering fix +
 stale socket detection (S78), architecture review + spec update (S79), session
 model devil's advocate (S80), session model defense (S81), session model
 reflection + architecture review (S82), shell completion scripts (S83),
-completion bug fixes + man page + architecture review (S84).
+completion bug fixes + man page + architecture review (S84), otp --url feature
+(S85).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -174,6 +175,53 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 85 - `vanish otp --url`
+
+### What was done
+
+Implemented the `--url` flag for `vanish otp`, the highest-value small feature
+identified across S77, S82, S83, and S84. This has been the top recommended
+feature for 8 sessions without being implemented.
+
+**Changes:**
+
+- `src/main.zig`: `cmdOtp` now accepts `*const config.Config` (was the only
+  command that didn't). Added `--url` flag parsing. When set, prints
+  `http://<bind>:<port>?otp=<code>` using config's serve bind address and port
+  (defaults: 127.0.0.1:7890). Call site in `main()` updated to pass `&cfg`.
+
+- `doc/vanish.1`: Added `--url` to the otp synopsis and description.
+
+- `doc/spec.md`: Updated OTP generation step 4 and CLI reference to document
+  the `--url` flag.
+
+- `completions/vanish.bash`, `completions/vanish.zsh`, `completions/vanish.fish`:
+  Added `--url` to otp completions.
+
+**Use cases:**
+- `vanish otp --url | xclip` — copy auth URL to clipboard
+- `vanish otp --url | xdg-open` — open directly in browser
+- `vanish otp --url` — display for manual copy
+
+**Design notes:**
+
+The implementation is minimal — 10 lines of new logic in cmdOtp, plus a
+`url_mode` flag variable. The 256-byte buffer for URL formatting is generous
+(a typical URL is ~65 characters: `http://` + bind + `:` + port + `?otp=` +
+32-char hex). The `cfg` parameter addition brings `cmdOtp` in line with every
+other command function except `cmdRevoke` (which doesn't need config).
+
+Build and all tests pass.
+
+### Recommendations for next session
+
+- **Nothing urgent.** The project remains stable. This was the last identified
+  small feature worth implementing.
+- Session 87 will be the next 3-session architecture review checkpoint (3
+  sessions after S84).
+- `cmdRevoke` is now the only command that doesn't receive config. This is fine
+  — it doesn't need it. No action.
 
 ## 2026-02-09: Session 84 - Completion Bug Fixes + Man Page + Architecture Review
 
