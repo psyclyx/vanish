@@ -116,7 +116,7 @@ Used by:
 
 Poll-based: PTY master fd + listening socket + all client fds.
 
-- PTY readable: `handlePtyOutput` — read bytes, feed to terminal, broadcast `output` to all clients.
+- PTY readable: `handlePtyOutput` — read bytes, feed to terminal, broadcast `output` to all clients. Viewers iterated backward (while loop decrementing index) so that `swapRemove` on write failure doesn't skip or double-process viewers.
 - Socket readable: `handleNewConnection` — accept, validate hello, send welcome + full state.
 - Client readable: `handleClientInput` — read header, dispatch by message type.
 - Client HUP/error: remove client (removePrimary or removeViewer).
@@ -327,7 +327,8 @@ Rejected if token is read-only.
 3. Store `$STATE_DIR/otps/$hash_hex.json` with metadata:
    `{"scope":"...","session":"...","exp":N,"created":N,"read_only":bool}`
 4. Print code to stdout. With `--url`, print `http://<bind>:<port>?otp=<code>`
-   using bind address and port from config (defaults: 127.0.0.1:7890).
+   using bind address and port from config (defaults: 127.0.0.1:7890). IPv6
+   bind addresses are bracketed per RFC 3986 (e.g., `http://[::1]:7890?otp=...`).
 
 The stored file contains the **hash**, not the code. Attacker with read access to state dir cannot recover codes.
 
@@ -374,7 +375,7 @@ Rotate HMAC key for target scope. All tokens signed with old key become invalid 
 
 Every request (except `POST /auth`):
 1. Extract `jwt` from Cookie header.
-2. `auth.validateToken(jwt)` -> verify signature, check expiry.
+2. `auth.validateToken(jwt)` -> verify signature (constant-time comparison via `std.crypto.timing_safe.eql`), check expiry.
 3. If session-scoped: restrict to that session only.
 4. If read-only: reject input, resize, takeover.
 
@@ -463,7 +464,7 @@ Aliases: pan_up, pan_down, pan_left, pan_right, page_up, page_down, top, bottom,
 
 **Primary disconnects (HUP)**: `removePrimary()` closes fd, sets primary=null. Session continues running. Viewers unaffected. New primary can connect.
 
-**Viewer disconnects (HUP)**: `removeViewer(idx)` closes fd, removes from list via swapRemove. Other viewers unaffected.
+**Viewer disconnects (HUP)**: `removeViewer(idx)` closes fd, removes from list via swapRemove. Other viewers unaffected. All broadcast loops that call `removeViewer` on error use backward iteration to prevent swapRemove from skipping elements or corrupting the traversal.
 
 **All clients disconnect**: Session continues running. Child process continues executing. Session accepts new connections.
 
