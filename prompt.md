@@ -65,7 +65,7 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
-Done (Sessions 55-78): Resize re-render fix (S55), cursor position fix (S56),
+Done (Sessions 55-80): Resize re-render fix (S55), cursor position fix (S56),
 architecture review (S57), Arch PKGBUILD + LICENSE (S58), session list SSE
 (S59), architecture review + http.zig devil's advocate (S60), http.zig
 reflection + archive cleanup (S61), docs audit + dual-bind fix (S62), v1.0.0 tag
@@ -76,7 +76,8 @@ abstraction interrogation + function decomposition analysis (S70), cmdNew
 decomposition (S71), specification document (S72), architecture review (S73),
 processRequest decomposition (S74), writeCell extraction (S75), architecture
 review post-decomposition (S76), UX hammock (S77), socket clobbering fix +
-stale socket detection (S78), architecture review + spec update (S79).
+stale socket detection (S78), architecture review + spec update (S79), session
+model devil's advocate (S80).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -171,6 +172,187 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 80 - Devil's Advocate: The Session Model
+
+### Settled Decisions (from previous debates)
+
+1. **http.zig monolithic:** Keep. (Sessions 60-61)
+2. **index.html single-file:** Keep. (Sessions 64-66)
+3. **Protocol design:** Keep, with struct size tests + doc comment. (Sessions 67-69)
+
+All three settled on the same heuristic: context determines rigor. The scope is
+local, single-binary, single-user — which justified simpler choices.
+
+### Devil's Advocate: The Case Against Max-1-Primary + N Viewers
+
+The session model has never been formally challenged. It's the foundational
+design decision: every session has at most one primary client (which controls
+input and terminal dimensions) and any number of read-only viewers. Here's the
+strongest case that this is the wrong model.
+
+**1. The model prevents the most natural collaborative workflow.**
+
+Two developers pair programming. Developer A starts `vanish new work zsh`,
+runs some commands, opens a file in vim. Developer B connects as a viewer via
+the web interface. They're looking at A's terminal. B spots a typo, wants to
+fix it. B can't type. B must:
+
+1. Ask A to detach (out-of-band communication)
+2. Or trigger a takeover (which boots A to viewer)
+3. Type the fix
+4. Then A takes over back
+
+This is clunky. The real workflow people want is: both can type, whoever types
+last "has the cursor." This is how Google Docs works. This is how VS Code Live
+Share works. This is how `tmate` works (tmate allows multiple writers by
+default).
+
+The counter-argument is "vanish isn't a collaboration tool, it's a session
+multiplexer." But the prompt says "supports any number of view-only consumers"
+and provides a takeover mechanism — the collaboration scenario is clearly
+contemplated. The model just handles it poorly.
+
+**What multi-writer would actually look like:** Remove the primary/viewer
+distinction for input. Any connected client can send `input` messages; the
+session forwards them all to the PTY. One client is the "dimension owner" (the
+one whose terminal size determines the PTY size). Everything else stays the
+same: one PTY, one terminal emulator, output broadcast to all clients.
+
+The implementation cost is low. In `handleClientInput`, remove the `is_primary`
+guard on the `input` case. Add a `dimension_owner` field instead of the
+`primary` field. The protocol already supports it — `input` messages work
+regardless of role; the session just ignores them from viewers.
+
+**2. The primary slot creates a hidden resource contention problem.**
+
+Only one client can type at a time. But vanish doesn't tell you who the primary
+is, or that a primary exists, unless you explicitly run `vanish clients <name>`.
+The default `vanish attach` connects as viewer. So the common failure mode is:
+
+1. User A starts a session
+2. User A detaches (`Ctrl+A d`)
+3. User A reattaches: `vanish attach work` — but this is viewer by default
+4. User A types... nothing happens
+5. User A is confused, tries again, wonders if the session is broken
+6. Eventually remembers to add `-p`, or that they need to check if someone else
+   is primary
+
+This confusion exists because the model has an invisible exclusive resource (the
+primary slot) that isn't surfaced well in the UX. Session 77 identified this
+exact friction but concluded "the current default is correct" because
+conditional behavior is surprising. But the conditional behavior *already
+exists* — it's just hidden. When you attach, you don't know if you're getting
+what you wanted (viewer) or what you needed (primary).
+
+**A simpler model:** All clients can write. There is no primary slot. One client
+is the "size authority" (most recently attached local terminal, or explicitly
+set). The concept of "viewer" exists only in the web interface's read-only OTP
+scope — an authentication concern, not a protocol concern.
+
+**3. The takeover mechanism is more complex than multi-writer.**
+
+Look at `handleTakeover` in session.zig (lines 394-436): it demotes the old
+primary to viewer, removes the new primary from the viewer list, promotes them,
+sends role_change messages to both, and resizes the terminal. This is 42 lines
+of code to handle what is essentially "swap who can type."
+
+The protocol has `takeover` (0x06) and `role_change` (0x86) message types that
+exist solely for this dance. The client needs to handle role transitions —
+updating its keybind behavior, status bar, viewport. The web interface needs
+to handle the takeover button and role state.
+
+If everyone could type, none of this machinery would exist. No takeover message.
+No role_change message. No primary/viewer state tracking per client. The session
+struct loses 3 fields. The protocol loses 2 message types. The client loses
+the role state machine.
+
+The complexity budget spent on takeover is larger than the complexity budget
+that multi-writer would require.
+
+**4. The single-primary model conflicts with `vanish send`.**
+
+`vanish send work "ls\n"` connects as primary, sends input, and disconnects. If
+someone is already primary, it fails with "Session already has a primary client."
+This means you can't script input to a session while someone is interacting
+with it. This is a real limitation for automation: you can't have a monitoring
+script inject commands into a session being watched by a human.
+
+With multi-writer, `vanish send` would just... work. Connect, write, disconnect.
+No role conflict. No failure mode.
+
+**5. The viewer's input is silently dropped, not rejected.**
+
+When a viewer sends input, the session reads the bytes and discards them
+(session.zig:319-327). It doesn't send an error back. This means a viewer
+typing doesn't get any feedback that their keystrokes are being eaten. They
+see nothing happen and wonder why. This is a UX failure that only exists
+because of the primary/viewer distinction.
+
+(The native client handles this by consuming input locally for viewport
+navigation. But the web interface has no such mechanism — a viewer typing in
+the browser terminal just loses their keystrokes.)
+
+**6. dtach and tmux both made different choices.**
+
+dtach: no roles. Multiple clients can all write. The last one to resize sets
+the terminal size (with the `-r` flag for "smallest client wins"). Simple.
+
+tmux: multiple clients can all write. `set -g synchronize-panes` broadcasts
+input. Session size follows the smallest or largest client based on config.
+
+screen: multiple clients can all write with `multiuser on` and `acl`.
+
+Vanish is the outlier. Every comparable tool defaults to multi-writer. The
+primary/viewer model is the unconventional choice, and it imposes real costs
+(takeover complexity, send failures, viewer confusion) without a clear benefit
+beyond "safety" — preventing accidental input from watchers. But that safety
+concern is better addressed at the *connection* level (read-only OTPs, which
+vanish already has) than at the *protocol* level.
+
+**7. The model conflates two concerns: input authorization and terminal sizing.**
+
+"Primary" means two things: "can type" and "determines terminal dimensions."
+These are orthogonal concerns. You might want multiple typers but one size
+authority. You might want a viewer who can resize the session (useful for a
+viewer on a larger monitor who wants the primary to get more screen real estate).
+By bundling both into "primary," the model makes it impossible to express these
+combinations.
+
+A cleaner decomposition:
+- **Input permission**: per-client flag (write/read-only), set by auth scope
+  (OTP type) or explicit command
+- **Size authority**: one client, typically the most recently attached terminal
+  client (not a web client, since browsers don't have a "terminal size")
+
+This decomposition is how tmate works. It's how VS Code Live Share works (cursor
+ownership vs. edit permission are separate).
+
+### What this critique does NOT argue
+
+- This is not an argument for real-time conflict resolution, OT, or CRDTs.
+  Terminal input is sequential (one PTY, one input stream). Multiple writers
+  feeding the same PTY is no different from multiple processes writing to the
+  same pipe — the kernel serializes it. The question is whether the *protocol*
+  should enforce single-writer or let the PTY handle multiplexing naturally.
+
+- This is not an argument against read-only viewers in the web interface.
+  Read-only OTPs should still produce read-only sessions. The argument is that
+  input restriction should be an auth/connection concern, not a fundamental
+  protocol role.
+
+### The strongest counter-argument (for the response to address)
+
+"Multiple writers to a PTY is chaotic. If A is in vim and B types `:q!`, A
+loses their work. The primary model prevents accidental damage from unattended
+connections." This is a legitimate safety concern. The response should address
+whether the safety benefit justifies the complexity cost and UX friction.
+
+### Recommendations for Next Session
+
+Session 81: Write the response defending the current session model. Session 82
+will be the reflection, which is also the 3-session architecture review
+checkpoint (3 sessions since S79).
 
 ## 2026-02-09: Session 79 - Architecture Review + Spec Update
 
