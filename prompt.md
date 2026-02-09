@@ -44,12 +44,32 @@ New: (triaged in session 48)
 Current:
 
 - Investigate and fix: TUI viewer rendering breakage and keybind issues.
-- Read-only OTPs.
 - Mobile web: modifier buttons (Ctrl, etc.).
 - Rendering architecture redesign (multi-iteration hammock - see inbox idea).
 - Cursor position bug for narrow primary sessions.
 - Session list SSE (reactive in web).
 - Arch PKGBUILD.
+
+Done (Session 52):
+
+- ✓ Read-only OTPs. Added `--read-only` flag to `vanish otp`. Read-only tokens
+  cannot send input, takeover, or resize via the HTTP API. Server enforces with
+  403 on `/input`, `/takeover`, `/resize`. Web frontend hides Takeover button,
+  shows "read-only" badge. Orthogonal to scope (works with session, daemon,
+  temporary, indefinite). auth.zig: 556 → 585 (+29), http.zig: 898 → 923 (+25),
+  main.zig: 972 → 976 (+4), index.html: 222 → 226 (+4). Net +62 lines. New
+  unit test for read-only token round-trip.
+
+Done (Session 51):
+
+- ✓ Architecture review (3-session checkpoint). Codebase stable at 5,749 lines
+  across 15 files. Zero growth since session 48 (session 50 net -24, session 49
+  net +9, session 48 net 0). 13 of 15 files unchanged. 46 unit tests. Zero
+  TODO/FIXME/HACK markers. Remaining duplication: connectToSession appears in 3
+  files (main.zig:665, http.zig:889, client.zig:576). Auth validation pattern
+  repeated 5× in http.zig. Neither worth extracting now. Began hammocking on
+  rendering architecture redesign - first iteration of design thinking captured
+  in session notes. See notes.
 
 Done (Session 50):
 
@@ -359,6 +379,402 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 52 - Read-Only OTPs
+
+### What Changed
+
+Implemented read-only OTPs: a `--read-only` flag on `vanish otp` that generates
+tokens which can only view sessions, not control them.
+
+**auth.zig (556 → 585 lines, +29)**
+
+- Added `read_only: bool = false` to `TokenPayload` and `OtpMeta` structs.
+- `generateOtp()` now accepts a `read_only` parameter. When true, stores
+  `"read_only":true` in the OTP metadata JSON file.
+- `exchangeOtp()` reads the `read_only` field from the OTP metadata and passes
+  it through to `createToken()`.
+- `createToken()` now accepts a `read_only` parameter. When true, includes
+  `"ro":true` in the JWT payload. The field name is `ro` in the JWT (shorter
+  payload) vs `read_only` in the OTP metadata (clarity for stored files).
+- `validateToken()` parses the `ro` field from the JWT payload and sets
+  `payload.read_only`.
+- New test: `"read-only token"` - creates a read-only token, validates it, and
+  asserts `read_only == true`.
+
+**http.zig (898 → 923 lines, +25)**
+
+- `handleInput()`: returns 403 "Read-only token" if `payload.read_only`.
+- `handleResize()`: returns 403 "Read-only token" if `payload.read_only`.
+- `handleTakeover()`: returns 403 "Read-only token" if `payload.read_only`.
+- `handleAuth()`: after OTP exchange, validates the new token to check read-only
+  status. Sets a non-HttpOnly `ro=1` cookie so the JS frontend can detect it.
+  (The JWT itself is HttpOnly and not readable by JS.)
+
+**main.zig (972 → 976 lines, +4)**
+
+- `cmdOtp()`: parses `--read-only` flag, passes it to `generateOtp()`.
+- Usage text updated with `--read-only` description.
+
+**index.html (222 → 226 lines, +4)**
+
+- Reads `ro=1` cookie on page load.
+- `updateRoleBadge()`: shows "read-only" badge (brown) for read-only tokens.
+- `connect()`: hides Takeover button for read-only tokens.
+- `takeover()`: early return for read-only tokens.
+
+### Design Decisions
+
+- **Read-only is orthogonal to scope.** You can have a read-only indefinite
+  token, a read-only session-scoped token, a read-only temporary token, etc.
+  It's a permission flag, not a new scope. This keeps the scope/HMAC key
+  system unchanged.
+
+- **Server-side enforcement is primary.** The web frontend hides UI and blocks
+  actions client-side, but the real enforcement is the 403 from the HTTP
+  endpoints. A malicious client can't bypass it.
+
+- **`ro` in JWT, `read_only` in OTP metadata.** The JWT field is short (`ro`)
+  because JWTs are sent with every request as a cookie. The OTP metadata file
+  uses `read_only` because it's stored once and clarity matters.
+
+- **Non-HttpOnly `ro` cookie for JS detection.** The JWT is HttpOnly (can't be
+  read by JS). To let the frontend know about read-only status without an extra
+  API call, the auth handler sets a separate `ro=1` cookie that JS can read.
+
+### Usage
+
+```sh
+# Generate a read-only OTP
+vanish otp --read-only
+
+# Read-only + session-scoped + time-limited
+vanish otp --read-only --session my-session --duration 1h
+
+# Read-only + indefinite (default scope)
+vanish otp --read-only --indefinite
+```
+
+### Line Count Impact
+
+| File       | Before | After | Change  |
+| ---------- | ------ | ----- | ------- |
+| auth.zig   | 556    | 585   | +29     |
+| http.zig   | 898    | 923   | +25     |
+| main.zig   | 972    | 976   | +4      |
+| index.html | 222    | 226   | +4      |
+| **Net**    |        |       | **+62** |
+
+Total codebase: 15 files, ~5,811 lines.
+
+### Testing
+
+- Build: Clean
+- Unit tests: All passing (47 tests, +1 new read-only token test)
+
+### Inbox Status
+
+| Item                     | Status | Priority | Notes                        |
+| ------------------------ | ------ | -------- | ---------------------------- |
+| Read-only OTPs           | ✓ Done | -        | Session 52                   |
+| TUI viewer breakage      | ○ Todo | Medium   | Targeted fix > full redesign |
+| TUI viewer keybinds      | ○ Todo | Medium   | Likely rendering corruption  |
+| Mobile modifier toolbar  | ○ Todo | Medium   | Designed in session 46       |
+| Rendering redesign       | ○ Hmck | Low urg  | Hammock iter 1 done          |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation          |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list    |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                    |
+
+### Recommendations for Next Sessions
+
+1. **Session 53:** Mobile modifier toolbar. Well-designed from session 46,
+   straightforward implementation (~50-60 lines).
+
+2. **Session 54 (review):** Architecture review (3-session checkpoint).
+   Rendering redesign hammock iteration 2.
+
+3. **Session 55:** TUI viewer breakage investigation. The targeted fixes
+   (escape accumulator + resize resync) from hammock iteration 1.
+
+---
+
+## 2026-02-09: Session 51 - Architecture Review + Rendering Redesign Hammock
+
+### Architecture Review (3-session checkpoint)
+
+Last review was session 48. Sessions 49-50 were both web terminal fixes.
+
+### Codebase Stats
+
+| File         | Lines     | Change from S48 | Purpose                    |
+| ------------ | --------- | --------------- | -------------------------- |
+| main.zig     | 972       | 0               | CLI entry point            |
+| http.zig     | 898       | 0               | Web server, SSE, routing   |
+| client.zig   | 636       | 0               | Native client, viewport    |
+| auth.zig     | 556       | 0               | JWT/HMAC, OTP exchange     |
+| session.zig  | 526       | 0               | Daemon, poll loop          |
+| config.zig   | 461       | 0               | JSON config parsing        |
+| vthtml.zig   | 370       | -6              | VT→JSON, delta computation |
+| terminal.zig | 335       | 0               | ghostty-vt wrapper         |
+| index.html   | 222       | -18             | Web frontend               |
+| protocol.zig | 192       | 0               | Wire format                |
+| keybind.zig  | 185       | 0               | Input state machine        |
+| naming.zig   | 165       | 0               | Auto-name generation       |
+| pty.zig      | 140       | 0               | PTY operations             |
+| signal.zig   | 48        | 0               | Signal handling            |
+| paths.zig    | 43        | 0               | Shared utilities           |
+| **Total**    | **5,749** | **-24**         | 15 files                   |
+
+Build: Clean. Tests: 46 unit tests across 9 files. All passing.
+
+The codebase _shrank_ since session 48, entirely from the session 50 perf fix
+(vthtml -6, index.html -18). All Zig modules except vthtml unchanged. The core
+is thoroughly stable - 13 of 15 files untouched for 3+ review cycles.
+
+### What's Working Well
+
+**1. Core stability is absolute.** Protocol, session, terminal, pty, signal,
+paths, auth, config, keybind, naming, main - 11 modules haven't changed since
+session 48 or earlier. Most haven't changed in 6+ sessions. These are finished.
+
+**2. Session 50's perf fix was the right kind of change.** Replaced a slow
+approach (innerHTML parsing) with a faster one (createElement + structured JSON)
+while reducing code by 24 lines. The wire format change from HTML strings to
+JSON objects is cleaner in every dimension: smaller payloads, no HTML-escaping-
+inside-JSON-escaping, no regex on the client, DOM reuse.
+
+**3. Zero TODOs/FIXMEs/HACKs.** Still clean.
+
+**4. Test count grew to 46** (was 43 in session 48). The new vthtml test for
+JSON output format.
+
+### Remaining Duplication
+
+**1. connectToSession / connectSocket (3 copies)**
+
+Still present in main.zig:665, http.zig:889, client.zig:576. All three are
+functionally identical (~8 lines each): create UNIX socket, initUnix, connect.
+This was noted in session 42. It could live in paths.zig.
+
+Assessment: Still not urgent. Each copy is small, correct, and unlikely to
+change. Moving to paths.zig would add a dependency from http.zig → paths.zig
+(already exists) and client.zig → paths.zig (new). The benefit is marginal for
+~24 lines of stable code. **Leave it.**
+
+**2. Auth validation + scope check pattern (5 copies in http.zig)**
+
+The pattern `validateAuth(headers) catch { sendError(401) }` + `if
+(payload.scope == .session) { check session name }` appears at lines 419, 468,
+499, 550, 584. Each occurrence is ~10 lines.
+
+Assessment: This is HTTP handler boilerplate. Extracting it would mean creating
+a helper that returns the validated payload and takes the session name as a
+parameter. It's doable but the gain is modest (5 × 10 lines → 5 × 2 lines + 15
+line helper = saving ~25 lines). The repetition is obvious and grep-friendly.
+**Leave it** unless we add more endpoints.
+
+**3. executeAction scroll repetition (8 copies in client.zig)**
+
+Noted in session 39. Eight scroll actions each call `moveX() + renderViewport()
++ renderStatusBar()`. This is 40 lines that could be 8.
+
+Assessment: Stable, unlikely to gain more scroll actions. **Leave it.**
+
+### Simple vs Complected Analysis
+
+**Simple (good):**
+
+Everything from session 48 review remains simple. The session 50 changes made
+things simpler: the wire format is now pure JSON (no embedded HTML), the client
+rendering path is shorter, and DOM reuse eliminates unnecessary allocation.
+
+**Watch items:**
+
+- The dual output path in client.zig (`handleOutput`: raw passthrough vs vterm
+  render) remains the one area of the codebase that has genuine architectural
+  tension. This is directly addressed by the rendering redesign hammock below.
+
+- index.html at 222 lines. Shrank from 240 (session 49) thanks to the rendering
+  simplification. Mobile modifier toolbar will push it back up. Still manageable
+  as a single file.
+
+**No new architectural issues found.**
+
+### Rendering Architecture Redesign - Hammock Iteration 1
+
+The user's inbox item asks for: abstract rendering commands, echo/noecho modes,
+server-side VTerm → structured commands instead of raw bytes, drop HTTP client
+in favor of thread-per-connection.
+
+This is the biggest remaining architectural question. Let me think about it.
+
+**The problem being solved:**
+
+The native client output pipeline has two paths (client.zig:333-346):
+
+1. **No panning needed** (viewer >= session): Raw bytes → STDOUT. Fast, but
+   fragile. The bytes contain escape sequences meant for the session's terminal
+   dimensions, but the viewer's terminal may differ slightly. Partial escape
+   sequences can be split across reads. Resize races cause corruption.
+
+2. **Panning needed** (viewer < session): Bytes → local VTerm → dump viewport
+   subset → STDOUT. Correct but expensive. Every output chunk triggers a full
+   viewport re-render (clear screen + dump all visible cells).
+
+The web client already solved this differently: bytes → server-side VTerm →
+cell-level diff → JSON → client renders cells. This is always correct, always
+efficient (only changed cells sent), and handles resize seamlessly.
+
+**What if native clients worked more like web clients?**
+
+Instead of raw byte passthrough, the session daemon would maintain a VTerm
+(it already does for web clients via vthtml.zig) and send structured rendering
+commands to native clients. The native client would apply those commands to its
+terminal.
+
+**But wait.** The web client renders cells absolutely positioned. A native
+terminal can't do that efficiently - you'd need cursor positioning escape
+sequences per cell, which is far worse than raw byte passthrough. The reason web
+works is that the DOM is random-access. A terminal is a stream.
+
+**Key insight: the problem isn't the output format, it's the error recovery.**
+
+Raw byte passthrough works perfectly 99% of the time. The 1% failure case is:
+resize races and partial escape sequences. The rendering redesign proposal
+essentially says "build a fully correct path and use it always" but the cost
+is enormous - you'd need to generate terminal escape sequences from a cell-level
+diff, which is harder and slower than letting the application's native escape
+sequences flow through.
+
+**Alternative: fix the 1% case without redesigning everything.**
+
+The real bugs in the raw passthrough path are:
+
+1. **Partial escape sequences:** If a multi-byte escape (e.g. `\x1b[38;2;255;0;0m`
+   = 19 bytes) is split across two `read()` calls, writing the first part to
+   STDOUT puts the user's terminal in an undefined state.
+
+   Fix: Buffer output in the session daemon. Only forward complete escape
+   sequences. The VTerm parser already knows when it's mid-sequence - expose
+   that information or add a simple ESC sequence detector to the passthrough
+   path.
+
+2. **Resize races:** Session resizes, output was already in flight with old
+   dimensions.
+
+   Fix: On resize, send a "reset" signal to the viewer. The viewer clears its
+   screen and requests a full redraw. Or: after resize, the session daemon
+   pauses output briefly, lets the VTerm settle with the new dimensions, then
+   sends a screen dump to reset state.
+
+3. **Same-size viewers with subtle differences:** The viewer's terminal may
+   handle edge cases differently than the session's terminal (line wrapping,
+   scroll regions). This is rare but real.
+
+   Fix: Periodically (every N seconds or on user request), do a full screen
+   dump from the VTerm and send it to reset state. The viewer already has a
+   VTerm for panning mode; this would use it for non-panning mode too, but only
+   for periodic correction rather than continuous rendering.
+
+**The rendering redesign as proposed would require:**
+
+- Session daemon to maintain a VTerm for every session (it already does for web)
+- A new wire format for cell-level updates (or reuse the JSON format from web)
+- The native client to parse these updates and generate terminal escape sequences
+- Handling of all the edge cases that escape-sequence generation entails (cursor
+  positioning, color setting, attribute management)
+
+This is essentially writing a terminal emulator in reverse (VTerm → escape
+sequences), which is exactly what `vt.dumpViewport()` already does for the
+panning path. The question is whether to make it the primary path.
+
+**My current thinking:**
+
+The "fix the 1%" approach is better than the full redesign. Here's why:
+
+- The full redesign adds significant complexity for marginal correctness gain
+- The partial escape sequence problem is the most impactful bug and has a
+  targeted fix
+- The resize race has a targeted fix (pause + resync)
+- The "thread-per-connection" idea for HTTP would require rethinking the entire
+  HTTP server polling model - that's a lot of churn for unclear benefit
+
+**What I'd actually do (next hammock iteration should critique this):**
+
+1. Add a simple escape sequence accumulator to the session daemon's output path.
+   Instead of forwarding each `read()` directly, buffer until escape sequences
+   are complete. This is ~30 lines.
+
+2. On resize events, inject a screen dump from the session's VTerm into the
+   native client's output stream. This resyncs the viewer's terminal state.
+   This is ~20 lines.
+
+3. For the "periodic correction" idea: add a heartbeat where the session daemon
+   sends a compressed screen state every 5 seconds. The native client compares
+   and corrects if needed. This is more complex (~100 lines) and may not be
+   needed if fixes 1 and 2 address the reported bugs.
+
+**Echo/noecho modes:**
+
+The user mentioned echo/noecho as distinct modes. "Echo mode" = scrolling
+output (like a shell). "Noecho mode" = fullscreen TUI (like vim).
+
+In echo mode, the viewer can use their own terminal's scrollback. In noecho
+mode, the viewer needs to pan around a fixed screen.
+
+The current system already detects this implicitly: if the session is larger
+than the viewer, panning is enabled. But it doesn't distinguish between "output
+is scrolling past" and "application is painting a fixed screen." This distinction
+could enable better viewer behavior:
+
+- Echo mode: forward raw bytes, let the viewer's terminal scroll naturally.
+  Scrollback just works.
+- Noecho mode: use VTerm rendering. The application is painting specific
+  screen positions, so cell-level updates make sense.
+
+How to detect: monitor whether the application is using alternate screen buffer
+(`\x1b[?1049h` enables, `\x1b[?1049l` disables). When alternate screen is
+active → noecho/fullscreen. When not → echo/scrolling.
+
+The VTerm already tracks this state. Exposing it to the client would enable
+automatic mode switching. This is elegant and simple to implement.
+
+**Summary of hammock iteration 1:**
+
+- Full rendering redesign: too much complexity for the gain. Reject.
+- Targeted fixes for the 1% failure cases: escape accumulation + resize resync.
+  Pursue.
+- Echo/noecho mode detection via alternate screen buffer: elegant, pursue in a
+  later iteration after the targeted fixes prove their value.
+- Next hammock iteration should critique the "fix the 1%" approach and think
+  about edge cases.
+
+### Inbox Status
+
+| Item                     | Status | Priority | Notes                        |
+| ------------------------ | ------ | -------- | ---------------------------- |
+| TUI viewer breakage      | ○ Todo | Medium   | Targeted fix > full redesign |
+| TUI viewer keybinds      | ○ Todo | Medium   | Likely rendering corruption  |
+| Read-only OTPs           | ○ Todo | Medium   | Auth scope extension         |
+| Mobile modifier toolbar  | ○ Todo | Medium   | Designed in session 46       |
+| Rendering redesign       | ○ Hmck | Low urg  | Hammock iter 1 done, see ↑   |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation          |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list    |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                    |
+
+### Recommendations for Next Sessions
+
+1. **Session 52:** Read-only OTPs. This is the most impactful remaining feature
+   that doesn't require deep investigation. Auth scope extension in auth.zig,
+   HTTP endpoint checks in http.zig, `vanish otp --read-only` flag in main.zig.
+
+2. **Session 53:** Mobile modifier toolbar. Implementation is well-designed from
+   session 46. ~50-60 lines of HTML/JS/CSS.
+
+3. **Session 54 (review):** Rendering redesign hammock iteration 2. Critique the
+   "fix the 1%" approach. Investigate the escape accumulator idea in more detail.
+
+---
 
 ## 2026-02-09: Session 50 - Fix Browser Localhost Lag
 
