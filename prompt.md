@@ -65,7 +65,7 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
-Done (Sessions 55-83): Resize re-render fix (S55), cursor position fix (S56),
+Done (Sessions 55-84): Resize re-render fix (S55), cursor position fix (S56),
 architecture review (S57), Arch PKGBUILD + LICENSE (S58), session list SSE
 (S59), architecture review + http.zig devil's advocate (S60), http.zig
 reflection + archive cleanup (S61), docs audit + dual-bind fix (S62), v1.0.0 tag
@@ -78,7 +78,8 @@ processRequest decomposition (S74), writeCell extraction (S75), architecture
 review post-decomposition (S76), UX hammock (S77), socket clobbering fix +
 stale socket detection (S78), architecture review + spec update (S79), session
 model devil's advocate (S80), session model defense (S81), session model
-reflection + architecture review (S82), shell completion scripts (S83).
+reflection + architecture review (S82), shell completion scripts (S83),
+completion bug fixes + man page + architecture review (S84).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -173,6 +174,101 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 84 - Completion Bug Fixes + Man Page + Architecture Review
+
+### What was done
+
+Verified the S83 shell completion scripts against the actual source code in
+main.zig. Found and fixed 4 bugs in the completions plus gaps in the man page.
+
+**Completion bugs fixed:**
+
+1. **bash/zsh: client ID parsing broken.** `_vanish_client_ids` split on colon
+   (`:`) but `vanish clients` output is tab-delimited. The bash helper now uses
+   `IFS=$'\t' read -r id _rest` and the zsh helper uses `awk -F'\t'`.
+
+2. **fish: missing `-vv` global option.** Added `complete -f -a '-vv'`.
+
+3. **fish: `-c`/`--config` arg not skipped in subcommand detection.** Both
+   `__vanish_needs_command` and `__vanish_using_command` treated `-c`'s argument
+   (the config path) as the subcommand. Both now track a `skip_next` flag for
+   `-c`/`--config`.
+
+4. **bash: spurious `-c`/`--config` in `new` positional counter.** The `new`
+   subcommand's positional argument counter skipped values after `-c`/`--config`,
+   but global options are consumed before the subcommand reaches `cmdNew`. This
+   was dead code at best, misleading at worst. Changed to a no-op wildcard
+   catch.
+
+**Man page fixes:**
+
+- `attach`: added `-p` short form for `--primary`
+- `list`/`clients`: added `-j` short form for `--json`
+- `serve`: added `--bind`/`--port`/`--daemonize` long forms (only short forms
+  were shown)
+
+**Not fixed (intentional):**
+
+- `attach --viewer`/`-v`: deprecated backwards-compat flag, deliberately not
+  advertised in completions or man page.
+
+### Architecture Review (3-session checkpoint since S82)
+
+#### Line Count Survey
+
+| File | Lines | Change since S82 | Notes |
+|------|-------|------------------|-------|
+| http.zig | 1,101 | +0 | Stable |
+| main.zig | 1,005 | +0 | Stable |
+| client.zig | 648 | +0 | Stable |
+| auth.zig | 585 | +0 | Stable |
+| session.zig | 536 | +0 | Stable |
+| config.zig | 461 | +0 | Stable |
+| vthtml.zig | 374 | +0 | Stable |
+| terminal.zig | 348 | +0 | Stable |
+| protocol.zig | 213 | +0 | Stable |
+| keybind.zig | 185 | +0 | Stable |
+| naming.zig | 165 | +0 | Stable |
+| pty.zig | 140 | +0 | Stable |
+| signal.zig | 48 | +0 | Stable |
+| paths.zig | 43 | +0 | Stable |
+| **Total** | **5,852** | **+0** | |
+
+**Non-source additions:** 339 lines of shell completions (130 bash + 117 zsh +
+92 fish). These are installed artifacts, not runtime code.
+
+#### Architecture Health
+
+Zero Zig code changes since S79 (6 sessions ago). The source has been completely
+stable. All changes have been documentation (S80-82), shell completions (S83),
+and now bug fixes to those completions (S84).
+
+Dependency graph unchanged. No new concerns. The codebase is in maintenance
+mode, which remains appropriate.
+
+#### Observation: Testing Gap for CLI Completions
+
+The completion scripts were written from reading the source and man page in S83
+but weren't verified against actual output formats. This session found that the
+`vanish clients` output format (tab-delimited) didn't match the completion
+scripts' assumptions (colon-delimited). This is a general risk with shell
+completions — they parse tool output but aren't covered by the tool's test suite.
+
+There's no good way to unit-test completion scripts without an integration test
+harness (spin up sessions, run completions, check output). This is out of scope
+for vanish. The mitigation is what this session did: careful manual verification
+against the source.
+
+### Recommendations for next session
+
+- **Nothing.** The project is stable. The completions are fixed. The man page is
+  accurate. Wait for usage.
+- **`vanish otp --url`** remains the highest-value small feature if something
+  is needed: `vanish otp --url | xclip` or pipe to browser. But there's no
+  urgency.
+- The debate cycle practice is paused per S82's recommendation. Future debates
+  should be triggered by genuine uncertainty, not rotation.
 
 ## 2026-02-09: Session 83 - Shell Completion Scripts
 
