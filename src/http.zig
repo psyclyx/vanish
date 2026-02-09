@@ -20,6 +20,8 @@ listen_sock4: ?posix.socket_t = null,
 listen_sock6: ?posix.socket_t = null,
 clients: std.ArrayList(HttpClient),
 sse_clients: std.ArrayList(SseClient),
+session_list_clients: std.ArrayList(SessionListClient),
+last_session_scan: i64 = 0,
 running: bool = true,
 bind_addr: []const u8,
 port: u16,
@@ -55,6 +57,18 @@ const SseClient = struct {
     }
 };
 
+const SessionListClient = struct {
+    http_fd: posix.socket_t,
+    last_hash: u64 = 0,
+    scope: Auth.Scope,
+    session_filter: ?[]const u8 = null,
+
+    fn deinit(self: *SessionListClient, alloc: std.mem.Allocator) void {
+        posix.close(self.http_fd);
+        if (self.session_filter) |f| alloc.free(f);
+    }
+};
+
 pub fn init(alloc: std.mem.Allocator, cfg: *const config.Config, bind: []const u8, port: u16) !HttpServer {
     var auth = try Auth.init(alloc);
     errdefer auth.deinit();
@@ -65,6 +79,7 @@ pub fn init(alloc: std.mem.Allocator, cfg: *const config.Config, bind: []const u
         .cfg = cfg,
         .clients = .empty,
         .sse_clients = .empty,
+        .session_list_clients = .empty,
         .bind_addr = bind,
         .port = port,
     };
@@ -81,6 +96,11 @@ pub fn deinit(self: *HttpServer) void {
         c.deinit(self.alloc);
     }
     self.sse_clients.deinit(self.alloc);
+
+    for (self.session_list_clients.items) |*c| {
+        c.deinit(self.alloc);
+    }
+    self.session_list_clients.deinit(self.alloc);
 
     if (self.listen_sock4) |s| posix.close(s);
     if (self.listen_sock6) |s| posix.close(s);
@@ -159,15 +179,21 @@ fn eventLoop(self: *HttpServer) !void {
             try poll_fds.append(self.alloc, .{ .fd = c.http_fd, .events = posix.POLL.IN, .revents = 0 });
         }
 
-        const timeout: i32 = if (self.sse_clients.items.len > 0) 1000 else -1; // 1s timeout for keyframes
+        // Add session list SSE clients (listen for disconnect only)
+        for (self.session_list_clients.items) |c| {
+            try poll_fds.append(self.alloc, .{ .fd = c.http_fd, .events = posix.POLL.IN, .revents = 0 });
+        }
+
+        const has_sse = self.sse_clients.items.len > 0 or self.session_list_clients.items.len > 0;
+        const timeout: i32 = if (has_sse) 1000 else -1;
         const ready = posix.poll(poll_fds.items, timeout) catch |err| {
             if (err == error.Interrupted) continue;
             return err;
         };
 
         if (ready == 0) {
-            // Timeout - send keyframes to SSE clients if needed
             try self.sendPeriodicKeyframes();
+            self.updateSessionListClients();
             continue;
         }
 
@@ -241,6 +267,22 @@ fn eventLoop(self: *HttpServer) !void {
 
             sse_idx += 1;
         }
+        idx += self.sse_clients.items.len * 2;
+
+        // Handle session list SSE client disconnects
+        var sl_idx: usize = 0;
+        while (sl_idx < self.session_list_clients.items.len) {
+            const poll_idx = idx + sl_idx;
+            if (poll_idx >= poll_fds.items.len) break;
+
+            if (poll_fds.items[poll_idx].revents & (posix.POLL.HUP | posix.POLL.ERR | posix.POLL.IN) != 0) {
+                self.removeSessionListClient(sl_idx);
+                continue;
+            }
+            sl_idx += 1;
+        }
+
+        self.updateSessionListClients();
     }
 }
 
@@ -307,6 +349,9 @@ fn processRequest(self: *HttpServer, client_idx: usize, headers: []const u8, bod
         try self.handleIndex(client);
     } else if (std.mem.eql(u8, method, "POST") and std.mem.eql(u8, path, "/auth")) {
         try self.handleAuth(client, headers, body);
+    } else if (std.mem.eql(u8, method, "GET") and std.mem.eql(u8, path, "/api/sessions/stream")) {
+        try self.handleSessionListStream(client_idx, headers);
+        return;
     } else if (std.mem.eql(u8, method, "GET") and std.mem.eql(u8, path, "/api/sessions")) {
         try self.handleListSessions(client, headers);
     } else if (std.mem.startsWith(u8, path, "/api/sessions/") and std.mem.endsWith(u8, path, "/stream")) {
@@ -434,46 +479,13 @@ fn handleListSessions(self: *HttpServer, client: *HttpClient, headers: []const u
     };
     defer if (payload.session) |s| self.alloc.free(s);
 
-    // Get socket directory
-    const socket_dir = paths.getDefaultSocketDir(self.alloc, self.cfg) catch {
+    const json = self.buildSessionListJson(payload.scope, payload.session) catch {
         try self.sendJson(client, "{\"sessions\":[]}");
         return;
     };
-    defer self.alloc.free(socket_dir);
+    defer self.alloc.free(json);
 
-    var dir = std.fs.openDirAbsolute(socket_dir, .{ .iterate = true }) catch {
-        try self.sendJson(client, "{\"sessions\":[]}");
-        return;
-    };
-    defer dir.close();
-
-    var json: std.ArrayList(u8) = .empty;
-    defer json.deinit(self.alloc);
-
-    try json.appendSlice(self.alloc, "{\"sessions\":[");
-    var first = true;
-
-    var iter = dir.iterate();
-    while (try iter.next()) |entry| {
-        if (entry.kind != .unix_domain_socket) continue;
-
-        // Filter by session scope if applicable
-        if (payload.scope == .session) {
-            if (payload.session) |allowed| {
-                if (!std.mem.eql(u8, entry.name, allowed)) continue;
-            }
-        }
-
-        if (!first) try json.append(self.alloc, ',');
-        first = false;
-
-        try json.appendSlice(self.alloc, "{\"name\":\"");
-        try paths.appendJsonEscaped(self.alloc, &json, entry.name);
-        try json.appendSlice(self.alloc, "\"}");
-    }
-
-    try json.appendSlice(self.alloc, "]}");
-    try self.sendJson(client, json.items);
+    try self.sendJson(client, json);
 }
 
 fn handleInput(self: *HttpServer, client: *HttpClient, headers: []const u8, body: []const u8, session_name: []const u8) !void {
@@ -809,6 +821,128 @@ fn sendSseUpdate(self: *HttpServer, fd: posix.socket_t, updates: []const vthtml.
     try event.appendSlice(self.alloc, "\n\n");
 
     _ = try posix.write(fd, event.items);
+}
+
+fn handleSessionListStream(self: *HttpServer, client_idx: usize, headers: []const u8) !void {
+    const client = &self.clients.items[client_idx];
+
+    const payload = self.validateAuth(headers) catch {
+        try self.sendError(client, 401, "Unauthorized");
+        return;
+    };
+    defer if (payload.session) |s| self.alloc.free(s);
+
+    const sse_headers =
+        "HTTP/1.1 200 OK\r\n" ++
+        "Content-Type: text/event-stream\r\n" ++
+        "Cache-Control: no-cache\r\n" ++
+        "Connection: keep-alive\r\n" ++
+        "Access-Control-Allow-Origin: *\r\n" ++
+        "\r\n";
+
+    _ = try posix.write(client.fd, sse_headers);
+
+    // Send initial session list
+    var initial_hash: u64 = 0;
+    if (self.buildSessionListJson(payload.scope, payload.session)) |json| {
+        defer self.alloc.free(json);
+        initial_hash = std.hash.Wyhash.hash(0, json);
+        self.sendSessionListEvent(client.fd, json) catch return;
+    } else |_| {}
+
+    const owned_filter = if (payload.session) |s| try self.alloc.dupe(u8, s) else null;
+    errdefer if (owned_filter) |f| self.alloc.free(f);
+
+    try self.session_list_clients.append(self.alloc, .{
+        .http_fd = client.fd,
+        .last_hash = initial_hash,
+        .scope = payload.scope,
+        .session_filter = owned_filter,
+    });
+
+    _ = self.clients.orderedRemove(client_idx);
+}
+
+fn buildSessionListJson(self: *HttpServer, scope: Auth.Scope, session_filter: ?[]const u8) ![]u8 {
+    const socket_dir = try paths.getDefaultSocketDir(self.alloc, self.cfg);
+    defer self.alloc.free(socket_dir);
+
+    var dir = try std.fs.openDirAbsolute(socket_dir, .{ .iterate = true });
+    defer dir.close();
+
+    var json: std.ArrayList(u8) = .empty;
+    defer json.deinit(self.alloc);
+
+    try json.appendSlice(self.alloc, "{\"sessions\":[");
+    var first = true;
+
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        if (entry.kind != .unix_domain_socket) continue;
+
+        if (scope == .session) {
+            if (session_filter) |allowed| {
+                if (!std.mem.eql(u8, entry.name, allowed)) continue;
+            }
+        }
+
+        if (!first) try json.append(self.alloc, ',');
+        first = false;
+
+        try json.appendSlice(self.alloc, "{\"name\":\"");
+        try paths.appendJsonEscaped(self.alloc, &json, entry.name);
+        try json.appendSlice(self.alloc, "\"}");
+    }
+
+    try json.appendSlice(self.alloc, "]}");
+    return try self.alloc.dupe(u8, json.items);
+}
+
+fn sendSessionListEvent(_: *HttpServer, fd: posix.socket_t, json: []const u8) !void {
+    const prefix = "event: sessions\ndata: ";
+    const suffix = "\n\n";
+    const iov = [_]posix.iovec_const{
+        .{ .base = prefix, .len = prefix.len },
+        .{ .base = json.ptr, .len = json.len },
+        .{ .base = suffix, .len = suffix.len },
+    };
+    _ = try posix.writev(fd, &iov);
+}
+
+fn updateSessionListClients(self: *HttpServer) void {
+    if (self.session_list_clients.items.len == 0) return;
+
+    const now = std.time.timestamp();
+    if (now - self.last_session_scan < 2) return;
+    self.last_session_scan = now;
+
+    var sl_idx: usize = 0;
+    while (sl_idx < self.session_list_clients.items.len) {
+        var slc = &self.session_list_clients.items[sl_idx];
+
+        const json = self.buildSessionListJson(slc.scope, slc.session_filter) catch {
+            sl_idx += 1;
+            continue;
+        };
+        defer self.alloc.free(json);
+
+        const hash = std.hash.Wyhash.hash(0, json);
+        if (hash != slc.last_hash) {
+            slc.last_hash = hash;
+            self.sendSessionListEvent(slc.http_fd, json) catch {
+                self.removeSessionListClient(sl_idx);
+                continue;
+            };
+        }
+
+        sl_idx += 1;
+    }
+}
+
+fn removeSessionListClient(self: *HttpServer, idx: usize) void {
+    var slc = self.session_list_clients.items[idx];
+    slc.deinit(self.alloc);
+    _ = self.session_list_clients.orderedRemove(idx);
 }
 
 fn validateAuth(self: *HttpServer, headers: []const u8) !Auth.TokenPayload {

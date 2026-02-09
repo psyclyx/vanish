@@ -141,11 +141,18 @@
             term.removeChild(probe);
         }
 
-        // Check auth on load
-        fetch('/api/sessions').then(r => r.ok ? showSessions(r.json()) : null);
+        // Check auth on load, subscribe to session list updates
+        let sessionsSse = null;
+        fetch('/api/sessions').then(r => { if (r.ok) openSessionsSse(); });
 
-        async function showSessions(dataPromise) {
-            const data = await dataPromise;
+        function openSessionsSse() {
+            sessionsSse?.close();
+            sessionsSse = new EventSource('/api/sessions/stream');
+            sessionsSse.addEventListener('sessions', e => showSessions(JSON.parse(e.data)));
+            sessionsSse.onerror = () => { sessionsSse?.close(); sessionsSse = null; };
+        }
+
+        function showSessions(data) {
             document.getElementById('auth').classList.add('hidden');
             document.getElementById('sessions').classList.remove('hidden');
             const list = document.getElementById('session-list');
@@ -238,6 +245,7 @@
             currentSession = null;
             document.getElementById('terminal').classList.add('hidden');
             document.getElementById('sessions').classList.remove('hidden');
+            if (!sessionsSse || sessionsSse.readyState === EventSource.CLOSED) openSessionsSse();
         }
 
         function sendResize() {
