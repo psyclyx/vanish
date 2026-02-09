@@ -98,7 +98,8 @@ _vanish() {
                         '--session[scope to session]:session:_vanish_sessions' \
                         '--daemon[daemon-scoped token]' \
                         '--indefinite[indefinite token]' \
-                        '--read-only[view-only token]'
+                        '--read-only[view-only token]' \
+                        '--url[print full URL]'
                     ;;
                 revoke)
                     _arguments \

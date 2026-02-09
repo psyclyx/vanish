@@ -233,7 +233,7 @@ pub fn main() !void {
     } else if (std.mem.eql(u8, cmd, "serve")) {
         try cmdServe(alloc, cmd_args, &cfg);
     } else if (std.mem.eql(u8, cmd, "otp")) {
-        try cmdOtp(alloc, cmd_args);
+        try cmdOtp(alloc, cmd_args, &cfg);
     } else if (std.mem.eql(u8, cmd, "revoke")) {
         try cmdRevoke(alloc, cmd_args);
     } else if (std.mem.eql(u8, cmd, "print-config")) {
@@ -850,11 +850,12 @@ fn cmdServe(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const conf
     };
 }
 
-fn cmdOtp(alloc: std.mem.Allocator, args: []const []const u8) !void {
+fn cmdOtp(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
     var scope: Auth.Scope = .indefinite;
     var session: ?[]const u8 = null;
     var duration: ?i64 = null;
     var read_only = false;
+    var url_mode = false;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -884,6 +885,8 @@ fn cmdOtp(alloc: std.mem.Allocator, args: []const []const u8) !void {
             scope = .indefinite;
         } else if (std.mem.eql(u8, arg, "--read-only")) {
             read_only = true;
+        } else if (std.mem.eql(u8, arg, "--url")) {
+            url_mode = true;
         }
     }
 
@@ -903,8 +906,18 @@ fn cmdOtp(alloc: std.mem.Allocator, args: []const []const u8) !void {
     };
     defer alloc.free(otp);
 
-    try writeAll(STDOUT_FILENO, otp);
-    try writeAll(STDOUT_FILENO, "\n");
+    if (url_mode) {
+        const bind = cfg.serve.bind orelse "127.0.0.1";
+        var buf: [256]u8 = undefined;
+        const url = std.fmt.bufPrint(&buf, "http://{s}:{d}?otp={s}\n", .{ bind, cfg.serve.port, otp }) catch {
+            try writeAll(STDERR_FILENO, "URL too long\n");
+            std.process.exit(1);
+        };
+        try writeAll(STDOUT_FILENO, url);
+    } else {
+        try writeAll(STDOUT_FILENO, otp);
+        try writeAll(STDOUT_FILENO, "\n");
+    }
 }
 
 fn cmdRevoke(alloc: std.mem.Allocator, args: []const []const u8) !void {

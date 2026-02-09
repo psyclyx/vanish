@@ -326,7 +326,8 @@ Rejected if token is read-only.
 2. SHA256(code) -> hash.
 3. Store `$STATE_DIR/otps/$hash_hex.json` with metadata:
    `{"scope":"...","session":"...","exp":N,"created":N,"read_only":bool}`
-4. Print code to stdout.
+4. Print code to stdout. With `--url`, print `http://<bind>:<port>?otp=<code>`
+   using bind address and port from config (defaults: 127.0.0.1:7890).
 
 The stored file contains the **hash**, not the code. Attacker with read access to state dir cannot recover codes.
 
@@ -547,9 +548,9 @@ Connect to session, send `kill_session`.
 
 Start HTTP server. Idempotent (checks if port already listening).
 
-### vanish otp [--duration \<time\>] [--session \<name\>] [--daemon] [--indefinite] [--read-only]
+### vanish otp [--duration \<time\>] [--session \<name\>] [--daemon] [--indefinite] [--read-only] [--url]
 
-Generate one-time password. Default scope: indefinite. Duration format: `Nh`, `Nm`, `Nd` (hours, minutes, days).
+Generate one-time password. Default scope: indefinite. Duration format: `Nh`, `Nm`, `Nd` (hours, minutes, days). `--url` prints a full URL using the configured bind address and port instead of the bare token.
 
 ### vanish revoke [--all] [--temporary] [--daemon] [--indefinite] [--session \<name\>]
 

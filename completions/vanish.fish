@@ -98,6 +98,7 @@ complete -c vanish -n '__vanish_using_command otp' -l session -rf -a '(__vanish_
 complete -c vanish -n '__vanish_using_command otp' -l daemon -d 'Daemon-scoped token'
 complete -c vanish -n '__vanish_using_command otp' -l indefinite -d 'Indefinite token'
 complete -c vanish -n '__vanish_using_command otp' -l read-only -d 'View-only token'
+complete -c vanish -n '__vanish_using_command otp' -l url -d 'Print full URL'
 
 # revoke
 complete -c vanish -n '__vanish_using_command revoke' -l all -d 'Revoke all tokens'

@@ -111,7 +111,7 @@ _vanish() {
             COMPREPLY=($(compgen -W "-b --bind -p --port -d --daemonize" -- "$cur"))
             ;;
         otp)
-            COMPREPLY=($(compgen -W "--duration --session --daemon --indefinite --read-only" -- "$cur"))
+            COMPREPLY=($(compgen -W "--duration --session --daemon --indefinite --read-only --url" -- "$cur"))
             case "$prev" in
                 --session) COMPREPLY=($(compgen -W "$(_vanish_sessions)" -- "$cur")) ;;
             esac
