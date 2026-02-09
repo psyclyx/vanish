@@ -249,43 +249,52 @@ pub fn main() !void {
     }
 }
 
-fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
+const NewCmdArgs = struct {
+    detach: bool,
+    serve: bool,
+    auto_name: bool,
+    session_name: []const u8,
+    cmd_args: []const []const u8,
+};
+
+fn parseCmdNewArgs(
+    alloc: std.mem.Allocator,
+    args: []const []const u8,
+    cfg: *const config.Config,
+    name_buf: *[64]u8,
+) !NewCmdArgs {
     if (args.len < 1) {
         try writeAll(STDERR_FILENO, "Usage: vanish new [--detach] [--auto-name] [--serve] <name> <command> [args...]\n");
         std.process.exit(1);
     }
 
-    var detach_mode = false;
+    var detach = false;
     var auto_name = false;
-    var serve_flag = false;
+    var serve = false;
     var arg_idx: usize = 0;
 
-    // Parse flags
     while (arg_idx < args.len) {
         if (std.mem.eql(u8, args[arg_idx], "--detach") or std.mem.eql(u8, args[arg_idx], "-d")) {
-            detach_mode = true;
+            detach = true;
             arg_idx += 1;
         } else if (std.mem.eql(u8, args[arg_idx], "--auto-name") or std.mem.eql(u8, args[arg_idx], "-a")) {
             auto_name = true;
             arg_idx += 1;
         } else if (std.mem.eql(u8, args[arg_idx], "--serve") or std.mem.eql(u8, args[arg_idx], "-s")) {
-            serve_flag = true;
+            serve = true;
             arg_idx += 1;
         } else {
             break;
         }
     }
 
-    // With --auto-name, we need at least a command; without it, name + command
     const min_args = if (auto_name) arg_idx + 1 else arg_idx + 2;
     if (args.len < min_args) {
         try writeAll(STDERR_FILENO, "Usage: vanish new [--detach] [--auto-name] [--serve] <name> <command> [args...]\n");
         std.process.exit(1);
     }
 
-    var name_buf: [64]u8 = undefined;
     const session_name = if (auto_name) blk: {
-        // Command is the first non-flag arg (or after --)
         var cmd_idx = arg_idx;
         if (cmd_idx < args.len and std.mem.eql(u8, args[cmd_idx], "--")) cmd_idx += 1;
         if (cmd_idx >= args.len) {
@@ -294,54 +303,49 @@ fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config
         }
         const socket_dir = try paths.getDefaultSocketDir(alloc, cfg);
         defer alloc.free(socket_dir);
-        break :blk naming.generateUnique(&name_buf, args[cmd_idx], socket_dir);
+        break :blk naming.generateUnique(name_buf, args[cmd_idx], socket_dir);
     } else args[arg_idx];
 
-    const socket_path = try paths.resolveSocketPath(alloc, session_name, cfg);
-    defer alloc.free(socket_path);
-
-    // With --auto-name, command starts at arg_idx (no name arg consumed)
     var cmd_start: usize = if (auto_name) arg_idx else arg_idx + 1;
-    // Skip optional "--" separator
     if (cmd_start < args.len and std.mem.eql(u8, args[cmd_start], "--")) {
         cmd_start += 1;
     }
-
     if (cmd_start >= args.len) {
         try writeAll(STDERR_FILENO, "Missing command\n");
         std.process.exit(1);
     }
 
-    const cmd_args = args[cmd_start..];
+    return .{
+        .detach = detach,
+        .serve = serve,
+        .auto_name = auto_name,
+        .session_name = session_name,
+        .cmd_args = args[cmd_start..],
+    };
+}
 
-    // Create a pipe for child to signal when socket is ready
+fn forkSession(socket_path: []const u8, cmd_args: []const []const u8) !void {
     const pipe_fds = try posix.pipe();
 
-    // Fork to run session in background
     const pid = try posix.fork();
     if (pid == 0) {
-        // Child: close read end of pipe
         posix.close(pipe_fds[0]);
-
         daemonize();
 
-        // Use C allocator in child process (GPA is not fork-safe, and
-        // page_allocator has mremap issues after fork that cause ghostty-vt panics)
+        // Use C allocator in child (GPA is not fork-safe, page_allocator
+        // has mremap issues after fork that cause ghostty-vt panics)
         const child_alloc = std.heap.c_allocator;
 
-        // Dupe the strings we need since parent's allocator is not safe to use
         const child_socket_path = child_alloc.dupe(u8, socket_path) catch std.process.exit(1);
         const child_cmd_args = child_alloc.alloc([]const u8, cmd_args.len) catch std.process.exit(1);
         for (cmd_args, 0..) |arg, i| {
             child_cmd_args[i] = child_alloc.dupe(u8, arg) catch std.process.exit(1);
         }
 
-        // Run session, signaling when socket is ready
         Session.runWithNotify(child_alloc, child_socket_path, child_cmd_args, pipe_fds[1]) catch std.process.exit(1);
         std.process.exit(0);
     }
 
-    // Parent: close write end and wait for signal from child
     posix.close(pipe_fds[1]);
 
     var buf: [1]u8 = undefined;
@@ -349,24 +353,31 @@ fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config
     posix.close(pipe_fds[0]);
 
     if (n == 0) {
-        // Child closed pipe without writing = failed to start
         try writeAll(STDERR_FILENO, "Session failed to start\n");
         std.process.exit(1);
     }
+}
 
-    if (auto_name) {
+fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config.Config) !void {
+    var name_buf: [64]u8 = undefined;
+    const parsed = try parseCmdNewArgs(alloc, args, cfg, &name_buf);
+
+    const socket_path = try paths.resolveSocketPath(alloc, parsed.session_name, cfg);
+    defer alloc.free(socket_path);
+
+    try forkSession(socket_path, parsed.cmd_args);
+
+    if (parsed.auto_name) {
         var msg_buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(&msg_buf, "{s}\n", .{session_name}) catch session_name;
+        const msg = std.fmt.bufPrint(&msg_buf, "{s}\n", .{parsed.session_name}) catch parsed.session_name;
         try writeAll(STDERR_FILENO, msg);
     }
 
-    // Start HTTP server if --serve flag or auto_serve config
-    if (serve_flag or cfg.serve.auto_serve) {
+    if (parsed.serve or cfg.serve.auto_serve) {
         maybeStartServe(alloc, cfg);
     }
 
-    // Auto-attach unless --detach was specified
-    if (!detach_mode) {
+    if (!parsed.detach) {
         const Client = @import("client.zig");
         try Client.attach(alloc, socket_path, false, cfg);
     }
