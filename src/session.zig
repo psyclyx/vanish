@@ -513,6 +513,7 @@ fn createSocket(path: []const u8) !posix.socket_t {
         };
     }
 
+    if (isSocketLive(path)) return error.SessionAlreadyExists;
     std.fs.deleteFileAbsolute(path) catch {};
 
     const sock = try posix.socket(posix.AF.UNIX, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
@@ -523,4 +524,13 @@ fn createSocket(path: []const u8) !posix.socket_t {
     try posix.listen(sock, 5);
 
     return sock;
+}
+
+/// Probe a Unix socket path to check if a session is listening.
+pub fn isSocketLive(path: []const u8) bool {
+    const probe = posix.socket(posix.AF.UNIX, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0) catch return false;
+    defer posix.close(probe);
+    var addr = std.net.Address.initUnix(path) catch return false;
+    posix.connect(probe, &addr.any, addr.getOsSockLen()) catch return false;
+    return true;
 }

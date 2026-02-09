@@ -365,6 +365,13 @@ fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config
     const socket_path = try paths.resolveSocketPath(alloc, parsed.session_name, cfg);
     defer alloc.free(socket_path);
 
+    if (Session.isSocketLive(socket_path)) {
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Session '{s}' already exists\n", .{parsed.session_name}) catch "Session already exists\n";
+        try writeAll(STDERR_FILENO, msg);
+        std.process.exit(1);
+    }
+
     try forkSession(socket_path, parsed.cmd_args);
 
     if (parsed.auto_name) {
@@ -488,11 +495,13 @@ fn cmdList(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const confi
             try writeAll(STDOUT_FILENO, "No sessions found\n");
         } else {
             for (sessions.items) |name| {
+                var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+                const socket_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, name }) catch continue;
+                const live = Session.isSocketLive(socket_path);
                 var buf: [std.fs.max_path_bytes]u8 = undefined;
-                const msg = if (explicit_dir != null)
-                    std.fmt.bufPrint(&buf, "{s}/{s}\n", .{ dir_path, name }) catch continue
-                else
-                    std.fmt.bufPrint(&buf, "{s}\n", .{name}) catch continue;
+                const display = if (explicit_dir != null) socket_path else name;
+                const suffix: []const u8 = if (live) "\n" else " (stale)\n";
+                const msg = std.fmt.bufPrint(&buf, "{s}{s}", .{ display, suffix }) catch continue;
                 try writeAll(STDOUT_FILENO, msg);
             }
         }
@@ -507,13 +516,22 @@ fn writeJsonList(alloc: std.mem.Allocator, sessions: []const []const u8, dir_pat
 
     for (sessions, 0..) |name, i| {
         if (i > 0) try out.append(alloc, ',');
+
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const socket_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ dir_path, name }) catch continue;
+        const live = Session.isSocketLive(socket_path);
+
         try out.appendSlice(alloc, "{\"name\":\"");
         try paths.appendJsonEscaped(alloc, &out, name);
         try out.appendSlice(alloc, "\",\"path\":\"");
         try paths.appendJsonEscaped(alloc, &out, dir_path);
         try out.append(alloc, '/');
         try paths.appendJsonEscaped(alloc, &out, name);
-        try out.appendSlice(alloc, "\"}");
+        if (live) {
+            try out.appendSlice(alloc, "\",\"live\":true}");
+        } else {
+            try out.appendSlice(alloc, "\",\"live\":false}");
+        }
     }
 
     try out.appendSlice(alloc, "]}\n");

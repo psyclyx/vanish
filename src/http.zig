@@ -4,6 +4,7 @@ const net = std.net;
 
 const Auth = @import("auth.zig");
 const protocol = @import("protocol.zig");
+const Session = @import("session.zig");
 const VTerminal = @import("terminal.zig");
 const config = @import("config.zig");
 const paths = @import("paths.zig");
@@ -886,9 +887,17 @@ fn buildSessionListJson(self: *HttpServer, scope: Auth.Scope, session_filter: ?[
         if (!first) try json.append(self.alloc, ',');
         first = false;
 
+        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+        const socket_path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ socket_dir, entry.name }) catch continue;
+        const live = Session.isSocketLive(socket_path);
+
         try json.appendSlice(self.alloc, "{\"name\":\"");
         try paths.appendJsonEscaped(self.alloc, &json, entry.name);
-        try json.appendSlice(self.alloc, "\"}");
+        if (live) {
+            try json.appendSlice(self.alloc, "\",\"live\":true}");
+        } else {
+            try json.appendSlice(self.alloc, "\",\"live\":false}");
+        }
     }
 
     try json.appendSlice(self.alloc, "]}");
