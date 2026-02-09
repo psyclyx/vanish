@@ -65,7 +65,7 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
-Done (Sessions 55-82): Resize re-render fix (S55), cursor position fix (S56),
+Done (Sessions 55-83): Resize re-render fix (S55), cursor position fix (S56),
 architecture review (S57), Arch PKGBUILD + LICENSE (S58), session list SSE
 (S59), architecture review + http.zig devil's advocate (S60), http.zig
 reflection + archive cleanup (S61), docs audit + dual-bind fix (S62), v1.0.0 tag
@@ -78,7 +78,7 @@ processRequest decomposition (S74), writeCell extraction (S75), architecture
 review post-decomposition (S76), UX hammock (S77), socket clobbering fix +
 stale socket detection (S78), architecture review + spec update (S79), session
 model devil's advocate (S80), session model defense (S81), session model
-reflection + architecture review (S82).
+reflection + architecture review (S82), shell completion scripts (S83).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -173,6 +173,59 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 83 - Shell Completion Scripts
+
+### What was done
+
+Added shell completion scripts for bash, zsh, and fish. This is the first code
+change in 5 sessions (since S78). The completions cover:
+
+- All 11 subcommands with descriptions
+- All flags per subcommand (short and long forms)
+- Dynamic session name completion via `vanish list` for: attach, send, clients,
+  kick, kill, and the `--session` flag on otp/revoke
+- Dynamic client ID completion for `kick` (via `vanish clients <session>`)
+- Command name completion for `vanish new <name> <command>`
+- Global options (`-c`, `-v`, `-vv`, `-h`)
+
+**Files added:**
+- `completions/vanish.bash` — bash-completion compatible script
+- `completions/vanish.zsh` — zsh compdef script with _arguments
+- `completions/vanish.fish` — fish complete commands
+
+**Files modified:**
+- `build.zig` — 3 new `installFile` lines for standard shell locations:
+  - `share/bash-completion/completions/vanish`
+  - `share/zsh/site-functions/_vanish`
+  - `share/fish/vendor_completions.d/vanish.fish`
+- `package.nix` — added `./completions` to fileset
+
+Build and all tests pass. Completions install to the correct standard locations.
+
+### Why this instead of more docs
+
+Sessions 78-82 were zero code changes — four documentation sessions in a row
+(three debate sessions + architecture review). The project needs concrete
+artifacts, not more analysis. Shell completions are:
+
+1. The kind of polish that makes a tool feel complete
+2. Zero risk to existing code
+3. Discoverable — users trying tab-completion find it "just works"
+4. A natural complement to the man page (completions cover the same surface area
+   but interactively)
+
+### Recommendations for next session
+
+- **Test the completions manually** if possible. The bash/zsh/fish scripts are
+  written from the man page and code, but haven't been interactively tested.
+  Common issues: quoting, whitespace in session names, error handling when
+  `vanish list` isn't in PATH or has no sessions.
+- **`vanish otp --url`** — the other S82 suggestion. Small feature, high UX
+  value: `vanish otp --url | xclip` or pipe to browser.
+- **Shell wrapper functions** — `vanish.sh`/`vanish.zsh` that wraps common
+  workflows (list+pick+attach via fzf, new+attach shorthand).
+- **Nothing.** The project remains done. Wait for usage.
 
 ## 2026-02-09: Session 82 - Reflection: Session Model Debate + Architecture Review
 
