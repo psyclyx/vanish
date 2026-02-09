@@ -345,76 +345,61 @@ fn handleClientWrite(self: *HttpServer, idx: usize) !void {
     }
 }
 
+const SessionRoute = struct {
+    name: []const u8,
+    action: []const u8,
+};
+
+fn parseSessionRoute(path: []const u8) ?SessionRoute {
+    const prefix = "/api/sessions/";
+    if (!std.mem.startsWith(u8, path, prefix)) return null;
+    const rest = path[prefix.len..];
+    const slash = std.mem.lastIndexOfScalar(u8, rest, '/') orelse return null;
+    if (slash == 0) return null;
+    return .{ .name = rest[0..slash], .action = rest[slash + 1 ..] };
+}
+
 fn processRequest(self: *HttpServer, client_idx: usize, headers: []const u8, body: []const u8) !void {
     const client = &self.clients.items[client_idx];
 
-    // Parse first line
     const first_line_end = std.mem.indexOf(u8, headers, "\r\n") orelse return error.InvalidRequest;
     const first_line = headers[0..first_line_end];
 
     var parts = std.mem.splitScalar(u8, first_line, ' ');
     const method = parts.next() orelse return error.InvalidRequest;
     const path = parts.next() orelse return error.InvalidRequest;
+    const eql = std.mem.eql;
 
-    // Route the request
-    if (std.mem.eql(u8, method, "GET") and std.mem.eql(u8, path, "/")) {
+    if (eql(u8, method, "GET") and eql(u8, path, "/")) {
         try self.handleIndex(client);
-    } else if (std.mem.eql(u8, method, "POST") and std.mem.eql(u8, path, "/auth")) {
+    } else if (eql(u8, method, "POST") and eql(u8, path, "/auth")) {
         try self.handleAuth(client, headers, body);
-    } else if (std.mem.eql(u8, method, "GET") and std.mem.eql(u8, path, "/api/sessions/stream")) {
+    } else if (eql(u8, method, "GET") and eql(u8, path, "/api/sessions/stream")) {
         try self.handleSessionListStream(client_idx, headers);
         return;
-    } else if (std.mem.eql(u8, method, "GET") and std.mem.eql(u8, path, "/api/sessions")) {
+    } else if (eql(u8, method, "GET") and eql(u8, path, "/api/sessions")) {
         try self.handleListSessions(client, headers);
-    } else if (std.mem.startsWith(u8, path, "/api/sessions/") and std.mem.endsWith(u8, path, "/stream")) {
-        // SSE stream - extract session name
-        const name_start = "/api/sessions/".len;
-        const name_end = path.len - "/stream".len;
-        if (name_end > name_start) {
-            const session_name = path[name_start..name_end];
-            try self.handleSseStream(client_idx, headers, session_name);
-            return; // Don't remove client - it's now an SSE client
-        }
-        try self.sendError(client, 400, "Invalid session name");
-    } else if (std.mem.startsWith(u8, path, "/api/sessions/") and std.mem.endsWith(u8, path, "/input")) {
-        if (std.mem.eql(u8, method, "POST")) {
-            const name_start = "/api/sessions/".len;
-            const name_end = path.len - "/input".len;
-            if (name_end > name_start) {
-                const session_name = path[name_start..name_end];
-                try self.handleInput(client, headers, body, session_name);
-            } else {
-                try self.sendError(client, 400, "Invalid session name");
-            }
-        } else {
-            try self.sendError(client, 405, "Method Not Allowed");
-        }
-    } else if (std.mem.startsWith(u8, path, "/api/sessions/") and std.mem.endsWith(u8, path, "/resize")) {
-        if (std.mem.eql(u8, method, "POST")) {
-            const name_start = "/api/sessions/".len;
-            const name_end = path.len - "/resize".len;
-            if (name_end > name_start) {
-                const session_name = path[name_start..name_end];
-                try self.handleResize(client, headers, body, session_name);
-            } else {
-                try self.sendError(client, 400, "Invalid session name");
-            }
-        } else {
-            try self.sendError(client, 405, "Method Not Allowed");
-        }
-    } else if (std.mem.startsWith(u8, path, "/api/sessions/") and std.mem.endsWith(u8, path, "/takeover")) {
-        if (std.mem.eql(u8, method, "POST")) {
-            const name_start = "/api/sessions/".len;
-            const name_end = path.len - "/takeover".len;
-            if (name_end > name_start) {
-                const session_name = path[name_start..name_end];
-                try self.handleTakeover(client, headers, session_name);
-            } else {
-                try self.sendError(client, 400, "Invalid session name");
-            }
-        } else {
-            try self.sendError(client, 405, "Method Not Allowed");
-        }
+    } else if (parseSessionRoute(path)) |route| {
+        try self.dispatchSessionRoute(client_idx, client, headers, body, method, route);
+    } else {
+        try self.sendError(client, 404, "Not Found");
+    }
+}
+
+fn dispatchSessionRoute(self: *HttpServer, client_idx: usize, client: *HttpClient, headers: []const u8, body: []const u8, method: []const u8, route: SessionRoute) !void {
+    const eql = std.mem.eql;
+    const is_post = eql(u8, method, "POST");
+
+    if (eql(u8, route.action, "stream")) {
+        try self.handleSseStream(client_idx, headers, route.name);
+    } else if (eql(u8, route.action, "input") and is_post) {
+        try self.handleInput(client, headers, body, route.name);
+    } else if (eql(u8, route.action, "resize") and is_post) {
+        try self.handleResize(client, headers, body, route.name);
+    } else if (eql(u8, route.action, "takeover") and is_post) {
+        try self.handleTakeover(client, headers, route.name);
+    } else if (eql(u8, route.action, "input") or eql(u8, route.action, "resize") or eql(u8, route.action, "takeover")) {
+        try self.sendError(client, 405, "Method Not Allowed");
     } else {
         try self.sendError(client, 404, "Not Found");
     }
@@ -1078,5 +1063,30 @@ fn connectToSession(path: []const u8) !posix.socket_t {
     try posix.connect(sock, &addr.any, addr.getOsSockLen());
 
     return sock;
+}
+
+test "parseSessionRoute" {
+    const eql = std.mem.eql;
+
+    const r1 = parseSessionRoute("/api/sessions/myterm/stream").?;
+    try std.testing.expect(eql(u8, r1.name, "myterm"));
+    try std.testing.expect(eql(u8, r1.action, "stream"));
+
+    const r2 = parseSessionRoute("/api/sessions/foo/input").?;
+    try std.testing.expect(eql(u8, r2.name, "foo"));
+    try std.testing.expect(eql(u8, r2.action, "input"));
+
+    const r3 = parseSessionRoute("/api/sessions/a/b/resize").?;
+    try std.testing.expect(eql(u8, r3.name, "a/b"));
+    try std.testing.expect(eql(u8, r3.action, "resize"));
+
+    // No action suffix
+    try std.testing.expect(parseSessionRoute("/api/sessions/foo") == null);
+    // Empty name
+    try std.testing.expect(parseSessionRoute("/api/sessions//stream") == null);
+    // Wrong prefix
+    try std.testing.expect(parseSessionRoute("/other/path") == null);
+    // Exact /api/sessions/stream (session list, not a session route)
+    try std.testing.expect(parseSessionRoute("/api/sessions/stream") == null);
 }
 
