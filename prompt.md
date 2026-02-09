@@ -44,11 +44,21 @@ New: (triaged in session 48)
 Current:
 
 - Investigate and fix: TUI viewer rendering breakage and keybind issues.
-- Mobile web: modifier buttons (Ctrl, etc.).
 - Rendering architecture redesign (multi-iteration hammock - see inbox idea).
 - Cursor position bug for narrow primary sessions.
 - Session list SSE (reactive in web).
 - Arch PKGBUILD.
+
+Done (Session 53):
+
+- ✓ Mobile modifier toolbar for web terminal. Touch-only toolbar with Esc, Tab,
+  Ctrl (toggle), and arrow buttons. Ctrl works like mobile Shift: tap to
+  activate (highlights red), next keypress sends Ctrl+key, auto-deactivates.
+  One-shot buttons (Esc, Tab, arrows) send immediately. Uses `ontouchstart`
+  detection to show toolbar only on touch devices. `visualViewport` API for
+  resize when soft keyboard appears. Header buttons get 44px min-height on touch
+  for Apple touch guidelines. Delegated event handler on mod-bar (single
+  touchend listener). index.html: 226 → 283 (+57). No server changes.
 
 Done (Session 52):
 
@@ -379,6 +389,118 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 53 - Mobile Modifier Toolbar
+
+### What Changed
+
+Implemented the mobile modifier toolbar designed in session 46. Touch devices
+now get a toolbar at the bottom of the terminal view with Esc, Tab, Ctrl
+(toggle), and arrow buttons.
+
+**index.html (226 → 283 lines, +57)**
+
+**CSS (+19 lines):**
+
+- `.mod-bar`: Hidden by default (`display: none`), shown as flex row when body
+  has `.touch` class. Semi-transparent dark background, 1px top border, 4px gap.
+- `.mod-bar button`: 44px × 44px minimum touch targets (Apple guidelines),
+  monospace 16px font, rounded corners, user-select disabled to prevent text
+  selection on long-press.
+- `.mod-bar button.active`: Red highlight (#e94560) for Ctrl toggle state.
+- `.mod-bar .arrows`: Margin-left auto pushes arrows to the right side.
+- `.touch .terminal-header button`: Larger touch targets (44px min-height) for
+  header buttons on touch devices.
+
+**HTML (+11 lines):**
+
+Toolbar div inside `.terminal`, after `#term`, with 7 buttons using `data-key`
+attributes. Arrow buttons use HTML entities (← ↓ ↑ →).
+
+**JS (+27 lines):**
+
+- Touch detection: `if ('ontouchstart' in window) document.body.classList.add('touch')`
+  at script start. CSS-driven visibility.
+- `ctrlActive` state variable.
+- `sendKey(data)`: Sends a key sequence to the current session's input endpoint.
+  Checks `isPrimary` and `currentSession`.
+- `toggleCtrl()`: Toggles `ctrlActive` and button highlight class.
+- `modKeys` map: Maps data-key values to escape sequences (`esc` → `\x1b`,
+  `tab` → `\t`, arrows → ANSI sequences).
+- Delegated event handler: Single `touchend` listener on `#mod-bar` that
+  dispatches to `toggleCtrl()` or `sendKey()` based on `data-key`.
+- `handleKey()` modified: `ctrl` variable now includes `ctrlActive`. When
+  `ctrlActive` and a character key is pressed, auto-deactivates Ctrl (removes
+  highlight, resets state).
+- `sendResize()` modified: Uses `visualViewport.height` when available, taking
+  the minimum of `term.clientHeight` and the visible viewport minus the term's
+  top offset. This accounts for the soft keyboard reducing visible area.
+- `visualViewport.resize` event listener added alongside the existing
+  `window.resize` listener.
+
+### Design Decisions
+
+- **`ontouchstart` detection over media queries:** `'ontouchstart' in window` is
+  the standard check for touch capability. Media queries like `hover: none` can
+  false-positive on some configurations. The touch detection adds a CSS class to
+  body, keeping the toolbar hidden on desktop with zero runtime cost.
+
+- **`touchend` over `click`:** `click` events on mobile have a 300ms delay on
+  some browsers. `touchend` fires immediately. Using `e.preventDefault()` on
+  touchend prevents the ghost click.
+
+- **Delegated event handler:** Single listener on the toolbar container instead
+  of 7 individual listeners. Uses `e.target.closest('button')` to find the
+  button and `dataset.key` to dispatch. Cleaner, fewer event listeners, and
+  new buttons would just need a `data-key` attribute.
+
+- **Ctrl as toggle, not hold:** Mobile users can't hold Ctrl while typing
+  another key (unlike desktop). The toggle pattern mirrors how mobile keyboards
+  handle Shift: tap once to activate, type a key, auto-deactivates. Tap again
+  to cancel without sending.
+
+- **visualViewport for resize:** `window.innerHeight` doesn't change when the
+  soft keyboard appears on mobile. `visualViewport.height` does. Using it for
+  resize calculations means the terminal rows resize to fit the visible area
+  above the keyboard, preventing content from being hidden behind the keyboard.
+
+### Line Count Impact
+
+| File       | Before | After | Change  |
+| ---------- | ------ | ----- | ------- |
+| index.html | 226    | 283   | +57     |
+
+Total codebase: 15 files, ~5,868 lines.
+
+### Testing
+
+- Build: Clean
+- Unit tests: All passing (47 tests, no changes to Zig code)
+
+### Inbox Status
+
+| Item                     | Status | Priority | Notes                        |
+| ------------------------ | ------ | -------- | ---------------------------- |
+| Mobile modifier toolbar  | ✓ Done | -        | Session 53                   |
+| TUI viewer breakage      | ○ Todo | Medium   | Targeted fix > full redesign |
+| TUI viewer keybinds      | ○ Todo | Medium   | Likely rendering corruption  |
+| Rendering redesign       | ○ Hmck | Low urg  | Hammock iter 1 done          |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation          |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list    |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                    |
+
+### Recommendations for Next Sessions
+
+1. **Session 54 (review):** Architecture review (3-session checkpoint, due from
+   session 51). Rendering redesign hammock iteration 2. Review the mobile
+   toolbar implementation.
+
+2. **Session 55:** TUI viewer breakage investigation. The targeted fixes
+   (escape accumulator + resize resync) from hammock iteration 1.
+
+3. **Session 56:** Session list SSE or Arch PKGBUILD - both are polish items.
+
+---
 
 ## 2026-02-09: Session 52 - Read-Only OTPs
 
