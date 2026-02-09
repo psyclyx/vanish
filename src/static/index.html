@@ -48,6 +48,27 @@
             display: inline-block;
             overflow: hidden;
         }
+
+        /* Modifier toolbar (touch devices only) */
+        .mod-bar {
+            display: none;
+            padding: 4px 8px;
+            background: rgba(26, 26, 46, 0.95);
+            border-top: 1px solid #333;
+            gap: 4px;
+        }
+        .touch .mod-bar { display: flex; }
+        .mod-bar button {
+            min-width: 44px; min-height: 44px;
+            padding: 0 8px;
+            background: #333; border: 1px solid #555; border-radius: 6px;
+            color: #ccc; font: 16px/1 monospace; cursor: pointer;
+            -webkit-user-select: none; user-select: none;
+        }
+        .mod-bar button:active { background: #555; }
+        .mod-bar button.active { background: #e94560; color: #fff; border-color: #e94560; }
+        .mod-bar .arrows { margin-left: auto; display: flex; gap: 4px; }
+        .touch .terminal-header button { min-height: 44px; padding: 0.25rem 1rem; }
     </style>
 </head>
 <body>
@@ -77,11 +98,24 @@
         <div id="term" tabindex="0">
             <div id="term-grid"></div>
         </div>
+        <div class="mod-bar" id="mod-bar">
+            <button data-key="esc">Esc</button>
+            <button data-key="tab">Tab</button>
+            <button id="ctrl-btn" data-key="ctrl">Ctrl</button>
+            <div class="arrows">
+                <button data-key="left">&#x2190;</button>
+                <button data-key="down">&#x2193;</button>
+                <button data-key="up">&#x2191;</button>
+                <button data-key="right">&#x2192;</button>
+            </div>
+        </div>
     </div>
 
     <script>
+        if ('ontouchstart' in window) document.body.classList.add('touch');
         let sse = null;
         let isPrimary = false;
+        let ctrlActive = false;
         let termCols = 80, termRows = 24;
         let charWidth = 8.4, charHeight = 17;
         let currentSession = null;
@@ -190,7 +224,8 @@
             const term = document.getElementById('term');
             measureChar();
             const cols = Math.floor(term.clientWidth / charWidth);
-            const rows = Math.floor(term.clientHeight / charHeight);
+            const h = window.visualViewport ? Math.min(term.clientHeight, window.visualViewport.height - term.getBoundingClientRect().top) : term.clientHeight;
+            const rows = Math.floor(h / charHeight);
             if (cols > 0 && rows > 0 && (cols !== termCols || rows !== termRows)) {
                 fetch(`/api/sessions/${encodeURIComponent(currentSession)}/resize`,
                     { method: 'POST', body: `${cols}x${rows}` });
@@ -198,6 +233,7 @@
         }
 
         window.addEventListener('resize', sendResize);
+        if (window.visualViewport) window.visualViewport.addEventListener('resize', sendResize);
 
         function refresh() {
             if (!currentSession) return;
@@ -213,10 +249,31 @@
                 .then(r => { if (r.ok) { isPrimary = true; updateRoleBadge(); sendResize(); } });
         }
 
+        function sendKey(data) {
+            if (!currentSession || !isPrimary) return;
+            fetch(`/api/sessions/${encodeURIComponent(currentSession)}/input`, { method: 'POST', body: data });
+        }
+
+        function toggleCtrl() {
+            ctrlActive = !ctrlActive;
+            document.getElementById('ctrl-btn').classList.toggle('active', ctrlActive);
+        }
+
+        const modKeys = { esc: '\x1b', tab: '\t', left: '\x1b[D', right: '\x1b[C', up: '\x1b[A', down: '\x1b[B' };
+        document.getElementById('mod-bar').addEventListener('touchend', e => {
+            const btn = e.target.closest('button');
+            if (!btn) return;
+            e.preventDefault();
+            const k = btn.dataset.key;
+            if (k === 'ctrl') toggleCtrl();
+            else if (modKeys[k]) sendKey(modKeys[k]);
+        });
+
         function handleKey(e, session) {
             e.preventDefault();
             if (!isPrimary) return;
-            const key = e.key, ctrl = e.ctrlKey;
+            const key = e.key, ctrl = e.ctrlKey || ctrlActive;
+            if (ctrlActive && key.length === 1) { ctrlActive = false; document.getElementById('ctrl-btn').classList.remove('active'); }
             let data = key.length === 1 ? (ctrl ? String.fromCharCode(key.toLowerCase().charCodeAt(0) - 96) : key) :
                 { Enter: '\r', Backspace: '\x7f', Tab: '\t', Escape: '\x1b', ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D', Home: '\x1b[H', End: '\x1b[F', Delete: '\x1b[3~', PageUp: '\x1b[5~', PageDown: '\x1b[6~', Insert: '\x1b[2~' }[key];
             if (data) fetch(`/api/sessions/${encodeURIComponent(session)}/input`, { method: 'POST', body: data });
