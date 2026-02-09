@@ -30,7 +30,7 @@ New: (triaged in session 48)
   making it look like input doesn't work - see session 48 analysis)
 - ✓ Pressing a key in the browser takes over a session automatically - fixed in
   session 49: input blocked for non-primary, explicit takeover required.
-- We should have some notion of read-only OTPs.
+- ✓ We should have some notion of read-only OTPs. - done in session 52.
 - ✓ Browser feels laggier than it should on localhost - fixed in session 50:
   replaced innerHTML HTML-string parsing with structured JSON + createElement.
 - Rendering architecture redesign: abstract rendering commands, echo/noecho
@@ -44,10 +44,27 @@ New: (triaged in session 48)
 Current:
 
 - Investigate and fix: TUI viewer rendering breakage and keybind issues.
+  Hammock iter 2 identified concrete bug: session_resize handler in client.zig
+  doesn't re-render or clear screen. Next session: implement the 3 targeted
+  fixes (escape accumulator, resize resync, this missing re-render).
 - Rendering architecture redesign (multi-iteration hammock - see inbox idea).
+  Hammock iter 2 complete: confirmed "fix the 1%" approach, identified the
+  missing resize re-render as the most likely cause of reported TUI breakage.
 - Cursor position bug for narrow primary sessions.
 - Session list SSE (reactive in web).
 - Arch PKGBUILD.
+
+Done (Session 54):
+
+- ✓ Architecture review (3-session checkpoint). Codebase at 5,877 lines across
+  15 files (14 .zig + index.html at 292). 44 unit tests. Zero TODO/FIXME/HACK.
+  Build clean. Found and fixed XSS vulnerability in showSessions() - innerHTML
+  interpolation of session names replaced with createElement + textContent.
+  Remaining duplication unchanged (connectToSession 3×, auth validation 5×,
+  scroll actions 8×). index.html now at 292 lines after mobile toolbar + XSS
+  fix - approaching split threshold but still manageable. Rendering redesign
+  hammock iteration 2: confirmed targeted fix approach, identified missing
+  resize re-render in client.zig as probable cause of TUI breakage reports.
 
 Done (Session 53):
 
@@ -389,6 +406,234 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 54 - Architecture Review + Rendering Hammock Iter 2
+
+### Architecture Review (3-session checkpoint)
+
+Last review was session 51. Sessions 52-53 were read-only OTPs and mobile
+modifier toolbar.
+
+### Codebase Stats
+
+| File         | Lines     | Change from S51 | Purpose                    |
+| ------------ | --------- | --------------- | -------------------------- |
+| main.zig     | 976       | +4              | CLI entry point            |
+| http.zig     | 923       | +25             | Web server, SSE, routing   |
+| client.zig   | 636       | 0               | Native client, viewport    |
+| auth.zig     | 585       | +29             | JWT/HMAC, OTP exchange     |
+| session.zig  | 526       | 0               | Daemon, poll loop          |
+| config.zig   | 461       | 0               | JSON config parsing        |
+| vthtml.zig   | 370       | 0               | VT→JSON, delta computation |
+| terminal.zig | 335       | 0               | ghostty-vt wrapper         |
+| index.html   | 292       | +70             | Web frontend               |
+| protocol.zig | 192       | 0               | Wire format                |
+| keybind.zig  | 185       | 0               | Input state machine        |
+| naming.zig   | 165       | 0               | Auto-name generation       |
+| pty.zig      | 140       | 0               | PTY operations             |
+| signal.zig   | 48        | 0               | Signal handling            |
+| paths.zig    | 43        | 0               | Shared utilities           |
+| **Total**    | **5,877** | **+128**        | 15 files                   |
+
+Build: Clean. Tests: 44 unit tests across 9 files. All passing.
+
+The +128 line growth since session 51 comes from: read-only OTPs (+62 across
+auth/http/main/index), mobile modifier toolbar (+57 in index.html), XSS fix
+(+9 in index.html). 11 of 15 files unchanged. The growth is entirely in web-
+facing code (auth, http, index.html) and the CLI flag in main.zig.
+
+### Security Issue Found and Fixed
+
+**XSS in `showSessions()`.** The session list was built using `innerHTML` string
+interpolation with raw session names:
+
+```js
+.map(s => `<div class="session-card" onclick="connect('${s.name}')"><h3>${s.name}</h3></div>`)
+```
+
+Session names are user-controlled (`vanish new <name>`) with no validation.
+Unix allows any characters except `/` and null in filenames. A session named
+`<img onerror=alert(1) src=x>` would execute as HTML. The `onclick` attribute
+was also injectable via names containing `'`.
+
+Fixed by replacing with `createElement` + `textContent`, the same safe pattern
+already used by `handleUpdate()` and `connect()`. This is the only `innerHTML`
+usage remaining in the codebase (the `list.innerHTML = ''` clear is safe).
+
+### What's Working Well
+
+**1. Core stability is absolute.** Protocol, session, terminal, pty, signal,
+paths, config, keybind, naming - 9 modules haven't changed since session 51 or
+earlier. Most haven't changed in 10+ sessions. These are finished code.
+
+**2. Feature additions are well-contained.** Read-only OTPs touched 4 files but
+the changes were surgical: a bool flag threaded through auth → http → frontend.
+Mobile toolbar was entirely in index.html. Neither feature required architectural
+changes.
+
+**3. Zero TODO/FIXME/HACK markers.** Still clean.
+
+**4. The web frontend is holding up at 292 lines.** Previous reviews flagged 250
+as the threshold for splitting JS. We're past it, but the code is still readable
+- functions are short, there's no framework state to manage, and the logic flow
+is linear. The next feature that adds significant JS (session list SSE) would be
+a good time to evaluate splitting.
+
+### Remaining Duplication (unchanged)
+
+1. **connectToSession (3 copies):** main.zig, http.zig, client.zig. ~8 lines
+   each. Still not worth extracting.
+
+2. **Auth validation + scope check (5 copies in http.zig):** Lines 429, 478,
+   514, 570, 609. Each ~10 lines. The read-only check adds one more line per
+   copy for the 3 write endpoints. Still not worth a helper - the pattern is
+   grep-friendly and each handler's error responses may diverge in the future.
+
+3. **Scroll actions (8 copies in client.zig):** Each calls moveX + render +
+   status. Still stable, still not worth abstracting.
+
+### Simple vs Complected Analysis
+
+**Simple (good):**
+
+- Read-only OTPs: orthogonal to scope, single bool through the stack, server
+  enforcement as primary with client hints. Clean design.
+- Mobile toolbar: CSS-driven visibility, delegated event handler, Ctrl toggle
+  mirrors mobile Shift convention. No server changes.
+- XSS fix: replaced the one unsafe pattern with the safe pattern used elsewhere.
+
+**Watch items:**
+
+- **index.html at 292 lines.** It's still a single-file frontend and that's a
+  feature (simplicity, no build step), but we're in the zone where a second
+  developer would want to split it. Keep this in mind for the session list SSE
+  feature.
+
+- **The handleKey function (line 272-279) is dense.** The ternary chain for
+  special keys is one long line. Works, but a future editor might struggle.
+  Not worth refactoring now, but if we touch it again, consider breaking the
+  key map into a const object.
+
+**No new architectural issues found.**
+
+### Rendering Architecture Redesign - Hammock Iteration 2
+
+Iteration 1 (session 51) concluded: reject the full redesign, pursue targeted
+fixes for the 1% failure cases. This iteration critiques that conclusion and
+looks for implementation details.
+
+**Critique of "fix the 1%" approach:**
+
+Iteration 1 proposed three fixes:
+1. Escape sequence accumulator (~30 lines)
+2. Resize resync via screen dump (~20 lines)
+3. Periodic correction heartbeat (~100 lines, maybe unnecessary)
+
+After rereading the actual code in client.zig, I found something iteration 1
+missed:
+
+**The session_resize handler (client.zig:551-556) doesn't re-render.**
+
+```zig
+.session_resize => {
+    var buf: [@sizeOf(protocol.SessionResize)]u8 = undefined;
+    protocol.readExact(client.fd, &buf) catch break;
+    const session_resize = std.mem.bytesToValue(protocol.SessionResize, &buf);
+    client.viewport.updateSession(session_resize.cols, session_resize.rows);
+    client.renderStatusBar();
+},
+```
+
+It updates the viewport dimensions and re-renders the status bar, but does NOT:
+- Clear the screen
+- Re-render the viewport (if in panning mode)
+- Reset the terminal state (if in passthrough mode)
+
+After a resize, the viewer's terminal still shows the old screen layout. The
+next chunk of output arrives with new-dimension escape sequences applied to a
+terminal that still has old-dimension content. This is likely the primary cause
+of the reported TUI breakage.
+
+**The fix is simple:** After `viewport.updateSession()`, if in panning mode,
+feed the resize to the local VTerm and re-render. If in passthrough mode, clear
+the screen and let the next output chunk paint fresh content. This is ~5 lines.
+
+**Escape sequence accumulator - do we actually need it?**
+
+The passthrough path writes raw bytes from `read()` directly to STDOUT. The
+session daemon sends output via the protocol: `ServerMsg.output` with a length-
+prefixed payload. The client reads the full payload before writing it to STDOUT
+(client.zig:530-535). So partial escape sequences from `read()` splitting are
+NOT the issue here - the protocol already frames complete messages.
+
+However, the session daemon itself reads from the PTY with `read()`, which CAN
+split escape sequences. But it immediately forwards the entire `read()` buffer
+as a single protocol message. The viewer then writes this same buffer to STDOUT.
+So if the PTY splits an escape sequence across two reads, the viewer gets two
+writes with the split sequence.
+
+Is this actually a problem in practice? Terminal emulators are generally tolerant
+of split escape sequences - they maintain parser state across reads. The user's
+terminal (receiving passthrough bytes) should handle partial sequences fine
+because its VT parser buffers internally.
+
+**Revised assessment:** The escape accumulator is probably not needed. The real
+bug is the missing resize re-render. The partial escape sequence issue is
+theoretical - real terminal emulators handle it.
+
+**Updated fix plan (simpler than iteration 1):**
+
+1. **Add screen clear + re-render on session_resize** in client.zig. If panning,
+   re-render viewport. If passthrough, write `\x1b[2J\x1b[H` (clear screen +
+   home cursor) to reset the terminal state, then the next output chunk will
+   paint correctly. ~5-8 lines.
+
+2. **Skip the escape accumulator.** Not needed - terminal emulators handle
+   partial sequences.
+
+3. **Skip the periodic heartbeat.** Fix #1 likely addresses the reported
+   breakage. If not, revisit.
+
+**Echo/noecho mode detection (from iteration 1):**
+
+Still a good idea for the future. Detecting alternate screen buffer
+(`\x1b[?1049h`) to switch between passthrough and vterm rendering would be
+elegant. But this is an optimization, not a bug fix. Defer until after the
+resize fix proves itself.
+
+**Summary of hammock iteration 2:**
+
+- Found the probable root cause: missing re-render on session_resize.
+- Simplified the fix plan from 3 items (~150 lines) to 1 item (~5-8 lines).
+- The escape accumulator and periodic heartbeat are likely unnecessary.
+- The full rendering redesign is still rejected as too much complexity.
+- Echo/noecho mode detection remains a good future optimization.
+- Next session should implement the resize re-render fix and test with actual
+  TUI viewers.
+
+### Inbox Status
+
+| Item                     | Status | Priority | Notes                            |
+| ------------------------ | ------ | -------- | -------------------------------- |
+| TUI viewer breakage      | ○ Todo | **High** | Resize re-render fix identified  |
+| TUI viewer keybinds      | ○ Todo | Medium   | Likely same root cause as above  |
+| Rendering redesign       | ○ Hmck | Low urg  | Hammock iter 2 done, see above   |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation              |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list        |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                        |
+
+### Recommendations for Next Sessions
+
+1. **Session 55:** Fix TUI viewer resize re-render. Add screen clear + viewport
+   re-render to the session_resize handler in client.zig. Small, targeted fix.
+   Test with actual TUI apps (vim, htop) across resize events.
+
+2. **Session 56:** Session list SSE or cursor position bug investigation.
+
+3. **Session 57 (review):** Architecture review. Assess whether the resize fix
+   resolved the TUI breakage reports.
+
+---
 
 ## 2026-02-09: Session 53 - Mobile Modifier Toolbar
 
