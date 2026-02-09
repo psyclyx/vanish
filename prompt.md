@@ -80,7 +80,7 @@ stale socket detection (S78), architecture review + spec update (S79), session
 model devil's advocate (S80), session model defense (S81), session model
 reflection + architecture review (S82), shell completion scripts (S83),
 completion bug fixes + man page + architecture review (S84), otp --url feature
-(S85).
+(S85), spec-vs-code audit (S86).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -175,6 +175,129 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 86 - Spec-vs-Code Audit
+
+### What was done
+
+First systematic audit of the specification document against the actual code.
+Cross-referenced behavioral claims in `doc/spec.md` with their implementations
+across all 14 source files. The prompt has long requested: "go commit by commit
+to make sure you understand everything, and haven't forgotten anything."
+
+The audit checked 7 major areas (connection handshake, session destruction,
+cmdSend error handling, POST /auth cookie behavior, screen clear detection,
+config error handling, OTP/revocation logic). **All spec claims matched the
+code.** The spec is accurate.
+
+Then audited for edge cases, forgotten behaviors, and latent bugs. **Found three
+real issues:**
+
+### Bug 1: IPv6 URL generation broken (HIGH)
+
+**File:** `src/main.zig:912`
+
+When `config.serve.bind` is an IPv6 address (e.g., `::1`), `cmdOtp --url`
+generates `http://::1:7890?otp=...` — which is an invalid URL. IPv6 addresses
+in URLs must be bracketed: `http://[::1]:7890?otp=...`.
+
+**Fix:** Detect if bind address contains `:` (IPv6 indicator) and wrap in
+brackets. ~5 lines.
+
+### Bug 2: swapRemove during for-loop broadcast (MEDIUM)
+
+**File:** `src/session.zig:208-212`
+
+`handlePtyOutput` broadcasts to viewers with:
+```zig
+for (self.viewers.items, 0..) |c, i| {
+    protocol.writeMsg(c.fd, ...) catch {
+        self.removeViewer(i);
+    };
+}
+```
+
+Zig's `for` captures the slice header (pointer + length) at loop entry.
+`removeViewer` calls `swapRemove`, which mutates the backing array and
+decrements `items.len` — but the for-loop's captured length doesn't change.
+
+**Consequences by scenario:**
+- 1 viewer fails: loop ends naturally (was last iteration). **Harmless.**
+- 2 viewers, first fails: last viewer moved to [0], but loop continues to [1]
+  which still has the old data in memory. The surviving viewer gets the output
+  written twice (once at old position, once when swapRemoved into [0] but loop
+  already passed [0]). **Duplicate write, harmless for VT.**
+- Multiple viewers fail: cascading incorrect removals. A removed viewer's fd is
+  closed, but the stale slice position still holds the old fd value. Writing to
+  a closed fd triggers another `removeViewer` call, which now removes the *wrong*
+  viewer (the one that was swapped in). **Real bug: can close wrong fds.**
+
+**Only this one broadcast has the bug.** The event loop's viewer iteration
+(lines 155-168) correctly uses a while loop with explicit index management and
+`continue` after removal. The exit broadcast (line 179) and resize notification
+(line 490) ignore write errors. The kick path (line 477) returns immediately
+after removal.
+
+**Fix:** Change the for loop to a while loop iterating backwards, or use the
+same while+continue pattern as the event loop. ~8 lines.
+
+### Bug 3: Non-constant-time JWT signature comparison (LOW-MEDIUM)
+
+**File:** `src/auth.zig:377`
+
+```zig
+if (!std.mem.eql(u8, provided_sig, &expected_sig)) return error.InvalidSignature;
+```
+
+`std.mem.eql` is short-circuit: returns on first mismatch. This leaks timing
+information about the HMAC signature. An attacker could theoretically forge JWTs
+by guessing bytes and measuring response times.
+
+**Practical severity:** Low. Vanish serves localhost by default. Timing attacks
+over localhost are theoretically possible but require sub-microsecond precision
+across many samples. Over a real network, this would be more concerning.
+
+**Fix:** Use `std.crypto.timing_safe.eql` (confirmed present in Zig 0.15.2 at
+`lib/std/crypto/timing_safe.zig`). The function takes arrays, not slices. After
+the existing `provided_sig.len != 32` check, cast to `*const [32]u8` and
+compare. ~3 lines.
+
+### Additional minor findings (no action needed)
+
+- **`--primary` + `--viewer` on attach:** both can be passed. `--viewer` is a
+  no-op (deprecated), so `--primary` wins. Undocumented but correct behavior.
+  No fix needed — the deprecated flag should stay silent.
+
+- **`--url` doesn't include `--session` name:** `vanish otp --session foo --url`
+  produces `http://...?otp=...` without referencing `foo`. The session is
+  embedded in the OTP's metadata, not the URL. This is correct — the OTP itself
+  carries the scope. Could add a `#session-foo` fragment for UX, but it's not
+  a bug.
+
+- **cmdKill/cmdKick stale socket errors:** Generic "Could not connect to
+  session" message. Could distinguish stale vs. non-existent, but the current
+  message is adequate. Low priority.
+
+### Priority for fixes
+
+1. **Bug 2 (swapRemove)** — Real correctness bug. Can cascade to close wrong
+   fds under multiple simultaneous viewer disconnections. Should fix first.
+2. **Bug 1 (IPv6 URL)** — Broken functionality for IPv6 configs. Easy fix.
+3. **Bug 3 (timing)** — Defense in depth. Low practical risk but easy to fix
+   correctly. Do it because it's the right thing.
+
+All three fixes are small (combined ~16 lines of changes) and independently
+committable.
+
+### Recommendations for next session
+
+- **Session 87: Fix all three bugs.** They're small, well-understood, and
+  independently testable. This is also the 3-session architecture review
+  checkpoint (3 sessions after S84). The review can be brief — zero structural
+  changes since S85, and the fixes are all localized.
+- After fixes, update `doc/spec.md` to note the swapRemove fix (behavioral
+  change: broadcast errors now handled correctly instead of potentially
+  cascading).
 
 ## 2026-02-09: Session 85 - `vanish otp --url`
 
