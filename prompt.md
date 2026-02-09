@@ -65,7 +65,7 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
-Done (Sessions 55-76): Resize re-render fix (S55), cursor position fix (S56),
+Done (Sessions 55-78): Resize re-render fix (S55), cursor position fix (S56),
 architecture review (S57), Arch PKGBUILD + LICENSE (S58), session list SSE
 (S59), architecture review + http.zig devil's advocate (S60), http.zig
 reflection + archive cleanup (S61), docs audit + dual-bind fix (S62), v1.0.0 tag
@@ -75,7 +75,8 @@ defense (S68), protocol reflection + struct size tests + protocol comment (S69),
 abstraction interrogation + function decomposition analysis (S70), cmdNew
 decomposition (S71), specification document (S72), architecture review (S73),
 processRequest decomposition (S74), writeCell extraction (S75), architecture
-review post-decomposition (S76).
+review post-decomposition (S76), UX hammock (S77), socket clobbering fix +
+stale socket detection (S78).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -170,6 +171,71 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 78 - Socket Clobbering Fix + Stale Socket Detection
+
+### What was done
+
+Implemented the top two items from Session 77's UX hammock analysis.
+
+**1. Socket clobbering fix (bug fix)**
+
+`createSocket` in session.zig previously did `deleteFileAbsolute(path) catch {}`
+unconditionally before binding. This meant `vanish new work zsh` would silently
+delete a running session's socket, orphaning it: still running, consuming
+resources, but invisible to `vanish list` and unreachable.
+
+Fix: added `isSocketLive(path: []const u8) bool` — a public function that
+probes a Unix socket by attempting to connect. If connect succeeds, the session
+is live. `createSocket` now checks `isSocketLive` before deleting, returning
+`error.SessionAlreadyExists` if the socket is active.
+
+`cmdNew` in main.zig checks `isSocketLive` before forking, producing a clear
+error: "Session 'work' already exists". The `createSocket` check is a secondary
+defense inside the child process (TOCTOU race is acceptable — the worst case
+falls back to the existing "Session failed to start" error).
+
+**2. Stale socket detection in `vanish list` (polish)**
+
+`cmdList` now probes each socket found in the socket directory:
+- Text output: stale sessions annotated with `(stale)` suffix
+- JSON output: includes `"live":true` or `"live":false` field
+
+The HTTP API's `buildSessionListJson` (http.zig) also includes the `live` field,
+so the browser session list gets liveness information too.
+
+**3. `vanish send` error message (already handled)**
+
+Investigated and found that `Client.send` already handles the denied case with
+a clear error message: "Session already has a primary client". No change needed.
+
+### New dependency
+
+http.zig now imports session.zig (for `isSocketLive`). The dependency graph
+remains acyclic. This brings http.zig to 7 project module imports (from 6).
+The import is justified: `isSocketLive` is a pure utility function needed by
+the session listing code.
+
+### Files changed
+
+- `src/session.zig`: `isSocketLive` (pub), `createSocket` guards against live sockets
+- `src/main.zig`: `cmdNew` pre-fork liveness check, `cmdList` + `writeJsonList` annotate stale sockets
+- `src/http.zig`: import session.zig, `buildSessionListJson` includes `live` field
+
+Build and all tests pass.
+
+### Recommendation for next session
+
+Session 79 is the 3-session architecture review checkpoint (3 sessions since
+S76). The review should assess:
+- Does the new http→session dependency concern the dependency graph?
+- Is `isSocketLive` in the right module?
+- Overall codebase health after these UX-focused changes.
+
+Alternatively, session 79 could update `doc/spec.md` with the new behaviors
+(socket liveness checking, stale annotation in list output, `live` field in
+JSON). The spec should document the `SessionAlreadyExists` error and the
+liveness probe mechanism.
 
 ## 2026-02-09: Session 77 - Hammock: What Would Make This Proud Work?
 
