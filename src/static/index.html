@@ -48,6 +48,12 @@
             display: inline-block;
             overflow: hidden;
         }
+        #cursor {
+            position: absolute;
+            background: rgba(204, 204, 204, 0.7);
+            pointer-events: none;
+            z-index: 1;
+        }
 
         /* Modifier toolbar (touch devices only) */
         .mod-bar {
@@ -97,6 +103,7 @@
         </div>
         <div id="term" tabindex="0">
             <div id="term-grid"></div>
+            <div id="cursor"></div>
         </div>
         <div class="mod-bar" id="mod-bar">
             <button data-key="esc">Esc</button>
@@ -218,6 +225,11 @@
                 }
             }
             grid.appendChild(frag);
+
+            if (data.cx !== undefined) {
+                const cur = document.getElementById('cursor');
+                cur.style.cssText = `left:${4 + data.cx * charWidth}px;top:${4 + data.cy * charHeight}px;width:${charWidth}px;height:${charHeight}px;`;
+            }
         }
 
         function disconnect() {

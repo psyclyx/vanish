@@ -42,6 +42,8 @@ const SseClient = struct {
     last_update: i64 = 0,
     cols: u16 = 120,
     rows: u16 = 40,
+    last_cursor_x: u16 = 0,
+    last_cursor_y: u16 = 0,
     is_primary: bool = false,
 
     fn deinit(self: *SseClient, alloc: std.mem.Allocator) void {
@@ -677,7 +679,8 @@ fn handleSseStream(self: *HttpServer, client_idx: usize, headers: []const u8, se
         // Send initial keyframe (full screen)
         const updates = try screen_buf.fullScreen(&vterm);
         defer self.alloc.free(updates);
-        try self.sendSseUpdate(client.fd, updates, vterm.cols, vterm.rows, true);
+        const cur = vterm.getCursor();
+        try self.sendSseUpdate(client.fd, updates, vterm.cols, vterm.rows, cur.x, cur.y, true);
     }
 
     // Move client to SSE list
@@ -717,8 +720,12 @@ fn handleSseSessionOutput(self: *HttpServer, sse_idx: usize) !void {
             const updates = try sse.screen_buf.updateFromVTerm(&sse.vterm);
             defer self.alloc.free(updates);
 
-            if (updates.len > 0) {
-                try self.sendSseUpdate(sse.http_fd, updates, sse.cols, sse.rows, false);
+            const cur = sse.vterm.getCursor();
+            const cursor_moved = cur.x != sse.last_cursor_x or cur.y != sse.last_cursor_y;
+            if (updates.len > 0 or cursor_moved) {
+                try self.sendSseUpdate(sse.http_fd, updates, sse.cols, sse.rows, cur.x, cur.y, false);
+                sse.last_cursor_x = cur.x;
+                sse.last_cursor_y = cur.y;
             }
             sse.last_update = std.time.timestamp();
         },
@@ -735,7 +742,10 @@ fn handleSseSessionOutput(self: *HttpServer, sse_idx: usize) !void {
             // Send full screen after resize
             const updates = try sse.screen_buf.fullScreen(&sse.vterm);
             defer self.alloc.free(updates);
-            try self.sendSseUpdate(sse.http_fd, updates, sse.cols, sse.rows, true);
+            const cur = sse.vterm.getCursor();
+            try self.sendSseUpdate(sse.http_fd, updates, sse.cols, sse.rows, cur.x, cur.y, true);
+            sse.last_cursor_x = cur.x;
+            sse.last_cursor_y = cur.y;
             sse.last_update = std.time.timestamp();
         },
         .exit => {
@@ -774,14 +784,17 @@ fn sendPeriodicKeyframes(self: *HttpServer) !void {
             // Send full screen refresh periodically
             const updates = sse.screen_buf.fullScreen(&sse.vterm) catch continue;
             defer self.alloc.free(updates);
-            self.sendSseUpdate(sse.http_fd, updates, sse.cols, sse.rows, true) catch continue;
+            const cur = sse.vterm.getCursor();
+            self.sendSseUpdate(sse.http_fd, updates, sse.cols, sse.rows, cur.x, cur.y, true) catch continue;
+            sse.last_cursor_x = cur.x;
+            sse.last_cursor_y = cur.y;
             sse.last_update = now;
         }
     }
 }
 
-fn sendSseUpdate(self: *HttpServer, fd: posix.socket_t, updates: []const vthtml.CellUpdate, cols: u16, rows: u16, is_keyframe: bool) !void {
-    const json = try vthtml.updatesToJson(self.alloc, updates, cols, rows);
+fn sendSseUpdate(self: *HttpServer, fd: posix.socket_t, updates: []const vthtml.CellUpdate, cols: u16, rows: u16, cursor_x: u16, cursor_y: u16, is_keyframe: bool) !void {
+    const json = try vthtml.updatesToJson(self.alloc, updates, cols, rows, cursor_x, cursor_y);
     defer self.alloc.free(json);
 
     var event: std.ArrayList(u8) = .empty;

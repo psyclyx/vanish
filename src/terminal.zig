@@ -58,11 +58,17 @@ pub fn getPlainText(self: *VTerminal) ![]const u8 {
     return try self.term.plainString(self.alloc);
 }
 
+pub fn getCursor(self: *VTerminal) struct { x: u16, y: u16 } {
+    const c = self.term.screens.active.cursor;
+    return .{ .x = c.x, .y = c.y };
+}
+
 pub fn dumpScreen(self: *VTerminal, alloc: std.mem.Allocator) ![]u8 {
-    const formatter: TerminalFormatter = .init(&self.term, .{
+    var formatter: TerminalFormatter = .init(&self.term, .{
         .emit = .vt,
         .palette = &self.term.colors.palette.current,
     });
+    formatter.extra.screen.cursor = true;
 
     var output: std.ArrayList(u8) = .empty;
     errdefer output.deinit(alloc);
@@ -166,6 +172,16 @@ pub fn dumpViewport(
         // Reset style at end of each row
         try writer.writeAll("\x1b[0m");
         out_row += 1;
+    }
+
+    // Position cursor within the visible viewport
+    const cursor = screen.cursor;
+    if (cursor.x >= offset_x and cursor.x < end_x and
+        cursor.y >= offset_y and cursor.y < end_y)
+    {
+        const cx = cursor.x - offset_x + 1;
+        const cy = cursor.y - offset_y + 1;
+        try std.fmt.format(writer, "\x1b[{d};{d}H", .{ cy, cx });
     }
 
     return output.toOwnedSlice(alloc);

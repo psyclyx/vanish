@@ -245,7 +245,7 @@ fn cellHasStyle(cell: Cell) bool {
 }
 
 /// Render multiple updates to a JSON array of structured cell objects
-pub fn updatesToJson(alloc: std.mem.Allocator, updates: []const CellUpdate, cols: u16, rows: u16) ![]u8 {
+pub fn updatesToJson(alloc: std.mem.Allocator, updates: []const CellUpdate, cols: u16, rows: u16, cursor_x: u16, cursor_y: u16) ![]u8 {
     var json: std.ArrayList(u8) = .empty;
     errdefer json.deinit(alloc);
 
@@ -253,6 +253,10 @@ pub fn updatesToJson(alloc: std.mem.Allocator, updates: []const CellUpdate, cols
     try std.fmt.format(json.writer(alloc), "{d}", .{cols});
     try json.appendSlice(alloc, ",\"rows\":");
     try std.fmt.format(json.writer(alloc), "{d}", .{rows});
+    try json.appendSlice(alloc, ",\"cx\":");
+    try std.fmt.format(json.writer(alloc), "{d}", .{cursor_x});
+    try json.appendSlice(alloc, ",\"cy\":");
+    try std.fmt.format(json.writer(alloc), "{d}", .{cursor_y});
     try json.appendSlice(alloc, ",\"cells\":[");
 
     var first = true;
@@ -351,7 +355,7 @@ test "cell to json" {
         },
     }};
 
-    const json = try updatesToJson(alloc, &updates, 80, 24);
+    const json = try updatesToJson(alloc, &updates, 80, 24, 5, 10);
     defer alloc.free(json);
 
     try std.testing.expect(std.mem.indexOf(u8, json, "\"x\":5") != null);
