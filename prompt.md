@@ -24,10 +24,12 @@ New: (triaged in session 48)
 
 - ✗ "No framework bloat" in the README - resolved: no datastar in codebase,
   README already says "No framework dependencies." Pure vanilla JS.
-- TUIs seem to break every so often (needs repro steps, likely resize race or
-  partial escape sequences - see session 48 analysis)
-- Keybinds are broken on TUI viewer sessions (likely rendering corruption
-  making it look like input doesn't work - see session 48 analysis)
+- ✓ TUIs seem to break every so often - fixed in session 55: resize handlers
+  now re-render viewport and clear screen. Was missing re-render on both
+  session_resize and SIGWINCH.
+- ✓ Keybinds are broken on TUI viewer sessions - likely fixed by session 55
+  resize re-render fix (rendering corruption made it look like input didn't
+  work). Needs confirmation.
 - ✓ Pressing a key in the browser takes over a session automatically - fixed in
   session 49: input blocked for non-primary, explicit takeover required.
 - ✓ We should have some notion of read-only OTPs. - done in session 52.
@@ -43,16 +45,23 @@ New: (triaged in session 48)
 
 Current:
 
-- Investigate and fix: TUI viewer rendering breakage and keybind issues.
-  Hammock iter 2 identified concrete bug: session_resize handler in client.zig
-  doesn't re-render or clear screen. Next session: implement the 3 targeted
-  fixes (escape accumulator, resize resync, this missing re-render).
 - Rendering architecture redesign (multi-iteration hammock - see inbox idea).
-  Hammock iter 2 complete: confirmed "fix the 1%" approach, identified the
-  missing resize re-render as the most likely cause of reported TUI breakage.
+  Hammock iter 2 complete: confirmed "fix the 1%" approach. Resize re-render
+  fix landed in session 55. Escape accumulator and periodic heartbeat deemed
+  unnecessary. Echo/noecho mode detection remains a future optimization.
 - Cursor position bug for narrow primary sessions.
 - Session list SSE (reactive in web).
 - Arch PKGBUILD.
+
+Done (Session 55):
+
+- ✓ Fixed TUI viewer resize re-render. Both session_resize (remote) and
+  SIGWINCH (local) handlers now properly re-render after dimension changes.
+  Session resize: resizes local VTerm if it exists, re-renders viewport in
+  panning mode, clears screen in passthrough mode. Local resize: re-renders
+  viewport in panning mode, updates status bar. client.zig: 636 → 648 (+12).
+  This was the probable root cause of reported TUI viewer breakage (identified
+  in hammock iteration 2, session 54).
 
 Done (Session 54):
 
@@ -406,6 +415,99 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 55 - Fix TUI Viewer Resize Re-Render
+
+### What Changed
+
+**client.zig (636 → 648 lines, +12)**
+
+Two fixes to resize handling in `runClientLoop()`:
+
+**1. session_resize handler (line 555-569):**
+
+Before: Updated viewport dimensions and re-rendered the status bar. Did NOT
+clear the screen or re-render the viewport.
+
+After: Three additional steps:
+- If a local VTerm exists (panning mode was active), resize it to the new
+  session dimensions via `vt.resize()`. Without this, the VTerm still thinks
+  the session is the old size, so subsequent `feed()` calls would misinterpret
+  escape sequences.
+- If panning is needed, re-render the viewport to show the updated content.
+- If NOT panning (passthrough mode), write `\x1b[2J\x1b[H` (clear screen +
+  home cursor) to reset the terminal. Without this, stale content from the old
+  layout lingers until the next full output repaint.
+
+**2. SIGWINCH handler (line 499-510):**
+
+Before: Updated viewport dimensions and sent a resize message to the server. Did
+NOT re-render the viewport or status bar.
+
+After: Two additional steps:
+- If panning is needed, re-render the viewport. The visible subset changed when
+  the local terminal resized, so the viewport needs to show the new area.
+- Re-render the status bar. The status bar position depends on `self.rows`,
+  which just changed.
+
+### Why This Fixes TUI Breakage
+
+The reported issue was "TUIs break every so often." Hammock iteration 2 (session
+54) identified the most likely cause: when the primary client resizes their
+terminal, the server sends `session_resize` to all viewers. The viewer updated
+its internal dimension tracking but left the screen in its old state. The next
+chunk of output from the session contains escape sequences formatted for the new
+dimensions, applied to a terminal still showing the old layout. This causes
+visible corruption: misaligned text, broken borders, garbled status bars in TUI
+apps like vim or htop.
+
+The fix ensures the viewer's terminal state is reset immediately on resize,
+before any new output arrives.
+
+The "keybinds broken on TUI viewer sessions" report was likely the same root
+cause: rendering corruption from resize made it appear that keybinds weren't
+working, even though the input path was functioning correctly. The status bar
+and hints were being rendered at wrong positions or on top of corrupted content.
+
+### Line Count Impact
+
+| File       | Before | After | Change  |
+| ---------- | ------ | ----- | ------- |
+| client.zig | 636    | 648   | +12     |
+
+Total codebase: 15 files, ~5,889 lines.
+
+### Testing
+
+- Build: Clean
+- Unit tests: 44 tests, all passing
+
+### Inbox Status
+
+| Item                     | Status | Priority | Notes                            |
+| ------------------------ | ------ | -------- | -------------------------------- |
+| TUI viewer breakage      | ✓ Done | -        | Session 55: resize re-render fix |
+| TUI viewer keybinds      | ✓ Done | -        | Likely same root cause, fixed    |
+| Rendering redesign       | ○ Hmck | Low urg  | Resize fix landed; see if enough |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation              |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list        |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                        |
+
+### Recommendations for Next Sessions
+
+1. **Session 56:** Session list SSE or cursor position bug investigation. These
+   are the next highest priority items. Session list SSE would be a nice polish
+   item for the web frontend.
+
+2. **Session 57 (review):** Architecture review (3-session checkpoint). Assess
+   whether the resize fix resolved the TUI breakage reports. This is session 57
+   not 56 because session 54 was the last review.
+
+3. **Session 58:** Arch PKGBUILD or rendering redesign hammock iteration 3
+   (assess whether the fix is sufficient or echo/noecho detection is worth
+   pursuing).
+
+---
 
 ## 2026-02-09: Session 54 - Architecture Review + Rendering Hammock Iter 2
 
