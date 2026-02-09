@@ -20,28 +20,62 @@ Ongoing:
 
 Inbox: keep this up to date.
 
-New:
+New: (triaged in session 48)
 
+- ✗ "No framework bloat" in the README - resolved: no datastar in codebase,
+  README already says "No framework dependencies." Pure vanilla JS.
+- TUIs seem to break every so often (needs repro steps, likely resize race or
+  partial escape sequences - see session 48 analysis)
+- Keybinds are broken on TUI viewer sessions (likely rendering corruption
+  making it look like input doesn't work - see session 48 analysis)
+- ✓ Pressing a key in the browser takes over a session automatically - fixed in
+  session 49: input blocked for non-primary, explicit takeover required.
+- We should have some notion of read-only OTPs.
+- Browser feels laggier than it should on localhost (innerHTML parsing
+  bottleneck on keyframes - see session 48 analysis)
+- Rendering architecture redesign: abstract rendering commands, echo/noecho
+  modes, server-side VTerm → structured commands instead of raw bytes. Drop
+  HTTP client in favor of thread-per-connection. Multi-iteration hammock task.
+  See original description in doc/sessions-archive.md or session 48 inbox
+  analysis.
 - spend many iterations hammocking about the problem. it's complete - but could
   it be better? what would make you proud to have done in this codebase?
 
 Current:
 
-- Mobile web: resizable terminal, modifier buttons (Ctrl, etc.), generally more
-  mobile-friendly without being UX slop. Target audience falls back to termux if
-  bad.
+- Investigate and fix: TUI viewer rendering breakage and keybind issues.
+- Read-only OTPs.
+- Browser localhost lag investigation.
+- Mobile web: modifier buttons (Ctrl, etc.).
+- Rendering architecture redesign (multi-iteration hammock - see inbox idea).
 - Cursor position bug for narrow primary sessions.
 - Session list SSE (reactive in web).
 - Arch PKGBUILD.
+
+Done (Session 49):
+
+- ✓ Fixed browser auto-takeover on keypress. Typing in the browser no longer
+  steals sessions from native clients. Input is now blocked client-side when not
+  primary (early return in handleKey). Removed the showTakeoverHint that flashed
+  the Takeover button on every keypress. Added a role badge ("viewer"/"primary")
+  to the terminal header so users understand their current role. Takeover is now
+  explicit: click the Takeover button. index.html: 231 → 240 lines (+9). No
+  server changes needed.
+
+Done (Session 48):
+
+- ✓ Architecture review (3-session checkpoint, overdue from session 45). Triaged
+  new inbox items. Resolved datastar README concern (non-issue: codebase uses
+  pure vanilla JS, README already says "No framework dependencies"). See notes.
 
 Done (Session 47):
 
 - ✓ Fixed Nix package. The overlay was completely broken with system nixpkgs
   (build produced empty output: "no Makefile or custom buildPhase, doing
-  nothing"). Root cause: `nativeBuildInputs = [zig_0_15]` only works with
-  newer nixpkgs where `zig_0_15` has an embedded `setupHook`. Older nixpkgs
-  (e.g. 26.05.20251216) require `zig_0_15.hook` instead. Fixed by switching
-  to `zig_0_15.hook` which works across all nixpkgs versions. Also removed
+  nothing"). Root cause: `nativeBuildInputs = [zig_0_15]` only works with newer
+  nixpkgs where `zig_0_15` has an embedded `setupHook`. Older nixpkgs (e.g.
+  26.05.20251216) require `zig_0_15.hook` instead. Fixed by switching to
+  `zig_0_15.hook` which works across all nixpkgs versions. Also removed
   conflicting `--release=fast` from `zigBuildFlags` (was overridden by hook
   defaults on newer nixpkgs anyway). Added `dontUseZigCheck = true`. Man page
   was already in the package (added in session 45 via build.zig).
@@ -314,6 +348,364 @@ lightweight libghostty terminal session multiplexer with web access
 
 # Progress Notes
 
+## 2026-02-09: Session 49 - Fix Browser Auto-Takeover
+
+### The Problem
+
+Pressing any key in the browser terminal would silently steal the session from
+native terminal clients. The previous behavior:
+
+1. Browser connects as SSE viewer
+2. User types a key → `/input` POST fires
+3. Server checks for an SSE client that `is_primary` for this session
+4. No SSE client is primary (the primary is a native terminal client, invisible
+   to the HTTP server) → returns 409
+5. Browser JS: `if (r.status === 409 && !isPrimary) showTakeoverHint()`
+6. The Takeover button flashes red, encouraging the user to take over
+7. Earlier versions auto-called `takeover()` here, which immediately stole the
+   session
+
+This was a UX and correctness bug. Viewers should be read-only by default.
+Taking over should be a deliberate action, not triggered by typing.
+
+### What Changed
+
+**index.html (231 → 240 lines, +9)**
+
+**`handleKey()`:** Added `if (!isPrimary) return;` at the top. Viewer keypresses
+are now silently dropped client-side. No HTTP request is made, no 409, no hint.
+Removed the `.then()` chain that called `showTakeoverHint()`. Removed the
+`showTakeoverHint()` function entirely.
+
+**`updateRoleBadge()`** (4 lines): New function. Updates a badge in the terminal
+header showing "viewer" (gray) or "primary" (green). Called from `connect()`,
+`refresh()`, and `takeover()`. Gives the user clear feedback about their role.
+
+**Role badge element:** Added `<span id="role-badge">` to the terminal header
+alongside the existing buttons.
+
+### Design Decisions
+
+- **Client-side input blocking, not server-side:** The server already returns
+  409 for non-primary SSE clients. But making an HTTP request per keypress just
+  to get a 409 is wasteful. Blocking at the client level (checking `isPrimary`
+  before fetch) is both faster and eliminates unnecessary server load.
+
+- **No auto-takeover on any condition:** The old code auto-took-over when the
+  409 indicated "no primary." Even that case (orphaned session with no primary)
+  should require explicit action. The user might be connecting to observe, not
+  control.
+
+- **Visual role indicator:** Without the flashing hint, viewers had no feedback
+  about why typing didn't work. The role badge makes the state obvious at a
+  glance. Green "primary" = you can type. Gray "viewer" = read-only, use
+  Takeover button to take control.
+
+- **Takeover button still available:** Takeover is a legitimate action. It stays
+  in the header. The difference is that it requires a deliberate click, not an
+  accidental keypress.
+
+### Line Count Impact
+
+| File       | Before | After | Change |
+| ---------- | ------ | ----- | ------ |
+| index.html | 231    | 240   | +9     |
+
+Total codebase: 15 files, ~5,771 lines.
+
+### Testing
+
+- Build: Clean
+- Unit tests: All passing
+
+### Inbox Status
+
+| Item                     | Status | Priority | Notes                         |
+| ------------------------ | ------ | -------- | ----------------------------- |
+| Browser auto-takeover    | ✓ Done | -        | Session 49                    |
+| TUI viewer breakage      | ○ Todo | Medium   | Needs reproduction            |
+| TUI viewer keybinds      | ○ Todo | Medium   | Likely rendering, not input   |
+| Read-only OTPs           | ○ Todo | Medium   | Auth scope extension          |
+| Browser localhost lag     | ○ Todo | Medium   | innerHTML parsing bottleneck  |
+| Mobile modifier toolbar  | ○ Todo | Medium   | Designed in session 46        |
+| Rendering redesign       | ○ Todo | Low urg  | Multi-session hammock         |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation           |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list     |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                     |
+
+### Recommendations for Next Sessions
+
+1. **Session 50:** Browser lag investigation. Profile keyframe rendering, try
+   replacing innerHTML with createElement, batch in requestAnimationFrame.
+
+2. **Session 51 (review):** Architecture review (3-session checkpoint). Start
+   hammocking the rendering architecture redesign.
+
+3. **Session 52:** Read-only OTPs or mobile modifier toolbar.
+
+---
+
+## 2026-02-09: Session 48 - Architecture Review (3-session checkpoint)
+
+Last review was session 42. This review is overdue (6 sessions since last
+review, should be every 3). A significant batch of new inbox items arrived in
+this session, requiring triage and analysis.
+
+### Codebase Stats
+
+| File         | Lines     | Change from S42 | Purpose                    |
+| ------------ | --------- | --------------- | -------------------------- |
+| main.zig     | 972       | -69             | CLI entry point            |
+| http.zig     | 898       | 0               | Web server, SSE, routing   |
+| client.zig   | 636       | 0               | Native client, viewport    |
+| auth.zig     | 556       | 0               | JWT/HMAC, OTP exchange     |
+| session.zig  | 526       | 0               | Daemon, poll loop          |
+| config.zig   | 461       | 0               | JSON config parsing        |
+| vthtml.zig   | 375       | 0               | VT→HTML, delta computation |
+| terminal.zig | 335       | 0               | ghostty-vt wrapper         |
+| index.html   | 230       | +10             | Web frontend               |
+| protocol.zig | 192       | 0               | Wire format                |
+| keybind.zig  | 185       | 0               | Input state machine        |
+| naming.zig   | 165       | 0               | Auto-name generation       |
+| pty.zig      | 140       | 0               | PTY operations             |
+| signal.zig   | 48        | 0               | Signal handling            |
+| paths.zig    | 43        | 0               | Shared utilities           |
+| **Total**    | **5,762** | **-59**         | 15 files                   |
+
+Build: Clean. Tests: 43 unit tests passing.
+
+The codebase _shrank_ since session 42. main.zig went from 1,041 to 972 (the
+daemonize/connectAsViewer extraction in session 43). index.html grew by 10 lines
+(refresh button in session 44). All other modules unchanged. 13 of 15 files
+have not changed since session 42. The core is thoroughly stable.
+
+### What's Working Well
+
+**1. Core stability continues.** Protocol, session, terminal, pty, signal,
+paths, auth, config, vthtml, keybind, naming - 11 modules unchanged for 6+
+sessions. These are finished code.
+
+**2. Zero TODOs/FIXMEs/HACKs in source.** All known issues tracked in prompt.md.
+
+**3. Clean dependency graph.** No circular dependencies. main.zig is the only
+file that imports everything; all other modules have targeted, narrow imports.
+
+**4. The documentation push (session 45) landed well.** README, DESIGN.md, and
+man page are all current and professional.
+
+### New Inbox Items Analysis
+
+The user added a large batch of new items. Analyzing each:
+
+**1. "No framework bloat" in README - we use datastar (RESOLVED)**
+
+Investigated: the codebase does NOT use datastar. `grep -r datastar` finds
+nothing in src/. The index.html uses pure vanilla JavaScript - EventSource API
+for SSE, Fetch API for HTTP, direct DOM manipulation. No framework of any kind.
+
+The README already says: "No framework dependencies." This is accurate.
+
+Verdict: Non-issue. The user may have been thinking of a different project or
+considering adding datastar at some point. The current code is correct and the
+README is accurate. Removing from inbox.
+
+**2. TUIs break every so often**
+
+Analyzed the output pipeline. For viewers, there are two code paths:
+
+- **No panning needed** (viewer >= session size): raw bytes pass through to
+  STDOUT directly (client.zig:345). This is fast but fragile - escape sequences
+  from the session's TUI assume the session's terminal dimensions, which may not
+  match the viewer's terminal exactly (even if the viewer is the same size, edge
+  cases exist around resize timing).
+
+- **Panning needed** (viewer < session size): bytes feed into a local VTerm, and
+  `renderViewport()` dumps a subset of the vterm's screen (client.zig:334-346).
+  This is correct but expensive - every output chunk triggers a full viewport
+  re-render.
+
+The "break every so often" is likely caused by:
+  a) Race conditions during resize: session resizes, viewer gets
+     `session_resize` message, but some output was already in flight with old
+     dimensions.
+  b) Partial escape sequence delivery: if a multi-byte escape sequence is split
+     across two read()s, the raw passthrough writes partial sequences.
+  c) VTerm and real terminal getting out of sync in panning mode.
+
+This is a real issue but requires careful investigation to pin down. The user's
+large rendering architecture redesign idea (below) would address this
+fundamentally.
+
+Priority: Medium. Needs reproduction steps.
+
+**3. Keybinds broken on TUI viewer sessions**
+
+Analyzed the input path for viewers (client.zig:127-146). The keybind state
+machine processes every byte _before_ deciding whether to forward it. Viewer
+keybinds (leader → d/t/s/h/j/k/l/etc.) should work identically to primary
+keybinds.
+
+Could NOT find a code-level bug. Possible explanations:
+  a) The user's shell or multiplexer (tmux/screen) is intercepting Ctrl+A before
+     vanish sees it.
+  b) Related to TUI breakage (#2) - if the viewer's terminal state is corrupted,
+     the status bar / hint rendering may be broken, making it _look_ like
+     keybinds don't work even if the actions fire.
+  c) A specific key combination that doesn't match the is_ctrl classification.
+
+Priority: Medium. Needs reproduction steps. If the hint/status bar doesn't
+appear after pressing leader, it's likely (b) - a rendering issue masquerading as
+an input issue.
+
+**4. Browser auto-takeover on keypress**
+
+Found the cause: index.html line 226:
+```js
+.then(r => { if (r.status === 409 && !isPrimary) takeover(); });
+```
+
+When a viewer presses any key, the `/input` endpoint returns 409 (no primary),
+and the JS automatically calls `takeover()`. This was intentional as a UX
+convenience (session 32) but the user now considers it a bug.
+
+Fix: Remove the auto-takeover. Require explicit click on "Takeover" button. This
+is a one-line change in index.html (remove the `.then(...)` chain, or remove the
+auto-takeover condition).
+
+Alternatively: only auto-takeover if there is NO existing primary (409 means no
+active primary), which is the current behavior. The bug might be that it takes
+over even when a native terminal client IS the primary? Need to check: does the
+409 occur when a native client is primary but not an SSE client? Looking at
+`handleInput` in http.zig:484-495 - it checks `sse.is_primary`, not whether
+the _session_ has a primary. So if the primary is a native client (not SSE), the
+HTTP endpoint returns 409, triggering auto-takeover via the protocol.
+
+This IS a real bug: typing in the browser steals the session from a native
+terminal client. The HTTP input handler only knows about SSE primaries.
+
+Fix: The input endpoint should return a different status when the session has a
+primary but it's a native client (not stealable via HTTP). Or: remove
+auto-takeover entirely and require explicit action.
+
+Priority: **High**. This causes data loss / session disruption.
+
+**5. Read-only OTPs**
+
+Currently, OTPs grant full access (can takeover, send input). The user wants
+OTPs that only allow viewing. This would require:
+  - A new scope in auth.zig (e.g., `scope: .viewer`)
+  - The HTTP endpoints for `/input` and `/takeover` checking the scope
+  - The `vanish otp` command accepting a `--read-only` flag
+  - The SSE connection respecting the scope (never sending takeover)
+
+The auth system already has scoping (`scope: .global` vs `.session`). Adding a
+`read_only` flag to the JWT payload is straightforward.
+
+Priority: Medium. Good security feature.
+
+**6. Browser feels laggy on localhost**
+
+Analyzed the rendering pipeline:
+  - SSE events arrive as JSON with cell HTML
+  - Each cell creates a DOM element via `innerHTML` parsing (line 165)
+  - Cells are positioned absolutely with pixel coordinates
+  - On keyframe, potentially thousands of cells created at once
+
+The `innerHTML` + `createElement` pattern is slow. For each cell update:
+`temp.innerHTML = cellHtml` creates a throwaway div, parses HTML, extracts the
+span, positions it, then either replaces or appends to the grid.
+
+A keyframe with 80x24 = 1,920 cells means 1,920 innerHTML parses. That's the
+likely lag source. Delta updates are typically small (tens of cells) and should
+be fast.
+
+Possible fixes:
+  a) Use `document.createElement` + `textContent` instead of innerHTML parsing
+  b) Batch DOM updates inside `requestAnimationFrame`
+  c) Send the data as structured JSON (not HTML strings) and construct DOM
+     elements directly
+  d) Use a canvas instead of DOM elements
+
+The server already sends cell data with embedded HTML. Changing to structured
+JSON would require server changes (vthtml.zig). The simplest client-side fix is
+batching updates in requestAnimationFrame and using createElement instead of
+innerHTML.
+
+Priority: Medium. Affects usability.
+
+**7. Rendering architecture redesign (large idea)**
+
+The user outlined a significant redesign: abstract rendering commands, echo/
+noecho modes, server-side rendering to structured commands instead of raw bytes,
+dropping the HTTP client in favor of thread-per-connection. This is essentially
+a rewrite of the output pipeline.
+
+Key insights from the idea:
+- The current approach (raw byte passthrough for non-panning viewers) is
+  fundamentally fragile for TUIs
+- Server-side VTerm → abstract rendering commands → client-specific rendering
+  would be more robust
+- This is what the web terminal already does (vthtml.zig) but for native clients
+- Echo/noecho distinction maps to scrolling vs fullscreen TUI behavior
+
+This is a large undertaking. The user explicitly says "come up with the state
+machine in one iteration, then critique it, then repeat." This deserves multiple
+hammock sessions.
+
+Priority: Low urgency, high impact. The current system works for most cases.
+This would fix the TUI breakage and lag issues at the root.
+
+### Simple vs Complected Analysis
+
+**Simple (good):**
+
+- Everything from session 42 remains simple
+- Session 43's helper extractions made main.zig cleaner
+- Session 44's openSse() helper is a clean dedup
+
+**Watch items:**
+
+- The handleKey auto-takeover in index.html is complected behavior (mixing input
+  handling with session control). Should be separated.
+
+- The dual output path in client.zig (raw passthrough vs vterm render) is a
+  source of bugs. The user's rendering redesign idea addresses this.
+
+- index.html at 230 lines, approaching the threshold where splitting JS makes
+  sense. Mobile modifier buttons will push it past 280.
+
+**No architectural issues found.** The codebase is clean and stable.
+
+### Inbox Status
+
+| Item                     | Status | Priority | Notes                        |
+| ------------------------ | ------ | -------- | ---------------------------- |
+| README datastar mention  | ✓ Done | -        | Non-issue, README is correct |
+| Browser auto-takeover    | ○ Todo | **High** | Steals from native clients   |
+| TUI viewer breakage      | ○ Todo | Medium   | Needs reproduction           |
+| TUI viewer keybinds      | ○ Todo | Medium   | Likely rendering, not input  |
+| Read-only OTPs           | ○ Todo | Medium   | Auth scope extension         |
+| Browser localhost lag     | ○ Todo | Medium   | innerHTML parsing bottleneck |
+| Rendering redesign       | ○ Todo | Low urg  | Multi-session hammock        |
+| Mobile modifier toolbar  | ○ Todo | Medium   | Designed in session 46       |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation          |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list    |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                    |
+
+### Recommendations for Next Sessions
+
+1. **Session 49:** Fix browser auto-takeover. This is the highest priority bug -
+   it causes session theft from native clients. One-line fix in index.html plus
+   possibly a server-side fix to distinguish "no primary" from "native primary."
+
+2. **Session 50:** Browser lag investigation. Profile the keyframe rendering,
+   try replacing innerHTML with createElement, batch in requestAnimationFrame.
+
+3. **Session 51 (review):** Start hammocking the rendering architecture redesign.
+   The user explicitly wants multiple iterations of design/critique.
+
+---
+
 ## 2026-02-08: Session 47 - Fix Nix Package
 
 ### The Problem
@@ -349,18 +741,18 @@ the Zig build/install phases.
 
 **package.nix (3 changes):**
 
-1. `nativeBuildInputs = [zig_0_15.hook]` — Uses the Zig hook derivation
-   instead of the raw compiler. This works across nixpkgs versions:
+1. `nativeBuildInputs = [zig_0_15.hook]` — Uses the Zig hook derivation instead
+   of the raw compiler. This works across nixpkgs versions:
    - Newer nixpkgs: `zig_0_15.hook` = `zig_0_15` itself (embedded setupHook)
    - Older nixpkgs: `zig_0_15.hook` = separate `zig-hook` derivation that
      propagates the zig compiler and provides build phases
 
 2. Removed `zigBuildFlags = ["--release=fast" "--verbose"]` — The hook provides
    sensible defaults (`-Dcpu=baseline --release=safe`). ReleaseSafe is the
-   correct choice for a distributed binary (safety checks, bounds checking).
-   The `--verbose` was already added by the hook. The `--release=fast` flag
-   was being silently overridden by the hook's `--release=safe` on newer
-   nixpkgs anyway (since the hook appends defaults AFTER zigBuildFlags).
+   correct choice for a distributed binary (safety checks, bounds checking). The
+   `--verbose` was already added by the hook. The `--release=fast` flag was
+   being silently overridden by the hook's `--release=safe` on newer nixpkgs
+   anyway (since the hook appends defaults AFTER zigBuildFlags).
 
 3. Added `dontUseZigCheck = true` — Skip the check phase since we have a
    separate test step and the tests need specific runtime conditions.

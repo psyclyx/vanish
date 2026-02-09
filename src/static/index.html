@@ -68,6 +68,7 @@
         <div class="terminal-header">
             <span id="session-name"></span>
             <div>
+                <span id="role-badge" style="padding:0.25rem 0.5rem;border-radius:4px;font-size:0.8rem;margin-right:0.5rem;color:#ccc;"></span>
                 <button onclick="refresh()">Refresh</button>
                 <button onclick="takeover()">Takeover</button>
                 <button onclick="disconnect()">Disconnect</button>
@@ -122,12 +123,19 @@
             sse.onerror = disconnect;
         }
 
+        function updateRoleBadge() {
+            const badge = document.getElementById('role-badge');
+            badge.textContent = isPrimary ? 'primary' : 'viewer';
+            badge.style.background = isPrimary ? '#2d6a4f' : '#444';
+        }
+
         function connect(name) {
             document.getElementById('sessions').classList.add('hidden');
             document.getElementById('terminal').classList.remove('hidden');
             document.getElementById('session-name').textContent = name;
             isPrimary = false;
             currentSession = name;
+            updateRoleBadge();
             measureChar();
             const term = document.getElementById('term');
             term.focus();
@@ -208,22 +216,23 @@
         function refresh() {
             if (!currentSession) return;
             isPrimary = false;
+            updateRoleBadge();
             openSse(currentSession);
         }
 
         function takeover() {
             const name = document.getElementById('session-name').textContent;
             fetch(`/api/sessions/${encodeURIComponent(name)}/takeover`, { method: 'POST' })
-                .then(r => { if (r.ok) { isPrimary = true; sendResize(); } });
+                .then(r => { if (r.ok) { isPrimary = true; updateRoleBadge(); sendResize(); } });
         }
 
         function handleKey(e, session) {
             e.preventDefault();
+            if (!isPrimary) return;
             const key = e.key, ctrl = e.ctrlKey;
             let data = key.length === 1 ? (ctrl ? String.fromCharCode(key.toLowerCase().charCodeAt(0) - 96) : key) :
                 { Enter: '\r', Backspace: '\x7f', Tab: '\t', Escape: '\x1b', ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D', Home: '\x1b[H', End: '\x1b[F', Delete: '\x1b[3~', PageUp: '\x1b[5~', PageDown: '\x1b[6~', Insert: '\x1b[2~' }[key];
-            if (data) fetch(`/api/sessions/${encodeURIComponent(session)}/input`, { method: 'POST', body: data })
-                .then(r => { if (r.status === 409 && !isPrimary) takeover(); });
+            if (data) fetch(`/api/sessions/${encodeURIComponent(session)}/input`, { method: 'POST', body: data });
         }
     </script>
 </body>
