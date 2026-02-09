@@ -13,6 +13,8 @@ iteration.
 
 Ongoing:
 
+- You may tag releases or branch/merge as you wish. !Under no circumstances
+  should you push.!
 - Manage this file. Archive old sessions as needed, and summarize.
 - You are developing strong opinions over time, which is good, but you have also
   calcified a bit. Every now and then, write the best possible case for making
@@ -63,6 +65,14 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
+Done (Session 64):
+
+- ✓ Devil's advocate case for splitting index.html. 7-point argument examining:
+  separation of concerns (3 languages in 1 file), JS complexity (6 subsystems in
+  189 lines), global mutable state (11 globals), ES modules as zero-build-step
+  alternative, marginal benefit of single HTTP request, testability, and
+  threshold methodology. Response to be written in session 65.
+
 Done (Session 63):
 
 - ✓ Tagged v1.0.0. Committed outstanding work from sessions 58-62 in 4 logical
@@ -78,9 +88,9 @@ Done (Session 62):
   `--indefinite` from otp command table, and `--temporary`/`--session`/etc from
   revoke table. Fixed both.
 - ✓ Man page: added `--read-only` flag to otp section. Fixed serve description.
-- ✓ Fixed IPv6 dual-bind bug: `vanish serve` with default config only bound
-  IPv4 (127.0.0.1). The "listen on both localhost addresses" fallback was dead
-  code. Restructured `start()` to bind IPv4 then best-effort IPv6 when using
+- ✓ Fixed IPv6 dual-bind bug: `vanish serve` with default config only bound IPv4
+  (127.0.0.1). The "listen on both localhost addresses" fallback was dead code.
+  Restructured `start()` to bind IPv4 then best-effort IPv6 when using
   localhost. Also handles arbitrary addresses (try IPv4 then IPv6).
 - ✓ Architecture review (3-session checkpoint since S60). http.zig 1,070→1,082
   (+12 from bind fix). Total 6,088. Zero TODO/FIXME/HACK. 44 tests. Build clean.
@@ -94,16 +104,16 @@ Done (Session 61):
   create the illusion of modularity without actual decoupling. Split trigger
   should be "understanding concern A requires understanding concern B," not a
   line count threshold. Debate cycle complete for this topic.
-- ✓ Archived sessions 36-55 to doc/sessions-archive.md. prompt.md: 4,056 → ~1,100
-  lines. Condensed Done summaries for sessions 26-54 into a single paragraph.
-  Removed resolved "OLD" section.
+- ✓ Archived sessions 36-55 to doc/sessions-archive.md. prompt.md: 4,056 →
+  ~1,100 lines. Condensed Done summaries for sessions 26-54 into a single
+  paragraph. Removed resolved "OLD" section.
 
 Done (Session 60):
 
 - ✓ Architecture review (3-session checkpoint since session 57). Codebase at
-  6,076 lines across 15 files (14 .zig + index.html at 312). 44 unit tests.
-  Zero TODO/FIXME/HACK. Build clean. http.zig grew to 1,070 lines - assessed
-  and determined it does NOT need splitting. Event loop grew by ~15 lines for
+  6,076 lines across 15 files (14 .zig + index.html at 312). 44 unit tests. Zero
+  TODO/FIXME/HACK. Build clean. http.zig grew to 1,070 lines - assessed and
+  determined it does NOT need splitting. Event loop grew by ~15 lines for
   session list clients, well-structured. validateAuth call sites now at 6 (was
   5). Remaining duplication unchanged and stable. No architectural issues found.
   Wrote "devil's advocate" section on the decision to keep http.zig monolithic.
@@ -258,6 +268,161 @@ lightweight libghostty terminal session multiplexer with web access
 
 # Progress Notes
 
+## 2026-02-09: Session 64 - Devil's Advocate: Splitting index.html
+
+### The Decision Under Examination
+
+index.html is a single 312-line file containing all CSS (72 lines), HTML
+structure (40 lines), and JavaScript (189 lines) for the web frontend. The
+project has maintained this single-file approach since the beginning. It has been
+informally assessed as "fine" multiple times but never formally debated. This is
+the case for splitting.
+
+### The Case for Splitting
+
+**1. Three languages in one file is three concerns.**
+
+The file contains CSS, HTML, and JavaScript. These are not one concern. CSS is
+presentation. HTML is structure. JavaScript is behavior. The fact that the
+browser can consume them in one file doesn't mean they belong together any more
+than putting your Zig, build config, and man page in one file would be a good
+idea.
+
+The Zig codebase is meticulous about separation: terminal.zig doesn't contain
+auth logic, protocol.zig doesn't contain HTTP routing. Each file has one job.
+But index.html has three jobs. The single-file frontend is an anomaly in a
+codebase that otherwise follows clean separation of concerns.
+
+**2. The JS is doing real work.**
+
+At 189 lines, the JavaScript isn't a trivial glue layer. It manages:
+
+- Two SSE connections (session list, terminal stream) with lifecycle management
+- A virtual terminal renderer with cell-level DOM manipulation and a cursor
+  overlay
+- Character measurement and resize handling (including visualViewport API)
+- Keyboard input translation (including Ctrl modifier state machine, special
+  key mapping, mobile toolbar integration)
+- Auth flow (cookie reading, fetch probing, SSE-after-auth sequencing)
+- Navigation state (auth → sessions → terminal → back to sessions)
+
+That's 6 distinct subsystems in 189 lines. The code is compact because it's
+well-written, not because the concerns are simple. Each subsystem has its own
+state, its own event handlers, and its own failure modes. In the Zig codebase,
+these would be separate files without question.
+
+**3. Global state is the coupling mechanism.**
+
+All JS state lives in module-level `let` declarations: `sse`, `isPrimary`,
+`ctrlActive`, `termCols`, `termRows`, `charWidth`, `charHeight`,
+`currentSession`, `cellMap`, `isReadOnly`, `sessionsSse`. That's 11 mutable
+globals. Functions read and write these freely. `handleUpdate` reads `termCols`,
+`termRows`, `charWidth`, `charHeight`. `sendResize` reads `currentSession`,
+`isPrimary`, writes nothing but calls `measureChar` which mutates `charWidth`
+and `charHeight`. `handleKey` reads `isPrimary`, `ctrlActive`, writes
+`ctrlActive`.
+
+This is the textbook definition of complected. Every function is implicitly
+coupled to every other through shared mutable state. You can't understand
+`handleKey` without knowing what sets `isPrimary`. You can't understand
+`sendResize` without knowing what sets `currentSession`. In a single file this
+is manageable because you can grep, but it's still complected. ES modules would
+make the dependencies explicit.
+
+**4. ES modules require no build step.**
+
+The strongest argument for keeping a single file has been "no build step."
+But `<script type="module">` and `<script type="module" src="...">` are natively
+supported in every browser that supports EventSource (which is a hard
+requirement anyway). You could split into:
+
+```
+static/
+  index.html        (40 lines: structure only)
+  style.css         (72 lines: presentation)
+  js/
+    main.js         (30 lines: init, auth flow, navigation)
+    terminal.js     (80 lines: SSE, rendering, cursor, resize)
+    input.js        (40 lines: keyboard, modifier bar)
+    sessions.js     (30 lines: session list SSE, card rendering)
+```
+
+No bundler. No build step. No npm. Just files served by the same static file
+handler that already serves index.html. The Zig server already serves static
+files from an embedded directory - adding more files to that directory is free.
+
+**5. The "one HTTP request" argument is weaker than it appears.**
+
+The current setup saves ~3 HTTP requests on initial load compared to a
+module-based split. But:
+
+- HTTP/2 multiplexing (which any modern browser supports) means additional
+  requests for small files have near-zero cost.
+- The files would be tiny (30-80 lines each). Total transfer size identical.
+- The server already handles static file serving.
+- Caching: Split files cache independently. Changing one JS module doesn't
+  invalidate the CSS cache.
+
+The real benefit of one request is simplicity of deployment and embedding. But
+the Zig server embeds static files at compile time - it doesn't matter if it's 1
+file or 5 files. The deployment story is identical.
+
+**6. Testability.**
+
+The JS is currently untestable in isolation. You can't import `handleUpdate` into
+a test harness because it's a global function in a `<script>` tag that depends on
+DOM elements by ID. With ES modules, you could export pure functions
+(`handleUpdate`, `handleKey`, key mapping logic) and test them. The key
+translation logic in particular (lines 301-308) is dense and error-prone -
+exactly the kind of code that benefits from unit tests.
+
+**7. The 400-line threshold is arbitrary.**
+
+Previous sessions set a "reconsider at ~400 lines" threshold. But the question
+isn't about line count. The question is: does the current structure make
+maintenance harder than it needs to be? At 312 lines with 11 mutable globals,
+6 subsystems, and 3 languages, the answer is arguably yes - regardless of
+whether it crosses some arbitrary threshold.
+
+### What Splitting Would Cost
+
+To be fair to the other side:
+
+- **More files to navigate.** 4-5 files instead of 1. More tabs, more context
+  switching.
+- **Import/export ceremony.** ES module syntax adds boilerplate. Shared state
+  needs to be explicitly passed or managed.
+- **The embed changes.** The Zig `@embedFile` for the static directory would
+  pick up new files automatically (it embeds the whole directory), but the
+  static serving route would need to handle CSS and JS content types (it likely
+  already handles HTML - needs verification).
+- **Loses the "view source" simplicity.** Right now, right-click → View Source
+  shows you everything. With modules, you'd need to click through imports.
+- **Migration effort.** The globals would need to become module-level exports or
+  be passed as arguments. This is refactoring work with risk of introducing
+  bugs in a working system.
+
+### Summary
+
+The case for splitting rests on: (1) three concerns in one file violates the
+project's own separation principles, (2) the JS is substantial enough to warrant
+organization, (3) global mutable state is complected, (4) ES modules provide
+organization without a build step, (5) the "one request" benefit is marginal,
+(6) testability would improve, (7) the threshold should be about structure, not
+line count.
+
+**Response to be written next session.**
+
+### Recommendations for Next Sessions
+
+1. **Session 65:** Write the response to this case. The response should address
+   each of the 7 points directly.
+
+2. **Session 66:** Reflection + architecture review (3-session checkpoint since
+   S62).
+
+---
+
 ## 2026-02-09: Session 63 - v1.0.0 Tag
 
 ### What Happened
@@ -274,6 +439,7 @@ Committed all outstanding work from sessions 58-62 and tagged v1.0.0.
 **Tag:** `v1.0.0` on commit `a5d7de1`. Annotated tag with feature summary.
 
 **Verification:**
+
 - Build: clean
 - Tests: 44 passing
 - PKGBUILD `pkgver()`: produces `1.0.0.r0.ga5d7de1` (correct)
@@ -298,7 +464,8 @@ The project is tagged and complete. From here:
 
 - Bug fixes only, driven by actual usage
 - New features only if users request them
-- Potential small additions: `vanish version`, shell completions, `vanish attach
+- Potential small additions: `vanish version`, shell completions,
+  `vanish attach
   --last`, clipboard integration (OSC 52). None speculative.
 
 ### Recommendations for Next Sessions
@@ -321,6 +488,7 @@ Systematically verified README, man page, and DESIGN.md against the actual
 codebase. Found three classes of issues:
 
 **README command tables (fixed):**
+
 - `otp` was listed as `[--duration time] [--session name]` but actually supports
   5 flags: `--duration`, `--session`, `--daemon`, `--indefinite`, `--read-only`.
   Added `--read-only` to the table (the most user-facing omission). Kept
@@ -330,6 +498,7 @@ codebase. Found three classes of issues:
   `--session` to the table.
 
 **Man page (fixed):**
+
 - Serve command claimed "Default bind address is 127.0.0.1 and ::1" - was wrong
   (see dual-bind bug below). Updated to match reality after the fix.
 - `otp` section was missing `--read-only` flag. Added with description.
@@ -338,20 +507,21 @@ codebase. Found three classes of issues:
 
 ### Dual-Bind Bug Fix
 
-**The bug:** `vanish serve` with default config (no `--bind` flag) only bound
-to IPv4 127.0.0.1. The code had a comment "Default: listen on both localhost
+**The bug:** `vanish serve` with default config (no `--bind` flag) only bound to
+IPv4 127.0.0.1. The code had a comment "Default: listen on both localhost
 addresses" with a fallback path at lines 120-128, but this path was unreachable
 because `cmdServe` defaults `bind_addr` to `"127.0.0.1"`, which matched the
 first `if` branch and created only an IPv4 socket.
 
 **The fix:** Restructured `start()` in http.zig:
+
 1. Bind the explicitly requested address (IPv4 or IPv6).
 2. If localhost, also bind the other protocol as best-effort (`catch null`).
 3. If the address doesn't match any known pattern, try it as IPv4 then IPv6.
 4. Fail only if neither socket was created.
 
-This means `vanish serve` now listens on both 127.0.0.1 and ::1 by default.
-The old fallback path was also buggy for arbitrary addresses (e.g., "192.168.1.5"
+This means `vanish serve` now listens on both 127.0.0.1 and ::1 by default. The
+old fallback path was also buggy for arbitrary addresses (e.g., "192.168.1.5"
 would silently bind to localhost instead). The new code correctly tries the
 user's address.
 
@@ -383,9 +553,9 @@ dual-bind fix in http.zig (+12 lines). 13/15 files unchanged.
 
 Build: Clean. Tests: 44 unit tests. All passing. Zero TODO/FIXME/HACK.
 
-**Assessment:** Architecture remains clean. The dual-bind fix was the only
-issue found during the documentation audit - a latent bug that never surfaced
-because most systems connect via IPv4 anyway. No other architectural concerns.
+**Assessment:** Architecture remains clean. The dual-bind fix was the only issue
+found during the documentation audit - a latent bug that never surfaced because
+most systems connect via IPv4 anyway. No other architectural concerns.
 
 ### What's Working Well
 
@@ -401,6 +571,7 @@ needed.
 ### v1 Readiness
 
 After this session:
+
 - Documentation is accurate (README, man page, DESIGN.md all verified)
 - The one bug found during audit (dual-bind) is fixed
 - Build clean, 44 tests passing, zero markers
@@ -410,10 +581,11 @@ After this session:
 
 ### Recommendations for Next Sessions
 
-1. **Session 63:** Tag v1.0.0. `git tag -a v1.0.0 -m "v1.0.0"`. Consider if
-   the Arch PKGBUILD version derivation works with the new tag.
+1. **Session 63:** Tag v1.0.0. `git tag -a v1.0.0 -m "v1.0.0"`. Consider if the
+   Arch PKGBUILD version derivation works with the new tag.
 
-2. **Session 64:** Post-v1. Only work driven by actual usage. Possible: `vanish
+2. **Session 64:** Post-v1. Only work driven by actual usage. Possible:
+   `vanish
    version`, shell completions, `vanish attach --last`.
 
 3. **Devil's advocate topic for future sessions:** The decision to keep the web
@@ -440,23 +612,23 @@ lifecycle to test in isolation, (4) 136 lines for 4 client types is reasonable.
 
 **The reflection:**
 
-Both sides are mostly right, and the disagreement is actually about *when*, not
-*whether*. The case for splitting describes real costs that accumulate. The
-response correctly notes those costs aren't painful *today*. The question is
+Both sides are mostly right, and the disagreement is actually about _when_, not
+_whether_. The case for splitting describes real costs that accumulate. The
+response correctly notes those costs aren't painful _today_. The question is
 whether the current decision creates a trap - a file that's increasingly
 expensive to split the longer you wait.
 
 The answer is: not really. And here's why.
 
-The coupling argument cuts both ways. The case says "extract SSE for testability."
-The response says "SSE is too coupled to extract cleanly." But the *reason* SSE
-is coupled to the HTTP server is because it genuinely is one concern. Terminal
-SSE streaming isn't a separable abstraction from "HTTP server that serves
-terminal sessions." The SSE clients are managed by the event loop, authenticated
-by the auth system, routed by the router, and connected to sessions through
-shared socket utilities. This isn't incidental coupling that could be
-refactored away - it's essential coupling. The server *is* these things working
-together.
+The coupling argument cuts both ways. The case says "extract SSE for
+testability." The response says "SSE is too coupled to extract cleanly." But the
+_reason_ SSE is coupled to the HTTP server is because it genuinely is one
+concern. Terminal SSE streaming isn't a separable abstraction from "HTTP server
+that serves terminal sessions." The SSE clients are managed by the event loop,
+authenticated by the auth system, routed by the router, and connected to
+sessions through shared socket utilities. This isn't incidental coupling that
+could be refactored away - it's essential coupling. The server _is_ these things
+working together.
 
 The test isolation argument is the strongest one for splitting, but it points at
 the wrong solution. The right approach for testing http.zig would be integration
@@ -484,11 +656,12 @@ higher than the costs of staying monolithic. This is still true.
 
 **Final verdict:** http.zig stays monolithic. The split trigger isn't a line
 count - it's when a developer needs to understand concern A but is forced to
-understand concern B first. That hasn't happened. If a new concern is added
-that creates a genuinely independent responsibility (e.g., WebSocket support
-with a different protocol), that's when splitting makes sense. Not before.
+understand concern B first. That hasn't happened. If a new concern is added that
+creates a genuinely independent responsibility (e.g., WebSocket support with a
+different protocol), that's when splitting makes sense. Not before.
 
 The devil's advocate cycle is complete for this topic. This was a good exercise
+
 - it clarified that the real question was about coupling, not file length.
 
 ### Archive Cleanup
@@ -573,10 +746,10 @@ unchanged since session 57 or earlier. Most haven't changed in 10+ sessions.
 These are finished code.
 
 **2. Session list SSE landed cleanly.** The new feature added a 4th struct
-(SessionListClient), 4 new functions, and ~15 lines to the event loop. It
-reused the existing patterns (SSE headers, poll-based multiplexing, auth
-validation) without modifying them. The buildSessionListJson extraction
-actually reduced duplication from the existing handleListSessions.
+(SessionListClient), 4 new functions, and ~15 lines to the event loop. It reused
+the existing patterns (SSE headers, poll-based multiplexing, auth validation)
+without modifying them. The buildSessionListJson extraction actually reduced
+duplication from the existing handleListSessions.
 
 **3. Zero TODO/FIXME/HACK markers.** Still clean.
 
@@ -585,9 +758,8 @@ from the inbox has been resolved. The project has reached feature completeness.
 
 ### http.zig at 1,070 Lines - Does It Need Splitting?
 
-This is the main question for this review. http.zig is now the largest file by
-a significant margin (1,070 vs main.zig at 976). It grew 134 lines in session
-59.
+This is the main question for this review. http.zig is now the largest file by a
+significant margin (1,070 vs main.zig at 976). It grew 134 lines in session 59.
 
 **Structural analysis of http.zig concerns:**
 
@@ -614,6 +786,7 @@ currently simple method calls on `*HttpServer`.
 
 Where would you split? The most natural boundary would be terminal SSE (section
 9) and session list SSE (section 10) into separate files. But both depend on:
+
 - HttpServer struct (client lists, alloc, auth, config)
 - validateAuth
 - sendError / sendJson
@@ -626,13 +799,12 @@ adds complexity). The benefit would be shorter files. The cost would be more
 files to navigate, more import lines, and the illusion of modularity without
 actual decoupling.
 
-**The file is 1,070 lines with clear internal structure. Every function is
-small (largest is eventLoop at 136 lines). Navigation is straightforward. Leave
-it.**
+**The file is 1,070 lines with clear internal structure. Every function is small
+(largest is eventLoop at 136 lines). Navigation is straightforward. Leave it.**
 
 ### Devil's Advocate: The Case for Splitting http.zig
 
-*Per the ongoing request to interrogate decisions:*
+_Per the ongoing request to interrogate decisions:_
 
 **The case for splitting:**
 
@@ -664,16 +836,16 @@ These are real concerns. The counter-arguments:
 2. Growth trajectory: true, but the growth is slowing. Session list SSE was the
    last planned web feature. No new SSE concerns are on the horizon.
 
-3. Test isolation: valid. But the SSE streaming logic is tightly coupled to
-   the HTTP lifecycle (poll fds, client management, protocol reading). Extracting
-   it for testing would require mocking most of what makes it work.
+3. Test isolation: valid. But the SSE streaming logic is tightly coupled to the
+   HTTP lifecycle (poll fds, client management, protocol reading). Extracting it
+   for testing would require mocking most of what makes it work.
 
 4. God function: 136 lines for a poll-based event loop managing 4 client types
    is not unreasonable. Each client type's handling is 10-20 lines. The
    complexity is inherent to multiplexed I/O, not incidental.
 
-The split would be warranted if: (a) http.zig crosses 1,500 lines, (b) a new
-SSE concern is added, or (c) testability becomes a priority. None of these
+The split would be warranted if: (a) http.zig crosses 1,500 lines, (b) a new SSE
+concern is added, or (c) testability becomes a priority. None of these
 conditions exist today.
 
 ### Remaining Duplication (unchanged, stable)
@@ -681,8 +853,8 @@ conditions exist today.
 1. **connectToSession (3 copies):** main.zig:666, http.zig:1061, client.zig:588.
    ~8 lines each. Still not worth extracting.
 
-2. **Auth validation pattern (6 copies in http.zig):** Lines 476, 492, 528,
-   584, 623, 829. Up from 5 (session list stream added one). Each ~4 lines. The
+2. **Auth validation pattern (6 copies in http.zig):** Lines 476, 492, 528, 584,
+   623, 829. Up from 5 (session list stream added one). Each ~4 lines. The
    pattern is consistent and grep-friendly. Not worth a middleware abstraction.
 
 3. **Scroll actions (8 copies in client.zig):** Lines 173-212. Stable. Leave it.
@@ -732,8 +904,8 @@ implemented. The project has:
 
 What remains for a "v1 tag":
 
-1. **Confidence in correctness.** The codebase has been stable for many sessions.
-   Bug reports are resolved. No known issues.
+1. **Confidence in correctness.** The codebase has been stable for many
+   sessions. Bug reports are resolved. No known issues.
 
 2. **Documentation completeness.** README, DESIGN.md, and man page are all
    current.
@@ -778,10 +950,10 @@ request them.
 
 ### Inbox Status
 
-| Item               | Status | Priority | Notes                         |
-| ------------------ | ------ | -------- | ----------------------------- |
-| All features       | ✓ Done | -        | Project at v1                 |
-| Architecture       | ✓ Done | -        | Session 60 review complete    |
+| Item         | Status | Priority | Notes                      |
+| ------------ | ------ | -------- | -------------------------- |
+| All features | ✓ Done | -        | Project at v1              |
+| Architecture | ✓ Done | -        | Session 60 review complete |
 
 No remaining inbox items.
 
@@ -805,17 +977,16 @@ No remaining inbox items.
 ### What Changed
 
 Implemented reactive session list for the web frontend. When sessions are
-created or destroyed from the terminal, the browser's session list updates
-live without page reload. This was the last major web UX gap.
+created or destroyed from the terminal, the browser's session list updates live
+without page reload. This was the last major web UX gap.
 
 **http.zig (936 → 1070 lines, +134 net)**
 
 **New struct: `SessionListClient` (12 lines)**
 
 Much simpler than `SseClient` - no VTerminal, no screen buffer, no session
-socket. Just the HTTP fd for writing SSE events, a hash of the last-sent
-session list for change detection, and the auth scope/filter for
-session-scoped tokens.
+socket. Just the HTTP fd for writing SSE events, a hash of the last-sent session
+list for change detection, and the auth scope/filter for session-scoped tokens.
 
 **New handler: `handleSessionListStream()` (30 lines)**
 
@@ -882,13 +1053,13 @@ scanning. 30 lines → 10 lines.
 
 - **Wyhash for change detection:** Instead of maintaining a sorted list of
   session names and doing set comparison, hash the entire JSON output. If the
-  hash matches the last-sent hash, skip. Simple, O(n) where n is JSON length,
-  no additional data structures. False negatives (hash collision causing a
-  missed update) are astronomically unlikely with 64-bit Wyhash, and the next
-  scan 2 seconds later would catch it.
+  hash matches the last-sent hash, skip. Simple, O(n) where n is JSON length, no
+  additional data structures. False negatives (hash collision causing a missed
+  update) are astronomically unlikely with 64-bit Wyhash, and the next scan 2
+  seconds later would catch it.
 
-- **Auth check before SSE:** EventSource API doesn't expose HTTP status codes.
-  A 401 response just triggers the `onerror` handler, indistinguishable from a
+- **Auth check before SSE:** EventSource API doesn't expose HTTP status codes. A
+  401 response just triggers the `onerror` handler, indistinguishable from a
   network error. So the auth check is done via a regular fetch first, and the
   SSE stream is only opened after successful auth.
 
@@ -907,11 +1078,11 @@ scanning. 30 lines → 10 lines.
 
 ### Line Count Impact
 
-| File       | Before  | After   | Change   |
-| ---------- | ------- | ------- | -------- |
-| http.zig   | 936     | 1070    | +134     |
-| index.html | 304     | 312     | +8       |
-| **Net**    |         |         | **+142** |
+| File       | Before | After | Change   |
+| ---------- | ------ | ----- | -------- |
+| http.zig   | 936    | 1070  | +134     |
+| index.html | 304    | 312   | +8       |
+| **Net**    |        |       | **+142** |
 
 Total codebase: 15 files, ~6,076 lines.
 
@@ -922,10 +1093,10 @@ Total codebase: 15 files, ~6,076 lines.
 
 ### Inbox Status
 
-| Item               | Status | Priority | Notes                           |
-| ------------------ | ------ | -------- | ------------------------------- |
-| Session list SSE   | ✓ Done | -        | Session 59                      |
-| All major features | ✓ Done | -        | Project at v1 feature-complete  |
+| Item               | Status | Priority | Notes                          |
+| ------------------ | ------ | -------- | ------------------------------ |
+| Session list SSE   | ✓ Done | -        | Session 59                     |
+| All major features | ✓ Done | -        | Project at v1 feature-complete |
 
 ### Recommendations for Next Sessions
 
@@ -944,7 +1115,6 @@ Total codebase: 15 files, ~6,076 lines.
    user experience of the codebase itself (for future maintainers).
 
 ---
-
 
 > Earlier session notes (1-58) archived to
 > [doc/sessions-archive.md](doc/sessions-archive.md).
