@@ -108,23 +108,35 @@ pub fn deinit(self: *HttpServer) void {
 }
 
 pub fn start(self: *HttpServer) !void {
-    // Create listening sockets
-    if (std.mem.eql(u8, self.bind_addr, "127.0.0.1") or std.mem.eql(u8, self.bind_addr, "0.0.0.0")) {
+    const is_localhost4 = std.mem.eql(u8, self.bind_addr, "127.0.0.1");
+    const is_localhost6 = std.mem.eql(u8, self.bind_addr, "::1");
+    const is_wildcard4 = std.mem.eql(u8, self.bind_addr, "0.0.0.0");
+    const is_wildcard6 = std.mem.eql(u8, self.bind_addr, "::");
+
+    if (is_localhost4 or is_wildcard4) {
         self.listen_sock4 = try createTcpSocket4(self.bind_addr, self.port);
     }
 
-    if (std.mem.eql(u8, self.bind_addr, "::1") or std.mem.eql(u8, self.bind_addr, "::")) {
+    if (is_localhost6 or is_wildcard6) {
         self.listen_sock6 = try createTcpSocket6(self.bind_addr, self.port);
     }
 
-    // Default: listen on both localhost addresses
-    if (self.listen_sock4 == null and self.listen_sock6 == null) {
-        self.listen_sock4 = createTcpSocket4("127.0.0.1", self.port) catch null;
+    // Localhost: also bind the other protocol (best-effort)
+    if (is_localhost4) {
         self.listen_sock6 = createTcpSocket6("::1", self.port) catch null;
+    } else if (is_localhost6) {
+        self.listen_sock4 = createTcpSocket4("127.0.0.1", self.port) catch null;
+    }
 
-        if (self.listen_sock4 == null and self.listen_sock6 == null) {
-            return error.CouldNotBind;
-        }
+    // Arbitrary address: try as IPv4, then IPv6
+    if (self.listen_sock4 == null and self.listen_sock6 == null) {
+        self.listen_sock4 = createTcpSocket4(self.bind_addr, self.port) catch null;
+        if (self.listen_sock4 == null)
+            self.listen_sock6 = createTcpSocket6(self.bind_addr, self.port) catch null;
+    }
+
+    if (self.listen_sock4 == null and self.listen_sock6 == null) {
+        return error.CouldNotBind;
     }
 
     // Warn if binding publicly
