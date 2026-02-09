@@ -76,7 +76,7 @@ abstraction interrogation + function decomposition analysis (S70), cmdNew
 decomposition (S71), specification document (S72), architecture review (S73),
 processRequest decomposition (S74), writeCell extraction (S75), architecture
 review post-decomposition (S76), UX hammock (S77), socket clobbering fix +
-stale socket detection (S78).
+stale socket detection (S78), architecture review + spec update (S79).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -171,6 +171,113 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 79 - Architecture Review + Spec Update
+
+### Architecture Review (3-session checkpoint since S76)
+
+#### Line Count Survey
+
+| File | Lines | Change since S76 | Notes |
+|------|-------|------------------|-------|
+| http.zig | 1,101 | +9 | session.zig import + live field in JSON |
+| main.zig | 1,005 | +18 | cmdNew liveness check + cmdList stale annotation |
+| client.zig | 648 | +0 | |
+| auth.zig | 585 | +0 | |
+| session.zig | 536 | +10 | isSocketLive + createSocket guard |
+| config.zig | 461 | +0 | |
+| vthtml.zig | 374 | +0 | |
+| terminal.zig | 348 | +0 | |
+| protocol.zig | 213 | +0 | |
+| keybind.zig | 185 | +0 | |
+| naming.zig | 165 | +0 | |
+| pty.zig | 140 | +0 | |
+| signal.zig | 48 | +0 | |
+| paths.zig | 43 | +0 | |
+| **Total** | **5,852** | **+38** | |
+
+Growth is minimal and justified — 38 lines for socket liveness probing, a real
+bug fix. No bloat.
+
+#### Dependency Graph Assessment
+
+S78 added http.zig → session.zig. Updated graph:
+
+```
+protocol    ← session, client, http, main
+terminal    ← client, http (via vthtml)
+keybind     ← client, config
+auth        ← http, main
+paths       ← main, http, config
+vthtml      ← http
+pty         ← session, main
+signal      ← session, client
+naming      ← main
+config      ← main, client, http, paths
+session     ← main, http  ← NEW: http imports session
+http        ← main
+client      ← main
+```
+
+Still acyclic. session.zig imports pty, protocol, terminal, signal — no reverse
+dependency on http or main. http.zig now has 7 project module imports (was 6).
+The new import is for `isSocketLive`, a pure function with no state or side
+effects. This is the lightest possible coupling.
+
+**Is `isSocketLive` in the right module?** Yes. It answers "is a session alive at
+this path?" — a session concept. It lives next to `createSocket`, its primary
+caller. Moving it to paths.zig (path utility) or a new file would be worse:
+paths.zig is about XDG directory resolution, not socket operations, and a new
+file for one 6-line function is overkill.
+
+#### Architecture Health
+
+The codebase remains stable and well-structured. Changes since S76 have been:
+- S77: UX hammock (doc only)
+- S78: Socket liveness feature (+38 lines, 3 files)
+- S79: This review + spec update (doc only)
+
+No new decomposition candidates. No new coupling concerns. The remaining long
+functions (eventLoop, handleSseStream, etc.) were assessed in S76 and S70 as
+structurally long, not decomposition failures.
+
+**No concerns identified.** The S78 changes are clean, well-scoped, and don't
+introduce architectural debt.
+
+### Spec Update
+
+Updated `doc/spec.md` (545 → 574 lines) to document all S78 behavioral changes:
+
+1. **Session creation** (steps 3-5): liveness check before fork, secondary guard
+   in createSocket, TOCTOU race note.
+2. **Socket liveness probing** (new section): mechanism, callers, semantics.
+3. **vanish list**: `(stale)` suffix, `"live"` JSON field.
+4. **vanish new**: error message for existing sessions.
+5. **GET /api/sessions**: `"live"` field in response.
+6. **GET /api/sessions/stream**: `"live"` field in SSE events.
+7. **Edge case > session daemon crashes**: updated from "manual cleanup needed"
+   to documenting the actual automatic stale socket handling.
+
+Build and all tests pass.
+
+### Recommendation for Next Session
+
+The prompt's ongoing request is to "spend many iterations hammocking about the
+problem" and "write the best possible case for making different decisions." The
+last debate cycle was the protocol (S67-69). Topics not yet debated:
+
+- **The session model** (primary + viewers). Is max-1-primary the right choice?
+  What about collaborative editing with multiple writers?
+- **The authentication design** (OTP → JWT with HMAC). Is this the right
+  approach for a local-first tool?
+- **The argument parsing pattern** in main.zig (ad-hoc while-loop per command).
+
+Session 80 could begin a devil's advocate cycle on any of these. The session
+model is the most interesting — it's the core design decision that everything
+else follows from.
+
+Alternatively, S80 could be a pure hammock session reflecting on what's next
+for vanish post-v1.0.0 now that the UX items from S77 are resolved.
 
 ## 2026-02-09: Session 78 - Socket Clobbering Fix + Stale Socket Detection
 

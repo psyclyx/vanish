@@ -83,10 +83,12 @@ If role is viewer: session dimensions unchanged; client adapts via viewport.
 
 1. Parse args: `parseCmdNewArgs` extracts flags, session name, command.
 2. Resolve socket path: `$socket_dir/$name`.
-3. `forkSession`: create pipe, fork. Child daemonizes (setsid, close stdin/stdout/stderr), calls `Session.runWithNotify`. Parent waits for ready byte on pipe.
-4. If `--auto-name`: print generated name to stdout.
-5. If `--serve` or `config.serve.auto_serve`: start HTTP server (idempotent).
-6. If not `--detach`: attach as primary.
+3. Liveness check: probe socket with connect attempt (`isSocketLive`). If live, error: "Session '$name' already exists". This prevents silently clobbering a running session's socket.
+4. `forkSession`: create pipe, fork. Child daemonizes (setsid, close stdin/stdout/stderr), calls `Session.runWithNotify`. Parent waits for ready byte on pipe.
+5. `createSocket` (in child): secondary liveness guard — if socket became live between step 3 and the child's bind attempt, returns `error.SessionAlreadyExists`. TOCTOU race is acceptable; worst case falls back to "Session failed to start" error.
+6. If `--auto-name`: print generated name to stdout.
+7. If `--serve` or `config.serve.auto_serve`: start HTTP server (idempotent).
+8. If not `--detach`: attach as primary.
 
 ### Auto-naming
 
@@ -95,6 +97,20 @@ Format: `adjective-noun-command` (e.g., `calm-ridge-zsh`).
 - Entropy source: `std.time.nanoTimestamp()` (not crypto-random; names are not security-sensitive).
 - Collision check: retries up to 10 times if socket path already exists.
 - Command component: basename of first argv element (e.g., `/usr/bin/zsh` -> `zsh`).
+
+### Socket Liveness Probing
+
+`isSocketLive(path)` determines if a session daemon is listening at a Unix
+socket path. Mechanism: open a `SOCK_STREAM` socket, attempt `connect()`. If
+connect succeeds, the session is live (socket closed immediately after). If
+connect fails (ECONNREFUSED, ENOENT, or any other error), the socket is stale.
+
+Used by:
+- `createSocket`: prevents clobbering a live session's socket. Returns
+  `error.SessionAlreadyExists` if live.
+- `cmdNew`: pre-fork check with user-facing error message.
+- `cmdList` / `writeJsonList`: annotates sessions as live or stale.
+- `buildSessionListJson` (HTTP): includes `live` field in API responses.
 
 ### Session Daemon Event Loop
 
@@ -243,7 +259,10 @@ Body: `otp=<32-char-hex>` (URL-encoded form).
 
 #### `GET /api/sessions`
 
-Returns JSON: `{"sessions":[{"name":"...","path":"..."},...]}`.
+Returns JSON: `{"sessions":[{"name":"...","live":true},...]}`.
+
+Each session socket is probed for liveness. The `live` field indicates whether
+the session daemon is reachable.
 
 Scoping: if token is session-scoped, only that session returned.
 
@@ -251,7 +270,9 @@ Scoping: if token is session-scoped, only that session returned.
 
 SSE stream of session list. Polls socket directory every ~1s.
 
-Events: `data: {"sessions":[...]}\n\n`
+Events: `data: {"sessions":[{"name":"...","live":true},...]}\n\n`
+
+Same liveness probing as `GET /api/sessions`. Each poll re-probes all sockets.
 
 #### `GET /api/sessions/:name/stream`
 
@@ -445,7 +466,7 @@ Aliases: pan_up, pan_down, pan_left, pan_right, page_up, page_down, top, bottom,
 
 **All clients disconnect**: Session continues running. Child process continues executing. Session accepts new connections.
 
-**Session daemon crashes**: Socket file may be left behind. `vanish new` with same name would fail to bind. Manual cleanup needed (or check if socket is live before binding).
+**Session daemon crashes**: Socket file left behind (stale socket). `vanish new` with same name detects the stale socket via `isSocketLive` (connect fails), deletes it, and creates a new session. `vanish list` annotates stale sockets with `(stale)` in text output and `"live":false` in JSON output.
 
 ### Child Process
 
@@ -488,6 +509,8 @@ Create a new session. `--` separates flags from positional args.
 With `--auto-name`: name is generated, command starts at first positional arg.
 Without `--auto-name`: first positional arg is name, rest is command.
 
+Error: "Session '$name' already exists" if a live session with that name exists.
+
 ### vanish attach [--primary|-p] \<name\>
 
 Attach to existing session. Default role: viewer. `--primary` requests primary role (denied if primary exists).
@@ -499,7 +522,14 @@ exists (cannot send as viewer). Useful for scripting.
 
 ### vanish list [--json]
 
-List sessions by scanning socket directory.
+List sessions by scanning socket directory. Each socket is probed with a connect
+attempt to determine liveness.
+
+Text output: stale sessions annotated with `(stale)` suffix.
+
+JSON output: `{"sessions":[{"name":"...","path":"...","live":true},...]}`.
+The `live` field is `true` if the session daemon is reachable, `false` if the
+socket is stale.
 
 ### vanish clients [--json] \<name\>
 
