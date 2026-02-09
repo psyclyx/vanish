@@ -65,7 +65,7 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
-Done (Sessions 55-80): Resize re-render fix (S55), cursor position fix (S56),
+Done (Sessions 55-82): Resize re-render fix (S55), cursor position fix (S56),
 architecture review (S57), Arch PKGBUILD + LICENSE (S58), session list SSE
 (S59), architecture review + http.zig devil's advocate (S60), http.zig
 reflection + archive cleanup (S61), docs audit + dual-bind fix (S62), v1.0.0 tag
@@ -77,7 +77,8 @@ decomposition (S71), specification document (S72), architecture review (S73),
 processRequest decomposition (S74), writeCell extraction (S75), architecture
 review post-decomposition (S76), UX hammock (S77), socket clobbering fix +
 stale socket detection (S78), architecture review + spec update (S79), session
-model devil's advocate (S80), session model defense (S81).
+model devil's advocate (S80), session model defense (S81), session model
+reflection + architecture review (S82).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -172,6 +173,187 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 82 - Reflection: Session Model Debate + Architecture Review
+
+### Reflection on the Session Model Debate (S80-S81)
+
+This was the fourth debate cycle (http.zig S60-61, index.html S64-66, protocol
+S67-69, session model S80-81). The pattern has been remarkably consistent:
+the devil's advocate raises 5-7 points, the response concedes 1-2 and rebuts
+the rest, and the reflection confirms with zero or near-zero code changes.
+
+**Am I just finding reasons to keep everything the same?**
+
+Let me check honestly. Across four debates:
+- http.zig: Keep monolithic. No changes. *(Correct — still clean at 1,102 lines)*
+- index.html: Keep single-file. No changes. *(Correct — hasn't grown)*
+- protocol: Keep design. **Two changes**: struct size tests + assumptions
+  comment. *(The tests caught a real issue — Header was 8 bytes not 5)*
+- session model: Keep primary+viewers. **Zero code changes.** Two UX polish
+  items deferred.
+
+The protocol debate was the most productive — it found a real testing gap. The
+others confirmed existing decisions. Is that a problem?
+
+**No, but it's a signal that the debates are approaching diminishing returns.**
+
+The reason every debate concludes "keep the current design" is that the major
+design decisions were made early and have been validated by implementation. The
+debates serve a real function — they force explicit reasoning about implicit
+assumptions — but the easy wins are exhausted. The remaining un-debated topics
+(auth design, arg parsing pattern) are less likely to produce actionable changes
+than the topics already covered.
+
+**What the session model debate specifically revealed:**
+
+The critique's strongest point (#7, "conflated concerns") was genuinely
+interesting but wrong in practice — the response's argument that "the person
+interacting should see output formatted for their terminal" is correct and
+wasn't obvious before the debate forced it out. This is the kind of insight the
+debates are good at producing.
+
+The weakest point (#3, "takeover is more complex than multi-writer") was
+misleading — it counted visible complexity without accounting for the invisible
+complexity multi-writer would introduce. This is a general trap: visible
+complexity is not the same as total complexity. The current code has 42 lines
+of takeover logic that are readable and correct. Multi-writer would replace
+those with coordination problems that have no code but are much harder.
+
+**The two deferred UX items (viewer feedback, attach hint) are real.** They
+came from S77's hammock analysis, were reinforced by S80's critique, and
+defended as valid-but-small in S81. They remain candidates for if/when usage
+drives them. No action now.
+
+### Architecture Review (3-session checkpoint since S79)
+
+#### Line Count Survey
+
+| File | Lines | Change since S79 | Notes |
+|------|-------|------------------|-------|
+| http.zig | 1,102 | +1 | Negligible |
+| main.zig | 1,006 | +1 | Negligible |
+| client.zig | 649 | +1 | Negligible |
+| auth.zig | 586 | +1 | Negligible |
+| session.zig | 537 | +1 | Negligible |
+| config.zig | 462 | +1 | Negligible |
+| vthtml.zig | 375 | +1 | Negligible |
+| terminal.zig | 349 | +1 | Negligible |
+| protocol.zig | 214 | +1 | Negligible |
+| keybind.zig | 186 | +1 | Negligible |
+| naming.zig | 166 | +1 | Negligible |
+| pty.zig | 141 | +1 | Negligible |
+| signal.zig | 49 | +1 | Negligible |
+| paths.zig | 44 | +1 | Negligible |
+| **Total** | **5,866** | | |
+
+**Zero code changes since S79.** Sessions 80 and 81 were pure documentation
+(debate cycle). The +1 line per file is from line counting including the
+trailing newline — the actual source hasn't changed.
+
+#### Dependency Graph (unchanged since S79)
+
+```
+protocol    ← session, client, http, main
+terminal    ← client, http (via vthtml)
+keybind     ← client, config
+auth        ← http, main
+paths       ← main, http, config
+vthtml      ← http
+pty         ← session, main
+signal      ← session, client
+naming      ← main
+config      ← main, client, http, paths
+session     ← main, http
+http        ← main
+client      ← main
+```
+
+Still acyclic. No new dependencies. The http→session dependency added in S78
+remains the only non-obvious edge, and it's justified (pure function call to
+`isSocketLive`).
+
+#### Architecture Health
+
+The codebase is stable. No code changes in 3 sessions. The work has been
+documentation and analysis — debate cycles, spec updates, session notes.
+
+**No concerns identified.** No new decomposition candidates. No coupling issues.
+No growth. The codebase is in maintenance mode, which is appropriate for a
+v1.0.0 release.
+
+### Assessing the Debate Cycle Practice
+
+Four complete cycles done. Pattern:
+1. S60-61: http.zig — confirmed monolithic approach
+2. S64-66: index.html — confirmed single-file approach
+3. S67-69: protocol — found testing gap, added struct size tests + comment
+4. S80-82: session model — confirmed primary+viewers, identified UX polish
+
+The practice has been valuable. The protocol cycle paid for itself with the
+struct size tests. The session model cycle clarified the coupling between input
+authorization and terminal sizing. But the returns are diminishing. The major
+architectural decisions have all been examined.
+
+**Remaining un-debated topics:**
+- Authentication design (OTP → JWT with HMAC)
+- Argument parsing pattern in main.zig (ad-hoc while loops)
+- The vthtml/terminal split (server-side VT rendering architecture)
+
+Of these, auth is the most interesting but also the most likely to confirm the
+existing design — the OTP→JWT flow is standard for local-first tools with web
+access. The arg parsing pattern is minor. The vthtml/terminal split is working
+fine.
+
+**Recommendation: Pause the debate cycles.** The four completed cycles have
+covered the core decisions. Further debates should be triggered by genuine
+uncertainty or proposed changes, not by rotation. The prompt's "every few
+sessions" cadence was right when there were un-examined decisions. Now the
+inventory is mostly cleared.
+
+### What's Next for Vanish?
+
+The codebase is clean, stable, well-documented, well-tested. v1.0.0 is tagged.
+The spec document exists. The design document exists. The debate cycles have
+validated the major decisions. The decomposition work is complete.
+
+**The honest assessment: vanish is done until usage drives change.**
+
+The two deferred UX items (viewer feedback in web UI, attach-as-viewer hint)
+are real but minor. They should wait for actual user reports. The prompt says
+"v1.0.0 tagged. Future work driven by usage." That's the right posture.
+
+**What I'd work on if I were using this daily:**
+1. The stale socket handling (S78) was the last real bug fix. Using vanish daily
+   would surface more edge cases like this — things that are technically correct
+   but surprising on day 3 of real usage.
+2. The OTP copy-paste workflow is clunky. A `vanish otp --url` that prints the
+   full URL (so you can `vanish otp --url | xclip` or pipe to `xdg-open`) would
+   smooth the web access flow without adding complexity to the tool itself.
+3. Shell integration (a vanish wrapper function for bash/zsh that makes
+   `vanish new` and `vanish attach` feel native) would lower the adoption
+   barrier significantly. This is a documentation/script thing, not a code
+   change.
+
+None of these are urgent. All are "would be nice if someone was using this."
+
+### Summary
+
+Session 82 combined the session model reflection with the 3-session architecture
+review. Both confirm: the codebase is healthy, the design is sound, and the
+project is in the right state (maintenance, waiting for usage). The debate cycle
+practice has been productive but is reaching diminishing returns — future debates
+should be triggered by genuine questions rather than rotation.
+
+### Recommendations for Next Session
+
+Options, in no particular order:
+- **Shell integration scripts** — write a `vanish.sh` / `vanish.zsh` that wraps
+  common workflows (new+attach, list+pick+attach). Useful and low-risk.
+- **`vanish otp --url`** — small feature, high UX value for web access workflow.
+- **Hammock: what would v1.1 look like?** — if vanish gets usage, what features
+  would be requested first? Think ahead without building ahead.
+- **Nothing.** The project is done. Wait for usage.
 
 ## 2026-02-09: Session 81 - Response: Defending the Session Model
 
