@@ -171,6 +171,193 @@ lightweight libghostty terminal session multiplexer with web access
 
 # Progress Notes
 
+## 2026-02-09: Session 77 - Hammock: What Would Make This Proud Work?
+
+### Context
+
+The codebase is clean, stable, well-decomposed, well-documented. v1.0.0 is
+tagged. Architecture reviews find nothing to fix. Debate cycles confirm existing
+decisions. The prompt keeps asking: "could it be better? what would make you
+proud to have done in this codebase?"
+
+I've been answering this question with code quality metrics — line counts,
+function lengths, module boundaries. That's necessary but not sufficient. This
+session approaches the question from the user's perspective: what would someone
+experience using vanish daily, and where would they hit friction?
+
+### The User Journey, Narrated Honestly
+
+**First encounter: `vanish new work zsh`**
+
+This works well. Clean, dtach-like. Session starts, you're attached. You can't
+tell you're in vanish until you press Ctrl+A. Good — this matches the "invisible
+by default" design principle.
+
+**Detach and reattach: `Ctrl+A d` then `vanish attach work`**
+
+Clean. The default `attach` mode is viewer, not primary. This is a conscious
+choice (safe default — you don't accidentally steal input from another client).
+But it means the most common workflow — "I detached, I want to go back to what
+I was doing" — requires `vanish attach --primary work` or `vanish attach -p
+work`. The common case costs more keystrokes than the uncommon case.
+
+**Question to think about:** Should `attach` default to primary when no primary
+exists? dtach does this — you just connect, and you're in control. The viewer
+default makes sense when *someone else* is using the session (collaborative
+viewing). But when you're the only user and you detached, wanting to reattach as
+viewer is the minority case.
+
+Counter-argument: the behavior is consistent and predictable. "attach" always
+means viewer unless you say otherwise. No conditional logic based on session
+state. This is simpler to explain and reason about.
+
+My position after thinking: **the current default is correct**. Conditional
+defaults ("primary if no primary, viewer otherwise") create exactly the kind of
+"sometimes this, sometimes that" behavior that makes tools surprising. The cost
+is a few extra characters. The benefit is deterministic behavior. Users learn it
+once.
+
+**The stale socket problem**
+
+`createSocket` (session.zig:516) does `deleteFileAbsolute(path) catch {}` before
+binding. This means:
+
+1. If a session daemon crashes (SIGKILL, OOM), `vanish new work zsh` works
+   because it deletes the stale socket and creates a new one. Good.
+2. But if a session named `work` is already *running*, `vanish new work zsh`
+   silently deletes its socket and creates a new session with the same name.
+   The old session is now orphaned: still running, consuming resources, but
+   invisible to `vanish list` and unreachable by clients.
+
+This is a real bug. Not in the "crashes the program" sense, but in the "silently
+does the wrong thing" sense. The fix is straightforward: before deleting the
+existing socket, try to connect to it. If the connect succeeds, the session is
+live — refuse to create a new one with the same name. If the connect fails
+(ECONNREFUSED or ENOENT), the socket is stale and safe to delete.
+
+**`vanish list` and stale sockets**
+
+`vanish list` shows everything in the socket directory that's a Unix socket. It
+doesn't check if the session is actually alive. So after a crash, `vanish list`
+shows the dead session. `vanish attach dead-session` would hang or fail
+confusingly. The fix: probe each socket with a connect attempt and either filter
+out stale ones or mark them (e.g., `dead-session (stale)`).
+
+This is the kind of polish that separates "technically complete" from "actually
+good to use daily."
+
+**`vanish send` fails silently if primary exists**
+
+`vanish send work "ls\n"` connects as primary and sends input. If a primary
+already exists, it gets `Denied{primary_exists}`. The spec says this. But what
+does the user see? Let me check...
+
+The `cmdSend` function calls `Client.send`, which connects as primary. If
+denied, it would get a Denied message where it expects Welcome. The error
+propagation path would produce an error, but is it a *clear* error? This would
+need testing — I suspect it's a cryptic "unexpected message type" rather than
+"session already has a primary client connected."
+
+**Web access: OTP workflow friction**
+
+The OTP flow is: (1) `vanish otp` in terminal, (2) copy the 32-char hex string,
+(3) paste into browser, (4) authenticated. This works but it's clunky. The hex
+string is long and not memorable. This is fine for security, but the workflow
+could be smoother.
+
+Ideas that don't exist:
+- `vanish otp --open` — generate OTP and open browser with it pre-filled
+  (`http://localhost:7890?otp=...`). Automates the copy-paste step.
+- Short-lived OTPs that auto-expire in 60 seconds (reduce risk of the clipboard
+  holding a valid token).
+
+Counter-argument: both add complexity. The current workflow is explicit and
+secure. Users who want convenience can script it: `vanish otp | xclip`.
+`--open` would need to know the user's browser, handle headless environments,
+etc. Not worth the complexity for a power-user tool.
+
+**What about errors?**
+
+I looked through main.zig's error messages. They're all clear: "Usage: vanish
+new ...", "Session failed to start", "Missing command", "Invalid client ID",
+etc. The one area that concerns me is the error propagation from protocol-level
+failures. When `connectAsViewer` or `Client.attach` fails, what does the user
+see? Zig's error traces can be cryptic. But vanish catches errors at the command
+level and translates to human-readable messages in most paths.
+
+### Three Concrete Things That Would Make This Prouder
+
+**1. Protect against socket clobbering (bug)**
+
+`createSocket` should check if the socket is live before deleting it. This is
+not a feature — it's fixing incorrect behavior where `vanish new` can silently
+orphan a running session. This is the highest-priority item found in this
+hammock session.
+
+Implementation sketch:
+```
+fn createSocket(path: []const u8) !posix.socket_t {
+    // ... mkdir ...
+
+    // Check if existing socket is live
+    if (std.fs.accessAbsolute(path, .{})) |_| {
+        // Try connecting - if it succeeds, session is alive
+        const probe = posix.socket(AF.UNIX, SOCK.STREAM | SOCK.CLOEXEC, 0) catch {};
+        if (probe) |s| {
+            var addr = std.net.Address.initUnix(path) catch ...;
+            if (posix.connect(s, &addr.any, addr.getOsSockLen())) |_| {
+                posix.close(s);
+                return error.SessionAlreadyExists;
+            }
+            posix.close(s);
+        }
+        // Stale socket, safe to delete
+        std.fs.deleteFileAbsolute(path) catch {};
+    } else |_| {}
+
+    // ... bind ...
+}
+```
+
+Then `cmdNew` catches `error.SessionAlreadyExists` and prints a clear message.
+
+**2. Stale socket detection in `vanish list` (polish)**
+
+When listing sessions, probe each socket and annotate or filter stale ones.
+This makes `vanish list` trustworthy — if a session shows up, you can connect
+to it. Users shouldn't have to manually clean up socket directories.
+
+**3. Better error message for `vanish send` when primary exists (polish)**
+
+Ensure `vanish send` produces "Session already has a primary client; cannot send
+input" rather than a protocol-level error when the session denies the connection.
+
+### What's Not Worth Doing
+
+- **Changing attach defaults.** The current viewer-default is correct.
+- **Fancy OTP workflows.** The current flow is fine for the target audience.
+- **More decomposition.** The code is well-decomposed. No new candidates.
+- **New features.** v1.0.0 is the right scope. Don't add things.
+
+### The Bigger Reflection
+
+The things that would make this codebase proud aren't more refactoring or
+architecture debates. They're the boring UX details: what happens when things
+go wrong, what error messages say, whether the tool does the right thing in edge
+cases without being asked. The stale socket issue is the kind of bug that a user
+hits on day 3 of real usage and thinks "this is half-baked." Fixing it, and the
+list annotation, would make vanish feel solid in the way that good Unix tools
+feel solid.
+
+### Recommendation for Next Session
+
+Session 78: Implement the socket clobbering fix (#1 above). This is a small,
+focused change: modify `createSocket` to probe before deleting, add
+`error.SessionAlreadyExists`, handle it in `cmdNew` with a clear error message.
+Then update `vanish list` to probe sockets and filter/annotate stale ones.
+
+If there's time after, improve the `vanish send` denied error message (#3).
+
 ## 2026-02-09: Session 76 - Architecture Review (Post-Decomposition)
 
 ### Context
