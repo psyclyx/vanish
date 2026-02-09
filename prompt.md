@@ -13,7 +13,25 @@ iteration.
 
 Ongoing:
 
-- Every 3 sessions, take some time to interrogate your abstractions. Is this
+- Manage this file. Archive old sessions as needed, and summarize.
+- You are developing strong opinions over time, which is good, but you have also
+  calcified a bit. Every now and then, write the best possible case for making
+  different decisions. Then, the next iteration, write a response. In the next,
+  a reflection. No ego, just good, simple, clean software. It's okay to have
+  been wrong, it's okay to have been right.
+- It's okay to leave the code in a broken state between iterations, either while
+  working on a longer task (consider making subtasks), or if a larger-scale
+  project is worth it. We're not shipping the intermediate states and you are
+  the primary dev. Just clearly indicate in documentation what the state is, and
+  have a plan.
+- Maintain a detailed specification document, and keep track of individual
+  features / usecases / edge cases / regressions. You may want to go commit by
+  commit (do this in a few iterations) to make sure you understand everything,
+  and haven't forgotten anything along the way.
+- Stylistically, there are a lot of longer functions with comments explaining
+  individual steps. More smaller (and simpler (decomplected)) functions are
+  preferable.
+- Every 3 sessions, take some time to interrogate your abstractions. Is the
   architecture sound? Is the code maintainable? What's working? What isn't?
   What's simple, and what's complected? Think about the long term. You'll have
   to maintain this, don't make that hard on yourself.
@@ -24,8 +42,8 @@ New: (triaged in session 48)
 
 - ✗ "No framework bloat" in the README - resolved: no datastar in codebase,
   README already says "No framework dependencies." Pure vanilla JS.
-- ✓ TUIs seem to break every so often - fixed in session 55: resize handlers
-  now re-render viewport and clear screen. Was missing re-render on both
+- ✓ TUIs seem to break every so often - fixed in session 55: resize handlers now
+  re-render viewport and clear screen. Was missing re-render on both
   session_resize and SIGWINCH.
 - ✓ Keybinds are broken on TUI viewer sessions - likely fixed by session 55
   resize re-render fix (rendering corruption made it look like input didn't
@@ -35,22 +53,46 @@ New: (triaged in session 48)
 - ✓ We should have some notion of read-only OTPs. - done in session 52.
 - ✓ Browser feels laggier than it should on localhost - fixed in session 50:
   replaced innerHTML HTML-string parsing with structured JSON + createElement.
-- Rendering architecture redesign: abstract rendering commands, echo/noecho
-  modes, server-side VTerm → structured commands instead of raw bytes. Drop
-  HTTP client in favor of thread-per-connection. Multi-iteration hammock task.
-  See original description in doc/sessions-archive.md or session 48 inbox
-  analysis.
+- ✓ Rendering architecture redesign: targeted fixes (resize re-render S55,
+  cursor tracking S56) resolved the concrete bugs. Full redesign rejected as
+  unnecessary. Echo/noecho mode detection deferred (no bug reports driving it).
 - spend many iterations hammocking about the problem. it's complete - but could
   it be better? what would make you proud to have done in this codebase?
 
 Current:
 
-- Rendering architecture redesign (multi-iteration hammock - see inbox idea).
-  Hammock iter 2 complete: confirmed "fix the 1%" approach. Resize re-render
-  fix landed in session 55. Escape accumulator and periodic heartbeat deemed
-  unnecessary. Echo/noecho mode detection remains a future optimization.
-- Session list SSE (reactive in web).
-- Arch PKGBUILD.
+- None. All major features complete. Project approaching v1.
+
+Done (Session 59):
+
+- ✓ Session list SSE. New `GET /api/sessions/stream` SSE endpoint pushes live
+  session list updates to connected browsers. Server polls the socket directory
+  every 2 seconds and sends events only when the list changes (Wyhash-based
+  change detection). Refactored `handleListSessions` to share
+  `buildSessionListJson` with the new SSE path, eliminating duplicated directory
+  scanning code. Web frontend subscribes on auth instead of one-shot fetch.
+  Session cards update live when sessions are created/destroyed. http.zig: 936 →
+  1070 (+134 net, +184/-42 with dedup refactor). index.html: 304 → 312 (+8).
+
+Done (Session 58):
+
+- ✓ Arch PKGBUILD. Created `pkg/arch/PKGBUILD` for `vanish-git` AUR package.
+  Uses `zig>=0.15` from official extra repo. `prepare()` fetches all zig deps
+  (including lazy ghostty dep) via `zig build --fetch=all`. Builds with
+  ReleaseSafe. Installs binary, man page, and LICENSE. Uses git-describe for
+  version with fallback to rev-count. Also created LICENSE file (MIT).
+- ✓ Rendering architecture redesign moved to done. Hammock iterations 1-3
+  concluded: targeted fixes (resize re-render S55, cursor tracking S56) resolved
+  the concrete bugs. Full redesign correctly rejected. Echo/noecho mode
+  detection remains a potential future optimization with no bug reports driving
+  it.
+
+Done (Session 57):
+
+- ✓ Architecture review (3-session checkpoint since session 54). Codebase at
+  5,934 lines across 15 files (14 .zig + index.html at 304). 44 unit tests. Zero
+  TODO/FIXME/HACK. Build clean. No new architectural issues found. See detailed
+  notes below.
 
 Done (Session 56):
 
@@ -62,18 +104,18 @@ Done (Session 56):
   3. Web terminal: cursor position (cx/cy) now included in SSE JSON updates.
      Dedicated cursor element overlays the cell at cursor position. Also tracks
      cursor-only moves (no cell changes) via last_cursor_x/y on SseClient.
-  terminal.zig: 335 → 351 (+16), vthtml.zig: 370 → 374 (+4),
-  http.zig: 923 → 936 (+13), index.html: 292 → 304 (+12). Net +45 lines.
+     terminal.zig: 335 → 351 (+16), vthtml.zig: 370 → 374 (+4), http.zig: 923 →
+     936 (+13), index.html: 292 → 304 (+12). Net +45 lines.
 
 Done (Session 55):
 
-- ✓ Fixed TUI viewer resize re-render. Both session_resize (remote) and
-  SIGWINCH (local) handlers now properly re-render after dimension changes.
-  Session resize: resizes local VTerm if it exists, re-renders viewport in
-  panning mode, clears screen in passthrough mode. Local resize: re-renders
-  viewport in panning mode, updates status bar. client.zig: 636 → 648 (+12).
-  This was the probable root cause of reported TUI viewer breakage (identified
-  in hammock iteration 2, session 54).
+- ✓ Fixed TUI viewer resize re-render. Both session_resize (remote) and SIGWINCH
+  (local) handlers now properly re-render after dimension changes. Session
+  resize: resizes local VTerm if it exists, re-renders viewport in panning mode,
+  clears screen in passthrough mode. Local resize: re-renders viewport in
+  panning mode, updates status bar. client.zig: 636 → 648 (+12). This was the
+  probable root cause of reported TUI viewer breakage (identified in hammock
+  iteration 2, session 54).
 
 Done (Session 54):
 
@@ -105,8 +147,8 @@ Done (Session 52):
   403 on `/input`, `/takeover`, `/resize`. Web frontend hides Takeover button,
   shows "read-only" badge. Orthogonal to scope (works with session, daemon,
   temporary, indefinite). auth.zig: 556 → 585 (+29), http.zig: 898 → 923 (+25),
-  main.zig: 972 → 976 (+4), index.html: 222 → 226 (+4). Net +62 lines. New
-  unit test for read-only token round-trip.
+  main.zig: 972 → 976 (+4), index.html: 222 → 226 (+4). Net +62 lines. New unit
+  test for read-only token round-trip.
 
 Done (Session 51):
 
@@ -122,15 +164,16 @@ Done (Session 51):
 Done (Session 50):
 
 - ✓ Fixed browser localhost lag. Replaced the innerHTML-based rendering pipeline
-  with structured JSON + createElement. Server now sends `{"x":5,"y":10,"c":"A",
-  "s":"font-weight:bold;"}` instead of HTML strings. Client builds DOM elements
-  directly with createElement + textContent + style.cssText, and batches new
-  elements in a DocumentFragment. Eliminates per-cell innerHTML parsing (1,920
-  HTML parses on a keyframe), regex position extraction, and throwaway div
-  creation. Also reuses existing DOM elements on updates instead of always
-  creating new ones. vthtml.zig: 376 → 370 (-6), index.html: 240 → 222 (-18).
-  Net -24 lines while fixing the perf issue. Removed unused paths.zig import
-  from vthtml.zig.
+  with structured JSON + createElement. Server now sends
+  `{"x":5,"y":10,"c":"A",
+  "s":"font-weight:bold;"}` instead of HTML strings.
+  Client builds DOM elements directly with createElement + textContent +
+  style.cssText, and batches new elements in a DocumentFragment. Eliminates
+  per-cell innerHTML parsing (1,920 HTML parses on a keyframe), regex position
+  extraction, and throwaway div creation. Also reuses existing DOM elements on
+  updates instead of always creating new ones. vthtml.zig: 376 → 370 (-6),
+  index.html: 240 → 222 (-18). Net -24 lines while fixing the perf issue.
+  Removed unused paths.zig import from vthtml.zig.
 
 Done (Session 49):
 
@@ -428,6 +471,396 @@ lightweight libghostty terminal session multiplexer with web access
 
 # Progress Notes
 
+## 2026-02-09: Session 59 - Session List SSE
+
+### What Changed
+
+Implemented reactive session list for the web frontend. When sessions are
+created or destroyed from the terminal, the browser's session list updates
+live without page reload. This was the last major web UX gap.
+
+**http.zig (936 → 1070 lines, +134 net)**
+
+**New struct: `SessionListClient` (12 lines)**
+
+Much simpler than `SseClient` - no VTerminal, no screen buffer, no session
+socket. Just the HTTP fd for writing SSE events, a hash of the last-sent
+session list for change detection, and the auth scope/filter for
+session-scoped tokens.
+
+**New handler: `handleSessionListStream()` (30 lines)**
+
+Route: `GET /api/sessions/stream`. Validates auth, sends SSE headers, sends
+initial session list event, then transfers the client from the regular HTTP
+client list to the `session_list_clients` list. Same lifecycle pattern as
+`handleSseStream()` for terminal streams.
+
+**New helper: `buildSessionListJson()` (33 lines)**
+
+Extracted the directory scanning + JSON building logic that was inline in
+`handleListSessions()`. Now shared between the one-shot `handleListSessions()`
+endpoint and the SSE stream. This eliminated ~30 lines of duplicated code from
+`handleListSessions()`, which is now just 10 lines (validate auth, call helper,
+send response).
+
+**New helper: `sendSessionListEvent()` (9 lines)**
+
+Writes an SSE event using `writev()` to combine the event prefix, JSON payload,
+and suffix in a single syscall. Avoids allocating a concatenated buffer.
+
+**New function: `updateSessionListClients()` (24 lines)**
+
+Called on every event loop iteration (and on timeout). Throttled to scan at most
+every 2 seconds via `last_session_scan` timestamp. For each connected session
+list client, builds the JSON, hashes it with Wyhash, and compares against the
+last-sent hash. Only sends an event when the hash changes.
+
+**New function: `removeSessionListClient()` (4 lines)**
+
+Cleanup: close fd, free filter, remove from list.
+
+**Event loop changes (+22 lines)**
+
+- Session list client fds added to poll (listen for disconnect only)
+- Timeout condition includes session list clients (not just terminal SSE)
+- Disconnect detection loop after the terminal SSE loop
+- `updateSessionListClients()` called both on timeout and after event handling
+
+**Refactored: `handleListSessions()` (-20 lines)**
+
+Now delegates to `buildSessionListJson()` instead of doing inline directory
+scanning. 30 lines → 10 lines.
+
+**index.html (304 → 312 lines, +8)**
+
+- `sessionsSse` variable tracks the session list EventSource.
+- `openSessionsSse()`: Creates EventSource to `/api/sessions/stream`, listens
+  for `sessions` events.
+- Auth check flow: `fetch('/api/sessions')` still used as auth probe (can't
+  distinguish 401 from network error on EventSource). If auth succeeds, opens
+  the SSE stream instead of using the fetch response data.
+- `showSessions()` simplified: no longer async, no longer unwraps a promise.
+  Called directly from the SSE event handler with parsed JSON.
+- `disconnect()`: Reopens session list SSE if it was closed while viewing a
+  terminal (error recovery).
+
+### Design Decisions
+
+- **Poll-based, not inotify:** Directory scan every 2 seconds is simple and
+  correct. inotify would add Linux-specific code, edge cases around socket
+  creation timing, and complexity for marginal latency improvement. 2-second
+  resolution is responsive enough for session creation/destruction.
+
+- **Wyhash for change detection:** Instead of maintaining a sorted list of
+  session names and doing set comparison, hash the entire JSON output. If the
+  hash matches the last-sent hash, skip. Simple, O(n) where n is JSON length,
+  no additional data structures. False negatives (hash collision causing a
+  missed update) are astronomically unlikely with 64-bit Wyhash, and the next
+  scan 2 seconds later would catch it.
+
+- **Auth check before SSE:** EventSource API doesn't expose HTTP status codes.
+  A 401 response just triggers the `onerror` handler, indistinguishable from a
+  network error. So the auth check is done via a regular fetch first, and the
+  SSE stream is only opened after successful auth.
+
+- **SSE stays open while viewing terminal:** The session list SSE connection
+  persists even when the user navigates to a terminal view. When they disconnect
+  from the terminal, the session list is already current. If the SSE connection
+  dropped in the meantime, `disconnect()` reopens it.
+
+- **writev for SSE events:** `sendSessionListEvent` uses `writev()` with 3
+  iovecs (prefix, json, suffix) instead of allocating a concatenated buffer.
+  Avoids one allocation per event.
+
+- **Scope-aware updates:** Session-scoped tokens only see the sessions they're
+  authorized for. The `SessionListClient` stores the scope and filter, and
+  `buildSessionListJson` applies the same filtering as the one-shot endpoint.
+
+### Line Count Impact
+
+| File       | Before  | After   | Change   |
+| ---------- | ------- | ------- | -------- |
+| http.zig   | 936     | 1070    | +134     |
+| index.html | 304     | 312     | +8       |
+| **Net**    |         |         | **+142** |
+
+Total codebase: 15 files, ~6,076 lines.
+
+### Testing
+
+- Build: Clean
+- Unit tests: 44 tests, all passing
+
+### Inbox Status
+
+| Item               | Status | Priority | Notes                           |
+| ------------------ | ------ | -------- | ------------------------------- |
+| Session list SSE   | ✓ Done | -        | Session 59                      |
+| All major features | ✓ Done | -        | Project at v1 feature-complete  |
+
+### Recommendations for Next Sessions
+
+1. **Session 60 (review):** Architecture review (3-session checkpoint since
+   session 57). http.zig grew from 936 to 1070 lines - assess whether it needs
+   splitting. Assess whether the project is "done" for v1. index.html at 312
+   lines - re-evaluate split threshold.
+
+2. **Session 61:** Consider what "v1" means. Tag a release? Update README to
+   reflect completeness? The project has no remaining inbox items. All features
+   from the task description are implemented. This is a good time to step back
+   and evaluate.
+
+3. **Session 62:** Hammock: the ongoing request about "what would make you
+   proud." With all features done, this is about polish, correctness, and the
+   user experience of the codebase itself (for future maintainers).
+
+---
+
+## 2026-02-09: Session 58 - Arch PKGBUILD + LICENSE
+
+### What Changed
+
+**pkg/arch/PKGBUILD (new, 46 lines)**
+
+Created an AUR-ready PKGBUILD for `vanish-git`. Key design decisions:
+
+- **`-git` package:** No tagged releases exist yet, so this tracks the main
+  branch. Version derived from `git describe --long --tags` with fallback to
+  `rev-list --count` + short hash.
+
+- **`zig>=0.15` from extra:** Zig 0.15.2 is in the official Arch extra repo. No
+  AUR dependency for the build tool.
+
+- **Dependency fetching:** `prepare()` runs `zig build --fetch=all` to download
+  all dependencies (including the lazy ghostty dep and its ~20 transitive deps)
+  into `$srcdir/zig-cache`. This is the standard pattern for Zig projects on
+  AUR - network access is available during prepare/build phases.
+
+- **ZIG_GLOBAL_CACHE_DIR:** Set in prepare, build, and check phases to keep the
+  zig cache in `$srcdir/zig-cache` rather than `$HOME/.cache/zig`. This is
+  important for clean builds and prevents polluting the user's home directory.
+
+- **ReleaseSafe optimization:** Matches the Nix package. Safety checks are
+  appropriate for a distributed binary.
+
+- **`--prefix`:** Build output goes to `$srcdir/out/`, then `package()` installs
+  from there. Binary, man page, and LICENSE all installed with correct
+  permissions.
+
+**LICENSE (new, MIT)**
+
+The README and package.nix both declared MIT but no LICENSE file existed.
+Created a standard MIT license file. The PKGBUILD installs it to
+`/usr/share/licenses/vanish-git/LICENSE`.
+
+### PKGBUILD Structure
+
+```
+prepare()  → zig build --fetch=all (downloads deps)
+build()    → zig build -Doptimize=ReleaseSafe --prefix out/
+check()    → zig build test
+package()  → install binary, man page, license
+```
+
+### Testing
+
+- Verified `zig build --prefix` produces correct install layout (bin/vanish,
+  share/man/man1/vanish.1)
+- Cannot run `makepkg` or `namcap` on NixOS, but PKGBUILD follows standard
+  conventions and structure
+
+### Inbox Status
+
+| Item               | Status | Priority | Notes                            |
+| ------------------ | ------ | -------- | -------------------------------- |
+| Rendering redesign | ✓ Done | -        | Targeted fixes worked (S55, S56) |
+| Arch PKGBUILD      | ✓ Done | -        | Session 58                       |
+| Session list SSE   | ○ Todo | Medium   | Last major web UX gap            |
+
+### Recommendations for Next Sessions
+
+1. **Session 59:** Session list SSE. Add an SSE endpoint for session list
+   changes, update the web frontend to subscribe. ~30-40 lines of JS, ~30-40
+   lines of Zig. Evaluate whether index.html needs splitting after this.
+
+2. **Session 60 (review):** Architecture review (3-session checkpoint). Assess
+   whether the project is "done" for v1. Both remaining polish items (PKGBUILD,
+   session list SSE) should be done by then.
+
+---
+
+## 2026-02-09: Session 57 - Architecture Review (3-session checkpoint)
+
+### Architecture Review
+
+Last review was session 54. Sessions 55-56 were the resize re-render fix and
+cursor position fix respectively.
+
+### Codebase Stats
+
+| File         | Lines     | Change from S54 | Purpose                    |
+| ------------ | --------- | --------------- | -------------------------- |
+| main.zig     | 976       | 0               | CLI entry point            |
+| http.zig     | 936       | +13             | Web server, SSE, routing   |
+| client.zig   | 648       | +12             | Native client, viewport    |
+| auth.zig     | 585       | 0               | JWT/HMAC, OTP exchange     |
+| session.zig  | 526       | 0               | Daemon, poll loop          |
+| config.zig   | 461       | 0               | JSON config parsing        |
+| vthtml.zig   | 374       | +4              | VT→JSON, delta computation |
+| terminal.zig | 351       | +16             | ghostty-vt wrapper         |
+| index.html   | 304       | +12             | Web frontend               |
+| protocol.zig | 192       | 0               | Wire format                |
+| keybind.zig  | 185       | 0               | Input state machine        |
+| naming.zig   | 165       | 0               | Auto-name generation       |
+| pty.zig      | 140       | 0               | PTY operations             |
+| signal.zig   | 48        | 0               | Signal handling            |
+| paths.zig    | 43        | 0               | Shared utilities           |
+| **Total**    | **5,934** | **+57**         | 15 files                   |
+
+Build: Clean. Tests: 44 unit tests across 9 files. All passing.
+
+The +57 line growth since session 54 is entirely from the two targeted bug
+fixes: resize re-render (+12 in client.zig) and cursor position tracking (+16 in
+terminal.zig, +13 in http.zig, +4 in vthtml.zig, +12 in index.html). 10 of 15
+files unchanged. The changes were surgical and well-contained.
+
+### What's Working Well
+
+**1. Core stability is absolute.** Protocol, session, pty, signal, paths, auth,
+config, keybind, naming, main - 10 modules haven't changed since session 54 or
+earlier. Most haven't changed in 10+ sessions. These are finished code.
+
+**2. The targeted fix strategy worked.** Hammock iteration 2 (session 54)
+identified the missing resize re-render as the probable cause of TUI breakage.
+Session 55 fixed it in 12 lines. Session 56 fixed cursor tracking in 45 lines.
+Both were surgical, well-contained changes. The full rendering redesign was
+correctly rejected - these targeted fixes addressed the actual bugs without
+architectural upheaval.
+
+**3. Zero TODO/FIXME/HACK markers.** Still clean.
+
+**4. The rendering pipeline is now correct across all paths.** After sessions 55
+and 56, all three rendering paths (passthrough, panning viewport, web terminal)
+handle resize and cursor position correctly. This was the last known correctness
+gap in the output pipeline.
+
+### Remaining Duplication (unchanged from S54)
+
+1. **connectToSession (3 copies):** main.zig:666, http.zig:927, client.zig:588.
+   ~8 lines each. Still not worth extracting - each is small, correct, stable.
+
+2. **Auth validation pattern (5 copies in http.zig):** Lines 431, 480, 516,
+   572, 611. Each ~4 lines. Grep-friendly, no divergence risk. Leave it.
+
+3. **Scroll actions (8 copies in client.zig):** Lines 173-212. Each calls
+   moveX() + renderViewport() + renderStatusBar(). Still stable, no new scroll
+   variants added. Leave it.
+
+4. **TCP socket creation (2 copies in http.zig):** createTcpSocket4 (lines
+   897-910) and createTcpSocket6 (lines 912-925) are 98% identical - only
+   AF.INET vs AF.INET6 and parseIp4 vs parseIp6 differ. Could be parameterized
+   but both are stable and unlikely to change. Leave it.
+
+### Simple vs Complected Analysis
+
+**Simple (good):**
+
+- Everything from session 54 remains simple.
+- The cursor fix was clean: one new getCursor() helper, cursor position threaded
+  through existing render paths. No new abstractions needed.
+- The resize fix was clean: 5 additional lines in each of two handlers that were
+  already doing partial work. Just completing what they should have done.
+
+**Watch items:**
+
+- **index.html at 304 lines.** Previous reviews flagged 250-280 as the threshold
+  for considering a JS split. We're past it. The JS section is ~182 lines. The
+  code is still readable - functions are short, no framework state, linear flow.
+  Session list SSE would add another ~30-40 lines of JS, pushing toward 340.
+
+  Assessment: still manageable as a single file. The benefit of a single file
+  (no build step, no module loading, one HTTP request) outweighs the cost of
+  length at this scale. A split would be worth considering past ~400 lines or if
+  the JS gains distinct responsibilities that want separate testing.
+
+- **The rendering redesign hammock is effectively done.** Three iterations:
+  1. Session 51: Rejected full redesign, proposed targeted fixes (escape
+     accumulator, resize resync, periodic heartbeat).
+  2. Session 54: Found root cause (missing resize re-render), simplified fix
+     plan to one item. Deemed escape accumulator and heartbeat unnecessary.
+  3. This session: Confirmed the targeted fixes worked. Resize fix (S55) and
+     cursor fix (S56) resolved the concrete bugs. Echo/noecho mode detection
+     remains a potential future optimization but there are no bug reports
+     driving it.
+
+  Recommend moving rendering redesign from "Current" to "Done" in inbox. The
+  "fix the 1%" approach was validated - the bugs were fixed with 57 lines of
+  targeted changes, not a 500+ line architectural rewrite.
+
+**No complected code found.** Architecture remains clean.
+
+### Hammock: What Would Make This Proud Work?
+
+The user's ongoing request: "could it be better? what would make you proud?"
+
+Stepping back from code and thinking about the project as a whole:
+
+**What's already good:**
+
+- ~5,900 lines for a terminal multiplexer with web access. tmux is 70,000+. The
+  economy is remarkable.
+- 15 files, clear boundaries, zero circular dependencies. You can understand any
+  module in isolation.
+- Every feature request since session 36 has landed cleanly without
+  architectural changes. The abstractions held.
+- The protocol is 17 message types and a 5-byte header. Simple, sufficient.
+
+**What would make it better (ranked by impact):**
+
+1. **Arch PKGBUILD.** This is the difference between "a project" and "a tool
+   people use." The Nix package works. An AUR package would reach a much larger
+   audience. Low effort, high visibility.
+
+2. **Session list SSE.** The web session list currently polls on page load. When
+   you create a session from the terminal and the browser updates live, that's
+   polish that signals quality. This is the last major web UX gap.
+
+3. **The "pride" factor is mostly there already.** The codebase is clean, the
+   tool works, the design is minimal. The remaining items (PKGBUILD, session
+   list SSE) are finishing touches, not architectural gaps.
+
+**What I would NOT do:**
+
+- Split index.html. Not yet - it's still readable at 304 lines.
+- Extract the remaining duplicated code (connectToSession, auth validation,
+  scroll handlers). The duplication is mild, stable, and grep-friendly.
+  Extracting it would add indirection for marginal benefit.
+- Pursue echo/noecho mode detection. No bug reports driving it. YAGNI.
+- Add brotli/gzip compression. Delta payloads are already small.
+
+### Inbox Status
+
+| Item               | Status | Priority | Notes                            |
+| ------------------ | ------ | -------- | -------------------------------- |
+| Rendering redesign | ✓ Done | -        | Targeted fixes worked (S55, S56) |
+| Session list SSE   | ○ Todo | Medium   | Last major web UX gap            |
+| Arch PKGBUILD      | ○ Todo | Medium   | Packaging for wider adoption     |
+
+### Recommendations for Next Sessions
+
+1. **Session 58:** Arch PKGBUILD. Highest impact-to-effort ratio. The build
+   system is a single `zig build`, the binary is self-contained, and the man
+   page is already in doc/vanish.1. A PKGBUILD is ~30 lines.
+
+2. **Session 59:** Session list SSE. Add an SSE endpoint for session list
+   changes, update the web frontend to subscribe. ~30-40 lines of JS, ~30-40
+   lines of Zig. Evaluate whether index.html needs splitting after this.
+
+3. **Session 60 (review):** Architecture review. By then both remaining polish
+   items should be done. Assess whether the project is "done" for v1.
+
+---
+
 ## 2026-02-09: Session 56 - Fix Cursor Position Bug
 
 ### What Changed
@@ -447,8 +880,8 @@ positioning the cursor. The cursor was left wherever the last cell render
 positioned it (end of the last row). In panning mode, this meant the cursor was
 always in the wrong position.
 
-After: Reads cursor position from `screen.cursor.x` and `screen.cursor.y`.
-If the cursor falls within the visible viewport (offset_x ≤ cursor.x < end_x,
+After: Reads cursor position from `screen.cursor.x` and `screen.cursor.y`. If
+the cursor falls within the visible viewport (offset_x ≤ cursor.x < end_x,
 offset_y ≤ cursor.y < end_y), emits a CUP sequence (`\x1b[cy;cxH`) with the
 cursor position adjusted for the viewport offset.
 
@@ -485,8 +918,8 @@ and delta) now contains the current cursor position.
 
 **index.html (292 → 304 lines, +12)**
 
-- CSS: `#cursor` element with semi-transparent background, `pointer-events: none`
-  (click-through), `z-index: 1` (above cell content).
+- CSS: `#cursor` element with semi-transparent background,
+  `pointer-events: none` (click-through), `z-index: 1` (above cell content).
 - HTML: Dedicated `<div id="cursor">` element inside `#term`.
 - JS: `handleUpdate()` reads `cx`/`cy` from the JSON and positions the cursor
   element. The `+4` offset accounts for the grid's `top`/`left` padding.
@@ -510,9 +943,9 @@ output paths:
    but never cursor position. The web terminal had no visible cursor at all.
 
 4. **Full state transfer** (new client connects): `dumpScreen()` used the
-   TerminalFormatter with `.styles` extra which explicitly omits cursor position.
-   New clients started with the cursor at home position regardless of the
-   session's actual cursor state.
+   TerminalFormatter with `.styles` extra which explicitly omits cursor
+   position. New clients started with the cursor at home position regardless of
+   the session's actual cursor state.
 
 ### Line Count Impact
 
@@ -533,12 +966,12 @@ Total codebase: 15 files, ~5,934 lines.
 
 ### Inbox Status
 
-| Item                     | Status | Priority | Notes                             |
-| ------------------------ | ------ | -------- | --------------------------------- |
-| Cursor position bug      | ✓ Done | -        | Session 56: all three paths fixed |
-| Rendering redesign       | ○ Hmck | Low urg  | Resize fix + cursor fix may cover |
-| Session list SSE         | ○ Todo | Low      | Reactive web session list         |
-| Arch PKGBUILD            | ○ Todo | Low      | Packaging                         |
+| Item                | Status | Priority | Notes                             |
+| ------------------- | ------ | -------- | --------------------------------- |
+| Cursor position bug | ✓ Done | -        | Session 56: all three paths fixed |
+| Rendering redesign  | ○ Hmck | Low urg  | Resize fix + cursor fix may cover |
+| Session list SSE    | ○ Todo | Low      | Reactive web session list         |
+| Arch PKGBUILD       | ○ Todo | Low      | Packaging                         |
 
 ### Recommendations for Next Sessions
 
@@ -547,8 +980,8 @@ Total codebase: 15 files, ~5,934 lines.
    polish/packaging - the core functionality is complete.
 
 2. **Session 58:** Session list SSE or Arch PKGBUILD. Both are polish items.
-   Session list SSE would push index.html past 320 lines - evaluate whether
-   to split JS at that point.
+   Session list SSE would push index.html past 320 lines - evaluate whether to
+   split JS at that point.
 
 3. **Session 59:** Rendering redesign hammock iteration 3 - assess whether the
    resize fix (session 55) + cursor fix (session 56) resolve the remaining
@@ -570,14 +1003,15 @@ Before: Updated viewport dimensions and re-rendered the status bar. Did NOT
 clear the screen or re-render the viewport.
 
 After: Three additional steps:
+
 - If a local VTerm exists (panning mode was active), resize it to the new
-  session dimensions via `vt.resize()`. Without this, the VTerm still thinks
-  the session is the old size, so subsequent `feed()` calls would misinterpret
+  session dimensions via `vt.resize()`. Without this, the VTerm still thinks the
+  session is the old size, so subsequent `feed()` calls would misinterpret
   escape sequences.
 - If panning is needed, re-render the viewport to show the updated content.
-- If NOT panning (passthrough mode), write `\x1b[2J\x1b[H` (clear screen +
-  home cursor) to reset the terminal. Without this, stale content from the old
-  layout lingers until the next full output repaint.
+- If NOT panning (passthrough mode), write `\x1b[2J\x1b[H` (clear screen + home
+  cursor) to reset the terminal. Without this, stale content from the old layout
+  lingers until the next full output repaint.
 
 **2. SIGWINCH handler (line 499-510):**
 
@@ -585,6 +1019,7 @@ Before: Updated viewport dimensions and sent a resize message to the server. Did
 NOT re-render the viewport or status bar.
 
 After: Two additional steps:
+
 - If panning is needed, re-render the viewport. The visible subset changed when
   the local terminal resized, so the viewport needs to show the new area.
 - Re-render the status bar. The status bar position depends on `self.rows`,
@@ -611,9 +1046,9 @@ and hints were being rendered at wrong positions or on top of corrupted content.
 
 ### Line Count Impact
 
-| File       | Before | After | Change  |
-| ---------- | ------ | ----- | ------- |
-| client.zig | 636    | 648   | +12     |
+| File       | Before | After | Change |
+| ---------- | ------ | ----- | ------ |
+| client.zig | 636    | 648   | +12    |
 
 Total codebase: 15 files, ~5,889 lines.
 
@@ -680,9 +1115,9 @@ modifier toolbar.
 Build: Clean. Tests: 44 unit tests across 9 files. All passing.
 
 The +128 line growth since session 51 comes from: read-only OTPs (+62 across
-auth/http/main/index), mobile modifier toolbar (+57 in index.html), XSS fix
-(+9 in index.html). 11 of 15 files unchanged. The growth is entirely in web-
-facing code (auth, http, index.html) and the CLI flag in main.zig.
+auth/http/main/index), mobile modifier toolbar (+57 in index.html), XSS fix (+9
+in index.html). 11 of 15 files unchanged. The growth is entirely in web- facing
+code (auth, http, index.html) and the CLI flag in main.zig.
 
 ### Security Issue Found and Fixed
 
@@ -693,8 +1128,8 @@ interpolation with raw session names:
 .map(s => `<div class="session-card" onclick="connect('${s.name}')"><h3>${s.name}</h3></div>`)
 ```
 
-Session names are user-controlled (`vanish new <name>`) with no validation.
-Unix allows any characters except `/` and null in filenames. A session named
+Session names are user-controlled (`vanish new <name>`) with no validation. Unix
+allows any characters except `/` and null in filenames. A session named
 `<img onerror=alert(1) src=x>` would execute as HTML. The `onclick` attribute
 was also injectable via names containing `'`.
 
@@ -710,16 +1145,17 @@ earlier. Most haven't changed in 10+ sessions. These are finished code.
 
 **2. Feature additions are well-contained.** Read-only OTPs touched 4 files but
 the changes were surgical: a bool flag threaded through auth → http → frontend.
-Mobile toolbar was entirely in index.html. Neither feature required architectural
-changes.
+Mobile toolbar was entirely in index.html. Neither feature required
+architectural changes.
 
 **3. Zero TODO/FIXME/HACK markers.** Still clean.
 
 **4. The web frontend is holding up at 292 lines.** Previous reviews flagged 250
 as the threshold for splitting JS. We're past it, but the code is still readable
+
 - functions are short, there's no framework state to manage, and the logic flow
-is linear. The next feature that adds significant JS (session list SSE) would be
-a good time to evaluate splitting.
+  is linear. The next feature that adds significant JS (session list SSE) would
+  be a good time to evaluate splitting.
 
 ### Remaining Duplication (unchanged)
 
@@ -752,9 +1188,9 @@ a good time to evaluate splitting.
   feature.
 
 - **The handleKey function (line 272-279) is dense.** The ternary chain for
-  special keys is one long line. Works, but a future editor might struggle.
-  Not worth refactoring now, but if we touch it again, consider breaking the
-  key map into a const object.
+  special keys is one long line. Works, but a future editor might struggle. Not
+  worth refactoring now, but if we touch it again, consider breaking the key map
+  into a const object.
 
 **No new architectural issues found.**
 
@@ -767,6 +1203,7 @@ looks for implementation details.
 **Critique of "fix the 1%" approach:**
 
 Iteration 1 proposed three fixes:
+
 1. Escape sequence accumulator (~30 lines)
 2. Resize resync via screen dump (~20 lines)
 3. Periodic correction heartbeat (~100 lines, maybe unnecessary)
@@ -787,6 +1224,7 @@ missed:
 ```
 
 It updates the viewport dimensions and re-renders the status bar, but does NOT:
+
 - Clear the screen
 - Re-render the viewport (if in panning mode)
 - Reset the terminal state (if in passthrough mode)
@@ -814,10 +1252,10 @@ as a single protocol message. The viewer then writes this same buffer to STDOUT.
 So if the PTY splits an escape sequence across two reads, the viewer gets two
 writes with the split sequence.
 
-Is this actually a problem in practice? Terminal emulators are generally tolerant
-of split escape sequences - they maintain parser state across reads. The user's
-terminal (receiving passthrough bytes) should handle partial sequences fine
-because its VT parser buffers internally.
+Is this actually a problem in practice? Terminal emulators are generally
+tolerant of split escape sequences - they maintain parser state across reads.
+The user's terminal (receiving passthrough bytes) should handle partial
+sequences fine because its VT parser buffers internally.
 
 **Revised assessment:** The escape accumulator is probably not needed. The real
 bug is the missing resize re-render. The partial escape sequence issue is
@@ -855,14 +1293,14 @@ resize fix proves itself.
 
 ### Inbox Status
 
-| Item                     | Status | Priority | Notes                            |
-| ------------------------ | ------ | -------- | -------------------------------- |
-| TUI viewer breakage      | ○ Todo | **High** | Resize re-render fix identified  |
-| TUI viewer keybinds      | ○ Todo | Medium   | Likely same root cause as above  |
-| Rendering redesign       | ○ Hmck | Low urg  | Hammock iter 2 done, see above   |
-| Cursor position (narrow) | ○ Todo | Low      | Needs investigation              |
-| Session list SSE         | ○ Todo | Low      | Reactive web session list        |
-| Arch PKGBUILD            | ○ Todo | Low      | Packaging                        |
+| Item                     | Status | Priority | Notes                           |
+| ------------------------ | ------ | -------- | ------------------------------- |
+| TUI viewer breakage      | ○ Todo | **High** | Resize re-render fix identified |
+| TUI viewer keybinds      | ○ Todo | Medium   | Likely same root cause as above |
+| Rendering redesign       | ○ Hmck | Low urg  | Hammock iter 2 done, see above  |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation             |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list       |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                       |
 
 ### Recommendations for Next Sessions
 
@@ -906,14 +1344,15 @@ attributes. Arrow buttons use HTML entities (← ↓ ↑ →).
 
 **JS (+27 lines):**
 
-- Touch detection: `if ('ontouchstart' in window) document.body.classList.add('touch')`
-  at script start. CSS-driven visibility.
+- Touch detection:
+  `if ('ontouchstart' in window) document.body.classList.add('touch')` at script
+  start. CSS-driven visibility.
 - `ctrlActive` state variable.
 - `sendKey(data)`: Sends a key sequence to the current session's input endpoint.
   Checks `isPrimary` and `currentSession`.
 - `toggleCtrl()`: Toggles `ctrlActive` and button highlight class.
-- `modKeys` map: Maps data-key values to escape sequences (`esc` → `\x1b`,
-  `tab` → `\t`, arrows → ANSI sequences).
+- `modKeys` map: Maps data-key values to escape sequences (`esc` → `\x1b`, `tab`
+  → `\t`, arrows → ANSI sequences).
 - Delegated event handler: Single `touchend` listener on `#mod-bar` that
   dispatches to `toggleCtrl()` or `sendKey()` based on `data-key`.
 - `handleKey()` modified: `ctrl` variable now includes `ctrlActive`. When
@@ -938,13 +1377,13 @@ attributes. Arrow buttons use HTML entities (← ↓ ↑ →).
 
 - **Delegated event handler:** Single listener on the toolbar container instead
   of 7 individual listeners. Uses `e.target.closest('button')` to find the
-  button and `dataset.key` to dispatch. Cleaner, fewer event listeners, and
-  new buttons would just need a `data-key` attribute.
+  button and `dataset.key` to dispatch. Cleaner, fewer event listeners, and new
+  buttons would just need a `data-key` attribute.
 
 - **Ctrl as toggle, not hold:** Mobile users can't hold Ctrl while typing
   another key (unlike desktop). The toggle pattern mirrors how mobile keyboards
-  handle Shift: tap once to activate, type a key, auto-deactivates. Tap again
-  to cancel without sending.
+  handle Shift: tap once to activate, type a key, auto-deactivates. Tap again to
+  cancel without sending.
 
 - **visualViewport for resize:** `window.innerHeight` doesn't change when the
   soft keyboard appears on mobile. `visualViewport.height` does. Using it for
@@ -953,9 +1392,9 @@ attributes. Arrow buttons use HTML entities (← ↓ ↑ →).
 
 ### Line Count Impact
 
-| File       | Before | After | Change  |
-| ---------- | ------ | ----- | ------- |
-| index.html | 226    | 283   | +57     |
+| File       | Before | After | Change |
+| ---------- | ------ | ----- | ------ |
+| index.html | 226    | 283   | +57    |
 
 Total codebase: 15 files, ~5,868 lines.
 
@@ -982,8 +1421,8 @@ Total codebase: 15 files, ~5,868 lines.
    session 51). Rendering redesign hammock iteration 2. Review the mobile
    toolbar implementation.
 
-2. **Session 55:** TUI viewer breakage investigation. The targeted fixes
-   (escape accumulator + resize resync) from hammock iteration 1.
+2. **Session 55:** TUI viewer breakage investigation. The targeted fixes (escape
+   accumulator + resize resync) from hammock iteration 1.
 
 3. **Session 56:** Session list SSE or Arch PKGBUILD - both are polish items.
 
@@ -1036,8 +1475,8 @@ tokens which can only view sessions, not control them.
 
 - **Read-only is orthogonal to scope.** You can have a read-only indefinite
   token, a read-only session-scoped token, a read-only temporary token, etc.
-  It's a permission flag, not a new scope. This keeps the scope/HMAC key
-  system unchanged.
+  It's a permission flag, not a new scope. This keeps the scope/HMAC key system
+  unchanged.
 
 - **Server-side enforcement is primary.** The web frontend hides UI and blocks
   actions client-side, but the real enforcement is the 403 from the HTTP
@@ -1102,8 +1541,8 @@ Total codebase: 15 files, ~5,811 lines.
 2. **Session 54 (review):** Architecture review (3-session checkpoint).
    Rendering redesign hammock iteration 2.
 
-3. **Session 55:** TUI viewer breakage investigation. The targeted fixes
-   (escape accumulator + resize resync) from hammock iteration 1.
+3. **Session 55:** TUI viewer breakage investigation. The targeted fixes (escape
+   accumulator + resize resync) from hammock iteration 1.
 
 ---
 
@@ -1172,9 +1611,10 @@ change. Moving to paths.zig would add a dependency from http.zig → paths.zig
 
 **2. Auth validation + scope check pattern (5 copies in http.zig)**
 
-The pattern `validateAuth(headers) catch { sendError(401) }` + `if
-(payload.scope == .session) { check session name }` appears at lines 419, 468,
-499, 550, 584. Each occurrence is ~10 lines.
+The pattern `validateAuth(headers) catch { sendError(401) }` +
+`if
+(payload.scope == .session) { check session name }` appears at lines 419,
+468, 499, 550, 584. Each occurrence is ~10 lines.
 
 Assessment: This is HTTP handler boilerplate. Extracting it would mean creating
 a helper that returns the validated payload and takes the session name as a
@@ -1185,7 +1625,8 @@ line helper = saving ~25 lines). The repetition is obvious and grep-friendly.
 **3. executeAction scroll repetition (8 copies in client.zig)**
 
 Noted in session 39. Eight scroll actions each call `moveX() + renderViewport()
-+ renderStatusBar()`. This is 40 lines that could be 8.
+
+- renderStatusBar()`. This is 40 lines that could be 8.
 
 Assessment: Stable, unlikely to gain more scroll actions. **Leave it.**
 
@@ -1236,8 +1677,8 @@ efficient (only changed cells sent), and handles resize seamlessly.
 
 **What if native clients worked more like web clients?**
 
-Instead of raw byte passthrough, the session daemon would maintain a VTerm
-(it already does for web clients via vthtml.zig) and send structured rendering
+Instead of raw byte passthrough, the session daemon would maintain a VTerm (it
+already does for web clients via vthtml.zig) and send structured rendering
 commands to native clients. The native client would apply those commands to its
 terminal.
 
@@ -1250,8 +1691,8 @@ works is that the DOM is random-access. A terminal is a stream.
 
 Raw byte passthrough works perfectly 99% of the time. The 1% failure case is:
 resize races and partial escape sequences. The rendering redesign proposal
-essentially says "build a fully correct path and use it always" but the cost
-is enormous - you'd need to generate terminal escape sequences from a cell-level
+essentially says "build a fully correct path and use it always" but the cost is
+enormous - you'd need to generate terminal escape sequences from a cell-level
 diff, which is harder and slower than letting the application's native escape
 sequences flow through.
 
@@ -1259,9 +1700,9 @@ sequences flow through.
 
 The real bugs in the raw passthrough path are:
 
-1. **Partial escape sequences:** If a multi-byte escape (e.g. `\x1b[38;2;255;0;0m`
-   = 19 bytes) is split across two `read()` calls, writing the first part to
-   STDOUT puts the user's terminal in an undefined state.
+1. **Partial escape sequences:** If a multi-byte escape (e.g.
+   `\x1b[38;2;255;0;0m` = 19 bytes) is split across two `read()` calls, writing
+   the first part to STDOUT puts the user's terminal in an undefined state.
 
    Fix: Buffer output in the session daemon. Only forward complete escape
    sequences. The VTerm parser already knows when it's mid-sequence - expose
@@ -1280,16 +1721,17 @@ The real bugs in the raw passthrough path are:
    handle edge cases differently than the session's terminal (line wrapping,
    scroll regions). This is rare but real.
 
-   Fix: Periodically (every N seconds or on user request), do a full screen
-   dump from the VTerm and send it to reset state. The viewer already has a
-   VTerm for panning mode; this would use it for non-panning mode too, but only
-   for periodic correction rather than continuous rendering.
+   Fix: Periodically (every N seconds or on user request), do a full screen dump
+   from the VTerm and send it to reset state. The viewer already has a VTerm for
+   panning mode; this would use it for non-panning mode too, but only for
+   periodic correction rather than continuous rendering.
 
 **The rendering redesign as proposed would require:**
 
 - Session daemon to maintain a VTerm for every session (it already does for web)
 - A new wire format for cell-level updates (or reuse the JSON format from web)
-- The native client to parse these updates and generate terminal escape sequences
+- The native client to parse these updates and generate terminal escape
+  sequences
 - Handling of all the edge cases that escape-sequence generation entails (cursor
   positioning, color setting, attribute management)
 
@@ -1315,8 +1757,8 @@ The "fix the 1%" approach is better than the full redesign. Here's why:
    are complete. This is ~30 lines.
 
 2. On resize events, inject a screen dump from the session's VTerm into the
-   native client's output stream. This resyncs the viewer's terminal state.
-   This is ~20 lines.
+   native client's output stream. This resyncs the viewer's terminal state. This
+   is ~20 lines.
 
 3. For the "periodic correction" idea: add a heartbeat where the session daemon
    sends a compressed screen state every 5 seconds. The native client compares
@@ -1325,25 +1767,25 @@ The "fix the 1%" approach is better than the full redesign. Here's why:
 
 **Echo/noecho modes:**
 
-The user mentioned echo/noecho as distinct modes. "Echo mode" = scrolling
-output (like a shell). "Noecho mode" = fullscreen TUI (like vim).
+The user mentioned echo/noecho as distinct modes. "Echo mode" = scrolling output
+(like a shell). "Noecho mode" = fullscreen TUI (like vim).
 
 In echo mode, the viewer can use their own terminal's scrollback. In noecho
 mode, the viewer needs to pan around a fixed screen.
 
 The current system already detects this implicitly: if the session is larger
 than the viewer, panning is enabled. But it doesn't distinguish between "output
-is scrolling past" and "application is painting a fixed screen." This distinction
-could enable better viewer behavior:
+is scrolling past" and "application is painting a fixed screen." This
+distinction could enable better viewer behavior:
 
 - Echo mode: forward raw bytes, let the viewer's terminal scroll naturally.
   Scrollback just works.
-- Noecho mode: use VTerm rendering. The application is painting specific
-  screen positions, so cell-level updates make sense.
+- Noecho mode: use VTerm rendering. The application is painting specific screen
+  positions, so cell-level updates make sense.
 
 How to detect: monitor whether the application is using alternate screen buffer
-(`\x1b[?1049h` enables, `\x1b[?1049l` disables). When alternate screen is
-active → noecho/fullscreen. When not → echo/scrolling.
+(`\x1b[?1049h` enables, `\x1b[?1049l` disables). When alternate screen is active
+→ noecho/fullscreen. When not → echo/scrolling.
 
 The VTerm already tracks this state. Exposing it to the client would enable
 automatic mode switching. This is elegant and simple to implement.
@@ -1381,7 +1823,8 @@ automatic mode switching. This is elegant and simple to implement.
    session 46. ~50-60 lines of HTML/JS/CSS.
 
 3. **Session 54 (review):** Rendering redesign hammock iteration 2. Critique the
-   "fix the 1%" approach. Investigate the escape accumulator idea in more detail.
+   "fix the 1%" approach. Investigate the escape accumulator idea in more
+   detail.
 
 ---
 
@@ -1390,8 +1833,8 @@ automatic mode switching. This is elegant and simple to implement.
 ### The Problem
 
 The web terminal felt sluggish on localhost, especially on keyframes (initial
-render or refresh). A keyframe for an 80x24 terminal sends 1,920 cells. The
-old rendering pipeline per cell:
+render or refresh). A keyframe for an 80x24 terminal sends 1,920 cells. The old
+rendering pipeline per cell:
 
 1. Regex match the HTML string to extract x,y coordinates
 2. Create a throwaway `<div>`, set `innerHTML` to parse the HTML string
@@ -1400,15 +1843,18 @@ old rendering pipeline per cell:
 5. `replaceChild` or `appendChild`
 
 `innerHTML` forces the browser's HTML parser per call. 1,920 innerHTML parses on
-a keyframe is the primary bottleneck. Delta updates (typically tens of cells) are
-fast, but the initial render and any refresh triggers the full keyframe path.
+a keyframe is the primary bottleneck. Delta updates (typically tens of cells)
+are fast, but the initial render and any refresh triggers the full keyframe
+path.
 
 ### What Changed
 
 **vthtml.zig (376 → 370 lines, -6)**
 
-Replaced the `cellToHtml` function (which rendered `<span data-x="5" data-y="10"
-style="...">A</span>` HTML strings) with two smaller helpers:
+Replaced the `cellToHtml` function (which rendered
+`<span data-x="5" data-y="10"
+style="...">A</span>` HTML strings) with two
+smaller helpers:
 
 - `appendCellStyle()`: Writes CSS properties for a cell (bold, italic,
   underline, colors) to an output buffer. Extracted from the style portion of
@@ -1419,15 +1865,16 @@ style="...">A</span>` HTML strings) with two smaller helpers:
 
 **Old format:** `{"cells":["<span data-x=\"5\" data-y=\"10\">A</span>", ...]}`
 
-**New format:** `{"cells":[{"x":5,"y":10,"c":"A","s":"font-weight:bold;"}, ...]}`
+**New format:**
+`{"cells":[{"x":5,"y":10,"c":"A","s":"font-weight:bold;"}, ...]}`
 
 The `c` field is the raw UTF-8 character (JSON-escaped, not HTML-escaped). The
 `s` field is the CSS style string, omitted when empty. This is both smaller on
 the wire and cheaper to generate (no HTML-escaping of `<>&`, no JSON-escaping of
 the HTML string which itself contains escaped quotes).
 
-Removed the `paths.zig` import (was only used for `appendJsonEscaped` on the
-old HTML strings).
+Removed the `paths.zig` import (was only used for `appendJsonEscaped` on the old
+HTML strings).
 
 **index.html (240 → 222 lines, -18)**
 
@@ -1462,8 +1909,8 @@ all of that.
 **Delta updates (typically 5-50 cells):**
 
 Existing spans are now reused instead of replaced. `replaceChild` allocates a
-new DOM node; updating `textContent` + `style.cssText` on the existing node
-does not. This also avoids orphaning the old node (less GC pressure).
+new DOM node; updating `textContent` + `style.cssText` on the existing node does
+not. This also avoids orphaning the old node (less GC pressure).
 
 ### Wire Format Change
 
@@ -1474,10 +1921,10 @@ this is fine - a page reload fetches the new code.
 
 ### Line Count Impact
 
-| File       | Before | After | Change |
-| ---------- | ------ | ----- | ------ |
-| vthtml.zig | 376    | 370   | -6     |
-| index.html | 240    | 222   | -18    |
+| File       | Before | After | Change  |
+| ---------- | ------ | ----- | ------- |
+| vthtml.zig | 376    | 370   | -6      |
+| index.html | 240    | 222   | -18     |
 | **Net**    |        |       | **-24** |
 
 Total codebase: 15 files, ~5,747 lines.
@@ -1489,17 +1936,17 @@ Total codebase: 15 files, ~5,747 lines.
 
 ### Inbox Status
 
-| Item                     | Status | Priority | Notes                        |
-| ------------------------ | ------ | -------- | ---------------------------- |
-| Browser localhost lag     | ✓ Done | -        | Session 50                   |
-| TUI viewer breakage      | ○ Todo | Medium   | Needs reproduction           |
-| TUI viewer keybinds      | ○ Todo | Medium   | Likely rendering, not input  |
-| Read-only OTPs           | ○ Todo | Medium   | Auth scope extension         |
-| Mobile modifier toolbar  | ○ Todo | Medium   | Designed in session 46       |
-| Rendering redesign       | ○ Todo | Low urg  | Multi-session hammock        |
-| Cursor position (narrow) | ○ Todo | Low      | Needs investigation          |
-| Session list SSE         | ○ Todo | Low      | Reactive web session list    |
-| Arch PKGBUILD            | ○ Todo | Low      | Packaging                    |
+| Item                     | Status | Priority | Notes                       |
+| ------------------------ | ------ | -------- | --------------------------- |
+| Browser localhost lag    | ✓ Done | -        | Session 50                  |
+| TUI viewer breakage      | ○ Todo | Medium   | Needs reproduction          |
+| TUI viewer keybinds      | ○ Todo | Medium   | Likely rendering, not input |
+| Read-only OTPs           | ○ Todo | Medium   | Auth scope extension        |
+| Mobile modifier toolbar  | ○ Todo | Medium   | Designed in session 46      |
+| Rendering redesign       | ○ Todo | Low urg  | Multi-session hammock       |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation         |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list   |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                   |
 
 ### Recommendations for Next Sessions
 
@@ -1584,18 +2031,18 @@ Total codebase: 15 files, ~5,771 lines.
 
 ### Inbox Status
 
-| Item                     | Status | Priority | Notes                         |
-| ------------------------ | ------ | -------- | ----------------------------- |
-| Browser auto-takeover    | ✓ Done | -        | Session 49                    |
-| TUI viewer breakage      | ○ Todo | Medium   | Needs reproduction            |
-| TUI viewer keybinds      | ○ Todo | Medium   | Likely rendering, not input   |
-| Read-only OTPs           | ○ Todo | Medium   | Auth scope extension          |
-| Browser localhost lag     | ○ Todo | Medium   | innerHTML parsing bottleneck  |
-| Mobile modifier toolbar  | ○ Todo | Medium   | Designed in session 46        |
-| Rendering redesign       | ○ Todo | Low urg  | Multi-session hammock         |
-| Cursor position (narrow) | ○ Todo | Low      | Needs investigation           |
-| Session list SSE         | ○ Todo | Low      | Reactive web session list     |
-| Arch PKGBUILD            | ○ Todo | Low      | Packaging                     |
+| Item                     | Status | Priority | Notes                        |
+| ------------------------ | ------ | -------- | ---------------------------- |
+| Browser auto-takeover    | ✓ Done | -        | Session 49                   |
+| TUI viewer breakage      | ○ Todo | Medium   | Needs reproduction           |
+| TUI viewer keybinds      | ○ Todo | Medium   | Likely rendering, not input  |
+| Read-only OTPs           | ○ Todo | Medium   | Auth scope extension         |
+| Browser localhost lag    | ○ Todo | Medium   | innerHTML parsing bottleneck |
+| Mobile modifier toolbar  | ○ Todo | Medium   | Designed in session 46       |
+| Rendering redesign       | ○ Todo | Low urg  | Multi-session hammock        |
+| Cursor position (narrow) | ○ Todo | Low      | Needs investigation          |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list    |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                    |
 
 ### Recommendations for Next Sessions
 
@@ -1640,8 +2087,8 @@ Build: Clean. Tests: 43 unit tests passing.
 
 The codebase _shrank_ since session 42. main.zig went from 1,041 to 972 (the
 daemonize/connectAsViewer extraction in session 43). index.html grew by 10 lines
-(refresh button in session 44). All other modules unchanged. 13 of 15 files
-have not changed since session 42. The core is thoroughly stable.
+(refresh button in session 44). All other modules unchanged. 13 of 15 files have
+not changed since session 42. The core is thoroughly stable.
 
 ### What's Working Well
 
@@ -1688,13 +2135,12 @@ Analyzed the output pipeline. For viewers, there are two code paths:
   This is correct but expensive - every output chunk triggers a full viewport
   re-render.
 
-The "break every so often" is likely caused by:
-  a) Race conditions during resize: session resizes, viewer gets
-     `session_resize` message, but some output was already in flight with old
-     dimensions.
-  b) Partial escape sequence delivery: if a multi-byte escape sequence is split
-     across two read()s, the raw passthrough writes partial sequences.
-  c) VTerm and real terminal getting out of sync in panning mode.
+The "break every so often" is likely caused by: a) Race conditions during
+resize: session resizes, viewer gets `session_resize` message, but some output
+was already in flight with old dimensions. b) Partial escape sequence delivery:
+if a multi-byte escape sequence is split across two read()s, the raw passthrough
+writes partial sequences. c) VTerm and real terminal getting out of sync in
+panning mode.
 
 This is a real issue but requires careful investigation to pin down. The user's
 large rendering architecture redesign idea (below) would address this
@@ -1709,21 +2155,21 @@ machine processes every byte _before_ deciding whether to forward it. Viewer
 keybinds (leader → d/t/s/h/j/k/l/etc.) should work identically to primary
 keybinds.
 
-Could NOT find a code-level bug. Possible explanations:
-  a) The user's shell or multiplexer (tmux/screen) is intercepting Ctrl+A before
-     vanish sees it.
-  b) Related to TUI breakage (#2) - if the viewer's terminal state is corrupted,
-     the status bar / hint rendering may be broken, making it _look_ like
-     keybinds don't work even if the actions fire.
-  c) A specific key combination that doesn't match the is_ctrl classification.
+Could NOT find a code-level bug. Possible explanations: a) The user's shell or
+multiplexer (tmux/screen) is intercepting Ctrl+A before vanish sees it. b)
+Related to TUI breakage (#2) - if the viewer's terminal state is corrupted, the
+status bar / hint rendering may be broken, making it _look_ like keybinds don't
+work even if the actions fire. c) A specific key combination that doesn't match
+the is_ctrl classification.
 
 Priority: Medium. Needs reproduction steps. If the hint/status bar doesn't
-appear after pressing leader, it's likely (b) - a rendering issue masquerading as
-an input issue.
+appear after pressing leader, it's likely (b) - a rendering issue masquerading
+as an input issue.
 
 **4. Browser auto-takeover on keypress**
 
 Found the cause: index.html line 226:
+
 ```js
 .then(r => { if (r.status === 409 && !isPrimary) takeover(); });
 ```
@@ -1740,8 +2186,8 @@ Alternatively: only auto-takeover if there is NO existing primary (409 means no
 active primary), which is the current behavior. The bug might be that it takes
 over even when a native terminal client IS the primary? Need to check: does the
 409 occur when a native client is primary but not an SSE client? Looking at
-`handleInput` in http.zig:484-495 - it checks `sse.is_primary`, not whether
-the _session_ has a primary. So if the primary is a native client (not SSE), the
+`handleInput` in http.zig:484-495 - it checks `sse.is_primary`, not whether the
+_session_ has a primary. So if the primary is a native client (not SSE), the
 HTTP endpoint returns 409, triggering auto-takeover via the protocol.
 
 This IS a real bug: typing in the browser steals the session from a native
@@ -1757,10 +2203,11 @@ Priority: **High**. This causes data loss / session disruption.
 
 Currently, OTPs grant full access (can takeover, send input). The user wants
 OTPs that only allow viewing. This would require:
-  - A new scope in auth.zig (e.g., `scope: .viewer`)
-  - The HTTP endpoints for `/input` and `/takeover` checking the scope
-  - The `vanish otp` command accepting a `--read-only` flag
-  - The SSE connection respecting the scope (never sending takeover)
+
+- A new scope in auth.zig (e.g., `scope: .viewer`)
+- The HTTP endpoints for `/input` and `/takeover` checking the scope
+- The `vanish otp` command accepting a `--read-only` flag
+- The SSE connection respecting the scope (never sending takeover)
 
 The auth system already has scoping (`scope: .global` vs `.session`). Adding a
 `read_only` flag to the JWT payload is straightforward.
@@ -1770,10 +2217,11 @@ Priority: Medium. Good security feature.
 **6. Browser feels laggy on localhost**
 
 Analyzed the rendering pipeline:
-  - SSE events arrive as JSON with cell HTML
-  - Each cell creates a DOM element via `innerHTML` parsing (line 165)
-  - Cells are positioned absolutely with pixel coordinates
-  - On keyframe, potentially thousands of cells created at once
+
+- SSE events arrive as JSON with cell HTML
+- Each cell creates a DOM element via `innerHTML` parsing (line 165)
+- Cells are positioned absolutely with pixel coordinates
+- On keyframe, potentially thousands of cells created at once
 
 The `innerHTML` + `createElement` pattern is slow. For each cell update:
 `temp.innerHTML = cellHtml` creates a throwaway div, parses HTML, extracts the
@@ -1783,12 +2231,10 @@ A keyframe with 80x24 = 1,920 cells means 1,920 innerHTML parses. That's the
 likely lag source. Delta updates are typically small (tens of cells) and should
 be fast.
 
-Possible fixes:
-  a) Use `document.createElement` + `textContent` instead of innerHTML parsing
-  b) Batch DOM updates inside `requestAnimationFrame`
-  c) Send the data as structured JSON (not HTML strings) and construct DOM
-     elements directly
-  d) Use a canvas instead of DOM elements
+Possible fixes: a) Use `document.createElement` + `textContent` instead of
+innerHTML parsing b) Batch DOM updates inside `requestAnimationFrame` c) Send
+the data as structured JSON (not HTML strings) and construct DOM elements
+directly d) Use a canvas instead of DOM elements
 
 The server already sends cell data with embedded HTML. Changing to structured
 JSON would require server changes (vthtml.zig). The simplest client-side fix is
@@ -1805,6 +2251,7 @@ dropping the HTTP client in favor of thread-per-connection. This is essentially
 a rewrite of the output pipeline.
 
 Key insights from the idea:
+
 - The current approach (raw byte passthrough for non-panning viewers) is
   fundamentally fragile for TUIs
 - Server-side VTerm → abstract rendering commands → client-specific rendering
@@ -1849,7 +2296,7 @@ This would fix the TUI breakage and lag issues at the root.
 | TUI viewer breakage      | ○ Todo | Medium   | Needs reproduction           |
 | TUI viewer keybinds      | ○ Todo | Medium   | Likely rendering, not input  |
 | Read-only OTPs           | ○ Todo | Medium   | Auth scope extension         |
-| Browser localhost lag     | ○ Todo | Medium   | innerHTML parsing bottleneck |
+| Browser localhost lag    | ○ Todo | Medium   | innerHTML parsing bottleneck |
 | Rendering redesign       | ○ Todo | Low urg  | Multi-session hammock        |
 | Mobile modifier toolbar  | ○ Todo | Medium   | Designed in session 46       |
 | Cursor position (narrow) | ○ Todo | Low      | Needs investigation          |
@@ -1865,8 +2312,8 @@ This would fix the TUI breakage and lag issues at the root.
 2. **Session 50:** Browser lag investigation. Profile the keyframe rendering,
    try replacing innerHTML with createElement, batch in requestAnimationFrame.
 
-3. **Session 51 (review):** Start hammocking the rendering architecture redesign.
-   The user explicitly wants multiple iterations of design/critique.
+3. **Session 51 (review):** Start hammocking the rendering architecture
+   redesign. The user explicitly wants multiple iterations of design/critique.
 
 ---
 
