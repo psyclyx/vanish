@@ -501,6 +501,10 @@ fn runClientLoop(client: *Client) !void {
             client.cols = size.cols;
             client.rows = size.rows;
             client.viewport.updateLocal(size.cols, size.rows);
+            if (client.viewport.needsPanning()) {
+                client.renderViewport();
+            }
+            client.renderStatusBar();
             const resize = protocol.Resize{ .cols = size.cols, .rows = size.rows };
             protocol.writeStruct(client.fd, @intFromEnum(protocol.ClientMsg.resize), resize) catch {};
         }
@@ -553,6 +557,14 @@ fn runClientLoop(client: *Client) !void {
                     protocol.readExact(client.fd, &buf) catch break;
                     const session_resize = std.mem.bytesToValue(protocol.SessionResize, &buf);
                     client.viewport.updateSession(session_resize.cols, session_resize.rows);
+                    if (client.vterm) |vt| {
+                        vt.resize(session_resize.cols, session_resize.rows) catch {};
+                    }
+                    if (client.viewport.needsPanning()) {
+                        client.renderViewport();
+                    } else {
+                        _ = posix.write(STDOUT, "\x1b[2J\x1b[H") catch {};
+                    }
                     client.renderStatusBar();
                 },
                 else => {
