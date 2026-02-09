@@ -170,6 +170,46 @@ lightweight libghostty terminal session multiplexer with web access
 
 # Progress Notes
 
+## 2026-02-09: Session 75 - writeCell Extraction (S70 Decomposition Complete)
+
+### What was done
+
+Implemented the final decomposition candidate from Session 70's analysis:
+extracted `writeCell` and `writeCodepoint` from `dumpViewport` in terminal.zig.
+
+- `writeCell` (20 lines): handles the three cell content types (codepoint,
+  codepoint_grapheme, fallback). Takes writer, cell, and row_pin. Pure rendering
+  — no style or position logic.
+
+- `writeCodepoint` (4 lines): encodes a u21 codepoint to UTF-8 and writes it.
+  Replaces 3 instances of the encode-to-buffer pattern that appeared inline in
+  the original code.
+
+- `dumpViewport` inner loop: reduced from ~35 lines of inline cell rendering to
+  a single `try writeCell(writer, cell, &row_pin)` call. The loop structure
+  (iterate rows → iterate cells → check style → write cell) is now immediately
+  visible.
+
+Build and all tests pass.
+
+### S70 decomposition status: COMPLETE
+
+All three candidates identified in Session 70 are now done:
+
+1. ~~`cmdNew` in main.zig~~ — Done (S71). `parseCmdNewArgs` + `forkSession`.
+2. ~~`processRequest` in http.zig~~ — Done (S74). `parseSessionRoute` +
+   `dispatchSessionRoute`.
+3. ~~`dumpViewport` in terminal.zig~~ — Done (S75). `writeCell` +
+   `writeCodepoint`.
+
+### Next session recommendations
+
+Session 76: Architecture review (3 sessions since S73). This is a natural
+checkpoint now that all S70 decomposition work is complete. The review can
+assess: has the decomposition effort improved the codebase? Are there new
+candidates? The codebase has been stable at ~6,120 lines for many sessions —
+the work has been pure quality improvement.
+
 ## 2026-02-09: Session 74 - processRequest Decomposition
 
 ### What was done
