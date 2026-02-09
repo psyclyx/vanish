@@ -306,6 +306,176 @@ error handling for unknown messages.
 Session 68 should write the response defending the current protocol design.
 Session 69 will be the reflection.
 
+## 2026-02-09: Session 68 - Response: Defending the Protocol (With Concessions)
+
+The critique in Session 67 was thorough. Some points are strong, some are not.
+This response takes each point on its merits.
+
+### Point-by-point response
+
+**1. Native byte order: The critic is right, but the fix is wrong.**
+
+The critique correctly identifies that native byte order is an implicit
+assumption. But `nativeTo`/`toNative` on every field is the wrong fix for
+vanish. Here's why:
+
+Vanish communicates over Unix domain sockets. Two processes sharing a UDS are,
+by definition, on the same machine, same kernel, same architecture. The
+cross-architecture scenario (NFS-shared socket dir, cross-compiled client) is
+not a real use case — it's a thought experiment. UDS requires both endpoints to
+be on the same host. The TCP path (HTTP bridge) doesn't use the binary protocol
+at all; the HTTP server deserializes the protocol structs and reserializes as
+JSON/HTML over HTTP. There is no path where the binary wire format crosses an
+architecture boundary.
+
+That said, there's a stronger argument hiding here: **documentation**. The
+protocol should explicitly state "native byte order, same-host only" rather than
+leaving it implicit. If someone ever ports vanish to a network-transparent
+transport, they should know this is a conscious constraint, not an oversight.
+
+**Verdict: No code change. Add a comment to protocol.zig stating the byte order
+assumption and why.**
+
+**2. Struct size tests: The critic is right. Do this.**
+
+This is the strongest point in the critique. There's no good defense for having
+a size test on Header but not on Welcome, ClientInfo, Hello, or the other wire
+structs. The argument isn't about platform portability (see point 1 — same host,
+same arch). The argument is about **catching silent regressions**. If someone
+reorders fields in ClientInfo, the `header.len / @sizeOf(ClientInfo)` parser
+silently reads garbage. A comptime size assertion catches this at build time.
+
+The existing `header size` test proved the instinct was right. The mistake was
+stopping at one struct.
+
+**Verdict: Add `@sizeOf` tests for all wire structs. This is cheap, prevents
+real bugs, and should have been done from the start.**
+
+**3. Version negotiation: The critic is wrong.**
+
+This is the argument I disagree with most strongly. The case for adding a
+version byte sounds cheap ("1 byte and ~5 lines"), but it hides a much larger
+commitment:
+
+- A version byte without defined semantics is cargo cult. What does version 2
+  mean? What does a server do when it sees version 3? Fall back? Reject? The
+  version byte is meaningless without a negotiation *protocol*, which is not 5
+  lines — it's a state machine.
+- Vanish is a single binary. The client and server are always the same version,
+  compiled together, deployed together. There is no scenario where a v1.1 client
+  talks to a v1.0 server — the binary includes both. This is fundamentally
+  different from HTTP or protobuf, where client and server are independently
+  deployed.
+- The hello/welcome handshake already contains an implicit version check: struct
+  size. If the Hello struct grows, `readExact` fails with EndOfStream because
+  the expected byte count doesn't match. This isn't graceful, but it's fail-fast
+  — which is exactly what you want when the single binary assumption breaks.
+- YAGNI applies. If vanish ever needs a network protocol between independent
+  binaries, that's a different protocol. Adding version negotiation to a
+  single-binary local-socket protocol is designing for a future that doesn't
+  exist and probably never will.
+
+**Verdict: No change. The single-binary deployment model makes version
+negotiation unnecessary. If that model ever changes, the protocol changes too —
+and a version byte retrofit is the least of the work.**
+
+**4. Message-level integrity: The critic is wrong.**
+
+The critique acknowledges UDS is reliable, then pivots to "but what about
+framing desync from bugs." This is circular: if there's a bug in the framing
+code, adding a checksum to the framing code doesn't help — the checksum is
+computed by the same buggy code. A CRC catches bit flips in transit (not
+applicable to UDS) or detects desync after it happens (useful for debugging, but
+so is "invalid message type 0x00").
+
+The TCP angle is a red herring. The HTTP bridge doesn't expose the binary
+protocol over TCP. It reads protocol messages from UDS, parses them into
+structured data, and sends HTML/JSON over HTTP with its own framing (SSE
+newline-delimited, HTTP chunked encoding). The binary protocol never touches
+TCP.
+
+Adding per-message checksums to a local-only protocol is complexity without
+benefit. If a framing bug exists, tests catch it. If memory corruption causes
+garbage, a CRC won't save you.
+
+**Verdict: No change.**
+
+**5. Fixed-size term field: The critic makes a fair point that doesn't matter.**
+
+Yes, `[64]u8` with null termination is a C pattern. Yes, length-prefixed
+variable data in the payload would be more Zig-idiomatic. But:
+
+- The Hello message is sent exactly once per connection. 50 wasted bytes once
+  per session lifetime is irrelevant.
+- TERM values are standardized and short. No real TERM value exceeds 63 bytes.
+  The truncation limit is not a practical constraint.
+- The fixed-size approach means Hello can be deserialized with
+  `bytesToValue` — zero allocation, zero copying, zero parsing. A
+  variable-length field requires either a two-phase read or a length prefix with
+  separate allocation. For a field that's always < 20 bytes, this is
+  unnecessary complexity.
+- `setTerm`/`getTerm` are 5 lines total. The "manual null-termination logic"
+  is trivial.
+
+The critic is technically correct (this is a C-ism) but practically wrong
+(the C-ism is the simpler solution here).
+
+**Verdict: No change. The fixed-size field is simpler than the alternative for
+this specific use case.**
+
+**6. output/full distinction: The critic identifies a documentation gap, not a
+protocol gap.**
+
+The critique says "from the wire format alone, there's no way to distinguish
+why a full redraw happened." This is true, and it's fine. The *why* is not the
+protocol's job. `full` means "here is the complete screen state." `output` means
+"here is incremental terminal output." The client doesn't need to know why —
+it just renders.
+
+The state machine concern (third-party client needs to read source) is valid but
+hypothetical. If third-party clients become a goal, a protocol spec document
+would be needed regardless of whether the wire format encodes "reason for full."
+The fix is documentation, not protocol changes.
+
+**Verdict: No code change. If/when a protocol spec is written, document the
+state machine.**
+
+**7. Unknown message handling: The critic is right, and we already handle it.**
+
+The critique asks: "what does a receiver do with an unknown msg_type?" The
+answer: skip `header.len` bytes. The header+payload framing already supports
+this — you always know how many bytes to skip, even if you don't understand the
+message type. The current code drops the connection on unknown types, which is
+arguably correct for a single-binary protocol (an unknown type means a bug, not
+a version mismatch).
+
+But the critic is right that this should be documented. The high-bit convention
+(server messages >= 0x80) should also be documented.
+
+**Verdict: Document the convention. No code change needed — the framing already
+supports forward-compatible skipping.**
+
+### Summary of actions
+
+| Point | Verdict | Action |
+|-------|---------|--------|
+| 1. Byte order | Right problem, wrong fix | Document the assumption |
+| 2. Struct sizes | Correct | Add size tests for all wire structs |
+| 3. Versioning | Wrong | No change (single binary) |
+| 4. Checksums | Wrong | No change (local only) |
+| 5. Fixed term | Technically right, practically wrong | No change |
+| 6. output/full | Documentation gap | Document if spec written |
+| 7. Unknown msgs | Right about docs | Document conventions |
+
+**Two concrete actions:** add struct size tests, add protocol assumptions
+comment. Everything else is documentation that belongs in a protocol spec, which
+doesn't exist yet and isn't needed for a single-implementation project.
+
+### Recommendations for Next Session
+
+Session 69: Reflection on the protocol debate. Then implement the two concrete
+actions (struct size tests + protocol comment).
+
 ---
 
 > Earlier session notes (1-66) archived to
