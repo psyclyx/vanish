@@ -65,13 +65,14 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
-Done (Sessions 55-69): Resize re-render fix (S55), cursor position fix (S56),
+Done (Sessions 55-70): Resize re-render fix (S55), cursor position fix (S56),
 architecture review (S57), Arch PKGBUILD + LICENSE (S58), session list SSE
 (S59), architecture review + http.zig devil's advocate (S60), http.zig
 reflection + archive cleanup (S61), docs audit + dual-bind fix (S62), v1.0.0 tag
 (S63), index.html splitting devil's advocate (S64), response (S65), index.html
 reflection + architecture review (S66), protocol devil's advocate (S67), protocol
-defense (S68), protocol reflection + struct size tests + protocol comment (S69).
+defense (S68), protocol reflection + struct size tests + protocol comment (S69),
+abstraction interrogation + function decomposition analysis (S70).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -166,6 +167,198 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 70 - Abstraction Interrogation: Function Decomposition
+
+### Context
+
+Sessions 67-69 completed the protocol debate cycle. This is the 3-session check:
+interrogate abstractions for soundness, maintainability, simplicity vs.
+complectedness. The prompt specifically asks for "more smaller (and simpler
+(decomplected)) functions" over "longer functions with comments explaining
+individual steps."
+
+### The Survey
+
+I read every source file. Here's what I found, ranked by function length:
+
+| Function | File | Lines | Pattern |
+|----------|------|-------|---------|
+| `eventLoop` | http.zig | ~135 | Poll loop with 4 client types |
+| `cmdNew` | main.zig | ~122 | Arg parsing + fork + pipe + attach |
+| `dumpViewport` | terminal.zig | ~105 | Cell-by-cell viewport rendering |
+| `eventLoop` | session.zig | ~100 | Poll loop with PTY + clients |
+| `runClientLoop` | client.zig | ~99 | Poll loop with stdin + session |
+| `handleSseStream` | http.zig | ~96 | SSE setup: auth, connect, keyframe |
+| `handleClientInput` | session.zig | ~75 | Message dispatch switch |
+| `handleNewConnection` | session.zig | ~74 | Hello handshake validation |
+| `processRequest` | http.zig | ~73 | HTTP routing if-else chain |
+| `handleSseSessionOutput` | http.zig | ~73 | Message dispatch for SSE |
+
+### What's good
+
+1. **session.zig is already well-decomposed.** The event loop delegates to named
+   functions: `handlePtyOutput`, `handleNewConnection`, `handleClientInput`,
+   `sendTerminalState`, `handleTakeover`, `sendClientList`, `kickClient`,
+   `notifyViewersResize`, `removePrimary`, `removeViewer`. Each is focused and
+   short. This file is the model for the rest.
+
+2. **client.zig's Viewport is clean.** 12 small methods, each does one thing.
+   `handleInput` → `executeAction` → specific viewport ops. Good separation.
+
+3. **protocol.zig is tight.** 214 lines, well-tested, minimal. No decomposition
+   needed.
+
+4. **terminal.zig helper functions** (`stylesEqual`, `writeStyle`) already
+   extract the right concerns from `dumpViewport`.
+
+### What could be better
+
+**1. `processRequest` in http.zig (lines 348-421) — the routing chain.**
+
+This is a 73-line if-else chain doing URL matching and dispatching. The pattern
+is repetitive: extract session name from `/api/sessions/{name}/{action}`, check
+method, call handler. The same 6-line block (parse name_start/name_end, validate,
+call handler, else send error) appears 4 times with different suffixes
+(`/stream`, `/input`, `/resize`, `/takeover`).
+
+A route table or a `parseSessionRoute` helper that extracts the session name and
+action suffix would reduce this to ~25 lines. But: the current code is explicit
+and greppable. You can find every endpoint by reading one function. A route
+table adds indirection. The repetition is annoying but not harmful.
+
+**Verdict: Extract a `parseSessionRoute` helper to reduce the 4 repetitive
+blocks. Keep the explicit dispatch (no route table). This is a small win.**
+
+**2. `eventLoop` in http.zig (lines 164-299) — the big poll loop.**
+
+This is the longest function at ~135 lines. It builds the poll list, then
+dispatches events for 4 different client types (listen sockets, HTTP clients,
+SSE clients, session list clients). The per-type handling is already delegated to
+other functions — the length comes from building the poll list and iterating with
+index tracking.
+
+Compare with session.zig's `eventLoop` (~100 lines) which does the same pattern
+but with fewer client types. Both follow the same structure: build poll list →
+poll → dispatch by index. This is inherent complexity — the poll API requires
+index tracking. Extracting "build poll list" into a helper saves lines but
+fragments the poll-index correspondence that the reader needs to understand.
+
+**Verdict: Leave as-is. The length is accidental (4 client types), not essential
+(poor decomposition). Extracting pieces would obscure the poll-index
+correspondence. If a 5th client type is added, reconsider.**
+
+**3. `cmdNew` in main.zig (lines 252-373) — fork + pipe + attach.**
+
+122 lines mixing arg parsing, name generation, socket resolution, pipe creation,
+fork, child daemonization, parent wait, auto-serve, and auto-attach. This does
+too many things. The decomposition is natural:
+
+- `parseCmdNewArgs` → returns flags + session name + cmd args
+- `forkSession` → fork + daemonize + pipe signaling (returns success/failure)
+- The rest (auto-name printing, serve, attach) stays in `cmdNew`
+
+This would reduce `cmdNew` from 122 to ~30 lines with two clearly-named helpers.
+
+**Verdict: Decompose. This is the strongest candidate.**
+
+**4. `dumpViewport` in terminal.zig (lines 82-188) — viewport rendering.**
+
+105 lines, but already partly decomposed (`writeStyle`, `stylesEqual`). The
+remaining bulk is the cell rendering switch (lines 138-169): codepoint vs.
+codepoint_grapheme vs. other. This is 30 lines that could be a `writeCell`
+function.
+
+**Verdict: Extract `writeCell`. Small win, improves readability of the inner
+loop.**
+
+**5. `handleSseStream` in http.zig (lines 632-727) — SSE setup.**
+
+96 lines of sequential setup: validate auth → check scope → connect to session
+→ send hello → read welcome → create vterm → create screen buffer → send SSE
+headers → read initial state → send keyframe → move to SSE list. This is a
+pipeline — each step depends on the previous. Extracting steps into functions
+would mean passing many intermediate values between them, creating parameter
+lists that are longer than the code they replace.
+
+**Verdict: Leave as-is. Sequential pipelines are readable top-to-bottom. The
+length is from the number of setup steps, not from complexity.**
+
+**6. `handleSseSessionOutput` in http.zig (lines 729-802) — SSE message dispatch.**
+
+73 lines, mostly a switch on message type. Each case reads and processes a
+specific message. Similar to `handleClientInput` in session.zig, which is the
+same pattern at ~75 lines. Neither is particularly long; the switch cases are
+each 10-15 lines.
+
+**Verdict: Fine as-is.**
+
+### The specification document
+
+The prompt says "maintain a detailed specification document." No `doc/spec.md`
+exists. DESIGN.md (134 lines) covers architecture but not behavior: it doesn't
+document edge cases, error handling, OTP flow, scrollback semantics, etc. This
+is a gap. Creating it would be valuable — not for users (they have the man
+page), but for the developer maintaining this code. When context windows reset
+between sessions, the spec is the authoritative reference for "what should this
+do?"
+
+**Verdict: This should be the next substantial task. Not this session — this
+session is the analysis. But soon.**
+
+### Summary: What to actually do
+
+Three concrete decomposition candidates, in order of impact:
+
+1. **`cmdNew` in main.zig** — Extract `parseCmdNewArgs` and `forkSession`. Highest
+   impact: 122→~30 lines in the main function, clearer separation of concerns.
+2. **`processRequest` in http.zig** — Extract `parseSessionRoute` to deduplicate
+   the 4 session endpoint blocks. Medium impact: 73→~40 lines.
+3. **`dumpViewport` in terminal.zig** — Extract `writeCell`. Small impact but
+   good for readability of the hot loop.
+
+None of these change behavior. Pure refactoring. Each is independently
+committable.
+
+### What's working well
+
+- **session.zig** is the gold standard in this codebase. Small, focused functions,
+  clear naming, event loop delegates to handlers. Every other file should aspire
+  to look like this.
+- **Viewport** in client.zig is clean. Small methods, no side effects beyond
+  the struct.
+- **Protocol definitions** are minimal and correct.
+- **Auth flow** is reasonable — `exchangeOtp` and `validateToken` are ~50-70
+  lines each but doing inherently sequential crypto operations.
+
+### What's simple vs. complected
+
+**Simple:** The protocol. The session model (primary + viewers). The viewport
+panning. The keybind state machine.
+
+**Complected (but necessarily so):** The HTTP event loop mixes 4 client types
+because they share a poll loop. This is inherent to the architecture — a single
+event loop server. The alternative (threads, or separate servers) would be
+worse. The http.zig SSE pipeline mixes auth, protocol, terminal, and HTML
+rendering because an SSE connection touches all four layers.
+
+**Complected (and fixable):** `cmdNew` mixes argument parsing, process
+management, and session lifecycle. `processRequest` repeats the session-name
+extraction pattern.
+
+### Architecture health
+
+Good. 15 files, 5,797 lines, clear module boundaries. The dependency graph is
+acyclic. The biggest risk is http.zig at 951 lines — but that was debated and
+settled in sessions 60-61. The function-level decomposition gaps identified here
+are real but modest. This codebase is maintainable.
+
+### Next session recommendations
+
+Session 71: Implement decomposition #1 (`cmdNew` → extract `parseCmdNewArgs` +
+`forkSession`). This is the highest-impact refactor and can be done in one
+session. Commit it, then reassess whether #2 and #3 are still worth doing or if
+the codebase is "done enough."
 
 ## 2026-02-09: Session 67 - Devil's Advocate: The Protocol Design
 
