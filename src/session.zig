@@ -205,8 +205,10 @@ fn handlePtyOutput(self: *Session) !void {
             self.removePrimary();
         };
     }
-    for (self.viewers.items, 0..) |c, i| {
-        protocol.writeMsg(c.fd, @intFromEnum(protocol.ServerMsg.output), data) catch {
+    var i = self.viewers.items.len;
+    while (i > 0) {
+        i -= 1;
+        protocol.writeMsg(self.viewers.items[i].fd, @intFromEnum(protocol.ServerMsg.output), data) catch {
             self.removeViewer(i);
         };
     }
