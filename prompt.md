@@ -65,7 +65,7 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
-Done (Sessions 55-73): Resize re-render fix (S55), cursor position fix (S56),
+Done (Sessions 55-74): Resize re-render fix (S55), cursor position fix (S56),
 architecture review (S57), Arch PKGBUILD + LICENSE (S58), session list SSE
 (S59), architecture review + http.zig devil's advocate (S60), http.zig
 reflection + archive cleanup (S61), docs audit + dual-bind fix (S62), v1.0.0 tag
@@ -73,7 +73,8 @@ reflection + archive cleanup (S61), docs audit + dual-bind fix (S62), v1.0.0 tag
 reflection + architecture review (S66), protocol devil's advocate (S67), protocol
 defense (S68), protocol reflection + struct size tests + protocol comment (S69),
 abstraction interrogation + function decomposition analysis (S70), cmdNew
-decomposition (S71), specification document (S72), architecture review (S73).
+decomposition (S71), specification document (S72), architecture review (S73),
+processRequest decomposition (S74).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -168,6 +169,62 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 74 - processRequest Decomposition
+
+### What was done
+
+Implemented decomposition #2 from Session 70's analysis: extracted
+`parseSessionRoute` and `dispatchSessionRoute` from the 73-line `processRequest`
+function in http.zig.
+
+- `parseSessionRoute` (8 lines): pure function, takes a URL path, returns
+  `?SessionRoute{ name, action }`. Parses `/api/sessions/{name}/{action}` using
+  `lastIndexOfScalar` to split on the final slash. Returns null for paths
+  without the prefix, without a slash after the prefix, or with an empty name.
+  Tested with 7 cases including edge cases.
+
+- `dispatchSessionRoute` (15 lines): dispatches based on the parsed action.
+  Handles stream/input/resize/takeover with proper method checking, 405 for
+  known actions with wrong method, 404 for unknown actions.
+
+- `processRequest` (25 lines, down from 73): thin router. Fixed routes
+  (/, /auth, /api/sessions, /api/sessions/stream) are matched first, then
+  `parseSessionRoute` handles dynamic session routes, with 404 fallthrough.
+
+Additional change: the `const eql = std.mem.eql` local alias reduces repetition
+in both `processRequest` and `dispatchSessionRoute`.
+
+Minor behavioral change: empty session names in routes now return 404 (Not
+Found) instead of 400 (Invalid session name). This is more correct — an empty
+name means the URL doesn't match any route, not that the session name is invalid.
+
+Build and all tests pass.
+
+### Remaining decomposition candidates from S70
+
+3. **`dumpViewport` in terminal.zig** — Extract `writeCell`. Small impact.
+
+This is the last remaining candidate. It's a readability improvement, not a
+deduplication. Worth doing but low priority.
+
+### Status of S70 decomposition candidates
+
+1. ~~`cmdNew` in main.zig~~ — Done (S71). `parseCmdNewArgs` + `forkSession`.
+2. ~~`processRequest` in http.zig~~ — Done (S74). `parseSessionRoute` +
+   `dispatchSessionRoute`.
+3. `dumpViewport` in terminal.zig — Pending. Extract `writeCell`.
+
+### Next session recommendations
+
+Session 75: Either implement the last decomposition candidate (`writeCell`
+extraction from `dumpViewport`) or do something different — all three candidates
+from S70 will be addressed. The next 3-session architecture check is S76
+(3 sessions after S73).
+
+Alternatively, the prompt's "every 3 sessions, interrogate abstractions" cadence
+means S76 is the next review, not S75. S75 could be a good time for the
+`writeCell` extraction, leaving S76 clean for the review.
 
 ## 2026-02-09: Session 73 - Architecture Review
 
