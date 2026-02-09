@@ -49,9 +49,21 @@ Current:
   Hammock iter 2 complete: confirmed "fix the 1%" approach. Resize re-render
   fix landed in session 55. Escape accumulator and periodic heartbeat deemed
   unnecessary. Echo/noecho mode detection remains a future optimization.
-- Cursor position bug for narrow primary sessions.
 - Session list SSE (reactive in web).
 - Arch PKGBUILD.
+
+Done (Session 56):
+
+- ✓ Fixed cursor position bug. Three fixes across native and web clients:
+  1. dumpViewport (panning mode): cursor now positioned at correct location
+     after rendering cells, adjusted for viewport offset.
+  2. dumpScreen (full state transfer): TerminalFormatter now includes cursor
+     position in VT output (was using .styles extra which omitted cursor).
+  3. Web terminal: cursor position (cx/cy) now included in SSE JSON updates.
+     Dedicated cursor element overlays the cell at cursor position. Also tracks
+     cursor-only moves (no cell changes) via last_cursor_x/y on SseClient.
+  terminal.zig: 335 → 351 (+16), vthtml.zig: 370 → 374 (+4),
+  http.zig: 923 → 936 (+13), index.html: 292 → 304 (+12). Net +45 lines.
 
 Done (Session 55):
 
@@ -415,6 +427,134 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 56 - Fix Cursor Position Bug
+
+### What Changed
+
+Fixed cursor position tracking across all three rendering paths: native panning
+mode, full state transfer, and web terminal. This was a long-standing bug where
+the cursor was never explicitly positioned after rendering.
+
+**terminal.zig (335 → 351 lines, +16)**
+
+Two fixes:
+
+**1. `dumpViewport()` - cursor positioning after viewport render:**
+
+Before: After rendering all visible cells, the function returned without
+positioning the cursor. The cursor was left wherever the last cell render
+positioned it (end of the last row). In panning mode, this meant the cursor was
+always in the wrong position.
+
+After: Reads cursor position from `screen.cursor.x` and `screen.cursor.y`.
+If the cursor falls within the visible viewport (offset_x ≤ cursor.x < end_x,
+offset_y ≤ cursor.y < end_y), emits a CUP sequence (`\x1b[cy;cxH`) with the
+cursor position adjusted for the viewport offset.
+
+**2. `dumpScreen()` - cursor position in full state transfer:**
+
+Before: Used `TerminalFormatter` with default `.styles` extra, which has
+`screen.cursor = false`. The full state dump sent to newly-connecting clients
+never included cursor position.
+
+After: Sets `formatter.extra.screen.cursor = true` so the TerminalFormatter
+emits a CUP sequence at the end of the screen dump. New viewers now have the
+cursor in the correct position from the start.
+
+**3. `getCursor()` - new helper method:**
+
+Returns `{ x, y }` from `self.term.screens.active.cursor`. Used by the HTTP
+server to include cursor position in SSE updates.
+
+**vthtml.zig (370 → 374 lines, +4)**
+
+`updatesToJson()` now accepts `cursor_x` and `cursor_y` parameters and includes
+them in the JSON output as `"cx"` and `"cy"` fields. Every SSE update (keyframe
+and delta) now contains the current cursor position.
+
+**http.zig (923 → 936 lines, +13)**
+
+- `SseClient` gains `last_cursor_x` and `last_cursor_y` fields.
+- `sendSseUpdate()` accepts cursor position parameters, passes them through to
+  `updatesToJson()`.
+- All four call sites (initial keyframe, delta update, resize keyframe, periodic
+  keyframe) now extract cursor position via `vterm.getCursor()`.
+- Delta update path: sends an update even when no cells changed if the cursor
+  moved. This handles arrow key navigation, cursor repositioning, etc.
+
+**index.html (292 → 304 lines, +12)**
+
+- CSS: `#cursor` element with semi-transparent background, `pointer-events: none`
+  (click-through), `z-index: 1` (above cell content).
+- HTML: Dedicated `<div id="cursor">` element inside `#term`.
+- JS: `handleUpdate()` reads `cx`/`cy` from the JSON and positions the cursor
+  element. The `+4` offset accounts for the grid's `top`/`left` padding.
+
+### Root Cause Analysis
+
+The cursor was never tracked because the original architecture had two distinct
+output paths:
+
+1. **Passthrough mode** (viewer >= session): Raw bytes flow directly to STDOUT.
+   The cursor positioning escape sequences from the application are included in
+   the raw stream, so the cursor works correctly by accident. No bug here.
+
+2. **Panning mode** (viewer < session): Output feeds into a local VTerm, then
+   `dumpViewport()` re-renders a subset of the screen. This path reconstructed
+   the cell content but discarded the cursor position. Every render left the
+   cursor at the end of the last row instead of where the application's cursor
+   was.
+
+3. **Web client**: The cell-level delta system tracked cell content and styles
+   but never cursor position. The web terminal had no visible cursor at all.
+
+4. **Full state transfer** (new client connects): `dumpScreen()` used the
+   TerminalFormatter with `.styles` extra which explicitly omits cursor position.
+   New clients started with the cursor at home position regardless of the
+   session's actual cursor state.
+
+### Line Count Impact
+
+| File         | Before | After | Change  |
+| ------------ | ------ | ----- | ------- |
+| terminal.zig | 335    | 351   | +16     |
+| vthtml.zig   | 370    | 374   | +4      |
+| http.zig     | 923    | 936   | +13     |
+| index.html   | 292    | 304   | +12     |
+| **Net**      |        |       | **+45** |
+
+Total codebase: 15 files, ~5,934 lines.
+
+### Testing
+
+- Build: Clean
+- Unit tests: 44 tests, all passing
+
+### Inbox Status
+
+| Item                     | Status | Priority | Notes                             |
+| ------------------------ | ------ | -------- | --------------------------------- |
+| Cursor position bug      | ✓ Done | -        | Session 56: all three paths fixed |
+| Rendering redesign       | ○ Hmck | Low urg  | Resize fix + cursor fix may cover |
+| Session list SSE         | ○ Todo | Low      | Reactive web session list         |
+| Arch PKGBUILD            | ○ Todo | Low      | Packaging                         |
+
+### Recommendations for Next Sessions
+
+1. **Session 57 (review):** Architecture review (3-session checkpoint since
+   session 54). Assess overall state of the project. Remaining items are all
+   polish/packaging - the core functionality is complete.
+
+2. **Session 58:** Session list SSE or Arch PKGBUILD. Both are polish items.
+   Session list SSE would push index.html past 320 lines - evaluate whether
+   to split JS at that point.
+
+3. **Session 59:** Rendering redesign hammock iteration 3 - assess whether the
+   resize fix (session 55) + cursor fix (session 56) resolve the remaining
+   rendering concerns, or whether echo/noecho detection is still worth pursuing.
+
+---
 
 ## 2026-02-09: Session 55 - Fix TUI Viewer Resize Re-Render
 
