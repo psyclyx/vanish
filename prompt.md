@@ -73,7 +73,7 @@ reflection + archive cleanup (S61), docs audit + dual-bind fix (S62), v1.0.0 tag
 reflection + architecture review (S66), protocol devil's advocate (S67), protocol
 defense (S68), protocol reflection + struct size tests + protocol comment (S69),
 abstraction interrogation + function decomposition analysis (S70), cmdNew
-decomposition (S71).
+decomposition (S71), specification document (S72).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -208,6 +208,47 @@ Session 72: Either tackle decomposition #2 (`parseSessionRoute` in http.zig) or
 begin the specification document. The spec is arguably more valuable — it
 captures behavioral contracts that the code doesn't document. The decompositions
 are pure code quality improvements that can wait.
+
+## 2026-02-09: Session 72 - Specification Document
+
+### What was done
+
+Created `doc/spec.md` — a comprehensive behavioral specification covering:
+
+- Protocol wire format (all message types, struct sizes, handshake sequence)
+- Session lifecycle (creation, event loop, destruction)
+- Role model (primary vs viewer, takeover sequence with edge cases)
+- Native client (keybinding state machine, viewport panning, scrollback)
+- HTTP server (all endpoints, SSE streaming, keyframes)
+- Authentication (OTP generation/exchange, JWT structure, scopes, revocation)
+- Configuration (schema, leader key syntax, defaults, error handling)
+- State directories (socket, state, config with XDG paths)
+- Edge cases (resize, disconnect, concurrent connections, screen clear detection)
+- Allocator choices (C allocator for forked processes, GPA for CLI)
+
+This fills the gap identified in S70: DESIGN.md covers architecture, vanish.1
+covers user-facing usage, but nothing documented behavioral contracts — what the
+system does in every situation. The spec is the authoritative reference for "what
+should this do?" when context windows reset between sessions.
+
+Key corrections found during research:
+- State directory is `~/.local/state/vanish` (XDG_STATE_HOME), not
+  `~/.local/share/vanish` as some earlier notes suggested.
+- `vanish send` connects as **primary** (not viewer), fails if primary exists.
+  It writes input then detach, doesn't read the `full` message the session sends
+  after welcome (harmless — unread data cleaned up when fd closes).
+
+### Remaining decomposition candidates from S70
+
+2. **`processRequest` in http.zig** — Extract `parseSessionRoute`. Medium impact.
+3. **`dumpViewport` in terminal.zig** — Extract `writeCell`. Small impact.
+
+### Next session recommendations
+
+Session 73: Architecture review (3 sessions since S70). Alternatively, tackle
+decomposition #2 (`parseSessionRoute`). The spec document now makes the
+architecture review more productive — the reviewer has a behavioral reference to
+check against.
 
 ## 2026-02-09: Session 70 - Abstraction Interrogation: Function Decomposition
 
