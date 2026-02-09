@@ -29,6 +29,9 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
 
     b.installFile("doc/vanish.1", "share/man/man1/vanish.1");
+    b.installFile("completions/vanish.bash", "share/bash-completion/completions/vanish");
+    b.installFile("completions/vanish.zsh", "share/zsh/site-functions/_vanish");
+    b.installFile("completions/vanish.fish", "share/fish/vendor_completions.d/vanish.fish");
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());

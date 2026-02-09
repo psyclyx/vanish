@@ -12,6 +12,7 @@
     fileset = lib.fileset.unions [
       ./build.zig
       ./build.zig.zon
+      ./completions
       ./doc
       ./src
     ];
