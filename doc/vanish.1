@@ -57,18 +57,20 @@ Disconnect a client by ID (see
 Terminate a session.
 .TP
 .B serve \fR[\fB\-b\fR \fIaddr\fR] [\fB\-p\fR \fIport\fR] [\fB\-d\fR]
-Start the HTTP server for web terminal access. Default bind address is
-127.0.0.1 and ::1, default port is 7890.
+Start the HTTP server for web terminal access. Listens on 127.0.0.1 and ::1
+by default, port 7890.
 .B \-d
 daemonizes.
 .TP
-.B otp \fR[\fB\-\-duration\fR \fItime\fR] [\fB\-\-session\fR \fIname\fR] [\fB\-\-daemon\fR] [\fB\-\-indefinite\fR]
+.B otp \fR[\fB\-\-duration\fR \fItime\fR] [\fB\-\-session\fR \fIname\fR] [\fB\-\-daemon\fR] [\fB\-\-indefinite\fR] [\fB\-\-read\-only\fR]
 Generate a one-time password for HTTP authentication. Tokens are indefinite by
 default.
 .B \-\-duration
 accepts values like "1h", "30m", "7d".
 .B \-\-session
 scopes the token to a single session.
+.B \-\-read\-only
+creates a view-only token (no input, takeover, or resize).
 .TP
 .B revoke \fR[\fB\-\-temporary\fR] [\fB\-\-session\fR \fIname\fR] [\fB\-\-daemon\fR] [\fB\-\-indefinite\fR] [\fB\-\-all\fR]
 Revoke authentication tokens.

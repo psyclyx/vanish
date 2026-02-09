@@ -60,8 +60,8 @@ vanish list
 | `kick <name> <client-id>` | Disconnect a client |
 | `kill <name>` | Terminate a session |
 | `serve [-b addr] [-p port] [-d]` | Start HTTP server |
-| `otp [--duration time] [--session name]` | Generate auth token |
-| `revoke [--all]` | Revoke auth tokens |
+| `otp [--duration time] [--session name] [--read-only]` | Generate auth token |
+| `revoke [--all] [--temporary] [--session name]` | Revoke auth tokens |
 | `print-config` | Show effective config |
 
 Global flags: `-c <config>`, `-v` (verbose), `-vv` (debug).
