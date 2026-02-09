@@ -908,8 +908,15 @@ fn cmdOtp(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config
 
     if (url_mode) {
         const bind = cfg.serve.bind orelse "127.0.0.1";
+        const is_ipv6 = std.mem.indexOfScalar(u8, bind, ':') != null;
         var buf: [256]u8 = undefined;
-        const url = std.fmt.bufPrint(&buf, "http://{s}:{d}?otp={s}\n", .{ bind, cfg.serve.port, otp }) catch {
+        const url = std.fmt.bufPrint(&buf, "http://{s}{s}{s}:{d}?otp={s}\n", .{
+            if (is_ipv6) "[" else "",
+            bind,
+            if (is_ipv6) "]" else "",
+            cfg.serve.port,
+            otp,
+        }) catch {
             try writeAll(STDERR_FILENO, "URL too long\n");
             std.process.exit(1);
         };
