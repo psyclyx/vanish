@@ -77,7 +77,7 @@ decomposition (S71), specification document (S72), architecture review (S73),
 processRequest decomposition (S74), writeCell extraction (S75), architecture
 review post-decomposition (S76), UX hammock (S77), socket clobbering fix +
 stale socket detection (S78), architecture review + spec update (S79), session
-model devil's advocate (S80).
+model devil's advocate (S80), session model defense (S81).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -172,6 +172,244 @@ lightweight libghostty terminal session multiplexer with web access
 ---
 
 # Progress Notes
+
+## 2026-02-09: Session 81 - Response: Defending the Session Model
+
+### Point-by-point response
+
+**1. "The model prevents the most natural collaborative workflow." — Wrong
+framing.**
+
+The critique assumes vanish is a collaboration tool. It's not. It's a session
+multiplexer — the spiritual successor to dtach with a terminal emulator and web
+access. The design principle from the prompt: "the intent is to make this
+convenient to use for every terminal, and detach when needed." The primary use
+case is a single user managing their own sessions across detach/reattach cycles,
+with viewing as a secondary capability.
+
+The pair programming scenario (A edits, B spots a typo, B wants to type) is
+real, but it's not vanish's problem. The tools that solve this well — tmate,
+VS Code Live Share, Google Docs — are purpose-built for collaboration with
+features vanish doesn't have and shouldn't have: presence indicators, cursor
+labels, conflict resolution UX, undo integration. Vanish adding multi-writer
+wouldn't give you tmate's collaboration experience; it would give you two people
+fighting over one PTY with no coordination mechanism.
+
+The critique says "the implementation cost is low — remove the `is_primary`
+guard." That's the implementation cost of *enabling* multi-write. It doesn't
+account for the UX cost of multi-write being *usable*: you need to know who else
+is typing, you need to know when it's safe to type, you need some way to
+coordinate ("I'm done, your turn"). Without those features, multi-write is
+just chaos with extra steps. With those features, you've built a collaboration
+tool — which vanish is not.
+
+**2. "The primary slot creates a hidden resource contention problem." — Valid
+observation, wrong solution.**
+
+The critique describes a real friction: user detaches, reattaches as viewer
+(the default), types, nothing happens, confusion ensues. Session 77 identified
+this same issue and concluded the viewer default is correct because conditional
+defaults ("primary if available, viewer otherwise") create unpredictable
+behavior.
+
+The critique's proposed fix — eliminate the primary slot entirely — doesn't solve
+the real problem, which is **feedback**. The user isn't confused because they
+can't type; they're confused because the system doesn't tell them *why* they
+can't type. The native client (client.zig:138) silently consumes non-primary
+input for viewport navigation. The web interface drops it entirely.
+
+The right fix (if this becomes a real complaint from usage) is better feedback,
+not a different model. Options:
+- Status bar shows current role by default (it already shows "viewer" when the
+  status bar is visible — client.zig:294-297)
+- A brief flash message on first input attempt as viewer: "Viewer mode. Press
+  [leader]+t to take over."
+- `vanish attach` without `-p` prints a one-line notice: "Attached as viewer.
+  Use -p for primary."
+
+These are small, targeted improvements that address the confusion without
+changing the session model. The critique uses a UX problem to argue for an
+architecture change, when the UX problem has UX solutions.
+
+**3. "The takeover mechanism is more complex than multi-writer." — Misleading
+comparison.**
+
+The critique counts 42 lines for `handleTakeover` and two protocol message types
+(`takeover` 0x06, `role_change` 0x86) as complexity that multi-writer would
+eliminate. Let's actually count what multi-writer would require:
+
+What you *remove*:
+- `handleTakeover` (42 lines)
+- `takeover` and `role_change` message types (2 enum values, 1 struct)
+- Role state transitions in client.zig (~10 lines)
+- The `is_primary` guard in `handleClientInput` (~5 lines)
+
+What you *add*:
+- A `dimension_owner` field and logic to determine who controls sizing. The
+  critique handwaves this as "one client is the dimension owner (most recently
+  attached local terminal)." But now you need: a mechanism to transfer dimension
+  ownership, logic for what happens when the dimension owner disconnects (fall
+  back to... whom?), a way for clients to know who the dimension owner is, and
+  handling for the case where a web client (which has no terminal size) is the
+  only client.
+- Size authority messages — the dimension owner still needs a protocol concept.
+  You haven't eliminated role_change; you've renamed it.
+- Input coordination UX — even if you allow everyone to write, users need to
+  know that others *are* writing. Without this, two users typing simultaneously
+  into vim produces interleaved garbage. The critique acknowledges this concern
+  but dismisses it as "the kernel serializes it." Serialization is not
+  coordination. `a:wqb:wq` is serialized; it's also nonsense.
+- The `Denied` message type still exists for read-only OTP connections.
+
+The complexity doesn't disappear. It shifts from explicit role management (which
+the server controls atomically) to implicit coordination problems (which no one
+controls). The current model is more *visible* complexity — but visible is
+better than hidden.
+
+**4. "`vanish send` fails if primary exists." — Correct, and correct behavior.**
+
+The critique says multi-writer would make `vanish send` "just work" when a
+primary exists. This treats a safety feature as a bug.
+
+`vanish send work "ls\n"` injects input into a session. If someone is actively
+using that session (a primary exists), silently injecting keystrokes is
+dangerous. Consider: user A is in vim, editing a config file. A script runs
+`vanish send work "dd\n"` — deletes a line. User A didn't see it coming, may not
+notice, and the change is silent. The primary gate prevents this: if someone is
+using the session, you can't blindly inject input. You have to detach them first,
+which is an explicit, observable action.
+
+The automation scenario ("monitoring script injects commands into a session being
+watched by a human") is exactly the scenario that *should* require coordination.
+If you want unattended script injection, the script should be the primary. If a
+human and a script both need to send input, that's a coordination problem that
+multi-writer doesn't solve — it just makes it silent.
+
+The error message is already clear: "Session already has a primary client"
+(verified in S77). The user knows what to do.
+
+**5. "Viewer input is silently dropped." — A client UX issue, not a model
+issue.**
+
+The critique says viewers typing in the web interface "just lose their
+keystrokes." This is true and it's a valid UX complaint for the web interface
+specifically. The native client handles it correctly: viewer input drives
+viewport navigation (hjkl scrolling), which is useful behavior. The web
+interface should similarly either block the input field for viewers or show a
+"read-only" indicator.
+
+But this is a rendering concern in index.html, not an argument against the
+session model. The model correctly separates "who can write" from "who can
+view." The presentation of that separation to web users could be better. That's
+a one-line CSS change or a conditional in the JS, not an architecture redesign.
+
+**6. "dtach and tmux both made different choices." — Correct, and they have
+different problems.**
+
+dtach: multi-writer, and the docs warn about it. Two users typing simultaneously
+produce interleaved input. dtach's response is "don't do that" — users are
+expected to coordinate out-of-band. This is the honest version of multi-writer:
+it's your problem, not the tool's.
+
+tmux: multi-writer by default, with `synchronize-panes` for broadcast. tmux
+also has explicit session groups, window sharing, and a client-server
+architecture with a persistent server process. The multi-writer model works in
+tmux because tmux has the surrounding infrastructure (session groups, pane
+isolation, window-level sharing) to make it manageable. Vanish doesn't have
+these, and shouldn't — they're features of a terminal multiplexer, not a session
+multiplexer.
+
+screen: multi-writer requires explicit `multiuser on` + ACL configuration. It's
+opt-in, not default. This is closer to vanish's model than the critique
+suggests — screen's default is single-writer.
+
+The tools that default to multi-writer either accept the chaos (dtach) or have
+rich infrastructure to manage it (tmux). Vanish is neither. It has a simple,
+clean model that prevents the chaos without requiring the infrastructure.
+
+**7. "The model conflates input authorization and terminal sizing." — The
+strongest point, and still wrong.**
+
+This is the most intellectually honest point in the critique. "Primary" does
+bundle two concepts: write permission and size authority. The critique proposes
+separating them: any client can write, one client is the size authority.
+
+But these concerns aren't orthogonal in practice. The size authority determines
+the terminal dimensions — which means it determines what the PTY renders. If
+client A (80x24) is the size authority and client B (200x50) is typing, B is
+editing content rendered for A's terminal size. vim's line wrapping, less's page
+size, command output formatting — all optimized for A's dimensions, displayed on
+B's much larger screen. This isn't just inconvenient; it's confusing. The person
+typing sees output formatted for someone else's terminal.
+
+In the current model, the person typing (primary) is always the size authority.
+What you see is what you get. The rendering matches your terminal. This isn't an
+accidental conflation — it's a deliberate coupling of two things that should be
+coupled: the person interacting with the terminal should see output formatted
+for their terminal.
+
+The example "a viewer on a larger monitor who wants the primary to get more
+screen real estate" is creative but impractical. Terminal size determines
+rendering. If you resize the PTY to the viewer's dimensions, the primary's
+display breaks (content wider than their terminal wraps or is truncated). This
+is why tmux defaults to smallest-client sizing — it's the only size that works
+for everyone. Vanish's choice (primary's size) is correct for a tool where one
+person is driving.
+
+### Addressing the strongest counter-argument
+
+The S80 notes anticipated this: "Multiple writers to a PTY is chaotic. If A is
+in vim and B types `:q!`, A loses their work."
+
+This is real, but it's not the best defense. The best defense is simpler:
+**the primary model matches vanish's actual use case.**
+
+Vanish is for a single user managing their own terminal sessions. The prompt
+says "session management is like dtach — a socket." The viewing capability
+exists for monitoring, demonstration, and occasional takeover — not for
+simultaneous collaborative editing. The model is correct because it matches the
+tool's purpose.
+
+If the use case changes — if vanish becomes a collaboration tool — the model
+should change too. But it would need much more than removing the `is_primary`
+guard. It would need presence indicators, cursor labels, input queuing or turn-
+taking, and a story for conflicting operations. That's a different tool.
+
+### Where the critique is genuinely right
+
+1. **Viewer feedback could be better.** The web interface should indicate
+   read-only status more clearly. Native client handles this well; web doesn't.
+   This is a UI polish item, not a model change.
+
+2. **The attach default creates friction.** `vanish attach work` as viewer when
+   you're the only user is surprising on first use. The fix is documentation
+   and/or a one-time hint, not conditional behavior.
+
+3. **The terminology could be clearer.** "Primary" and "viewer" are reasonable
+   but not self-evident from a Unix perspective. "Writer" and "reader" might be
+   clearer. But renaming at this point is churn.
+
+### Summary of actions
+
+| Point | Verdict | Action |
+|-------|---------|--------|
+| 1. Collaboration | Wrong framing | No change |
+| 2. Hidden contention | Valid UX issue | Better feedback (future) |
+| 3. Takeover complexity | Misleading comparison | No change |
+| 4. vanish send | Safety feature | No change |
+| 5. Silent drop | Valid for web UI | Web UI polish (future) |
+| 6. Precedent from dtach/tmux | Different tools, different problems | No change |
+| 7. Conflated concerns | Wrong in practice | No change |
+
+**Zero code changes.** Two UX improvement candidates filed for future work if
+usage drives them: (a) better viewer feedback in web UI, (b) attach-as-viewer
+hint. Both are polish, not architecture.
+
+### Recommendations for Next Session
+
+Session 82: Reflection on the session model debate. This is also the 3-session
+architecture review checkpoint (3 sessions since S79). The reflection and review
+can be combined — reflect on the debate, then survey the codebase.
 
 ## 2026-02-09: Session 80 - Devil's Advocate: The Session Model
 
