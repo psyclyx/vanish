@@ -141,9 +141,18 @@
             const data = await dataPromise;
             document.getElementById('auth').classList.add('hidden');
             document.getElementById('sessions').classList.remove('hidden');
-            document.getElementById('session-list').innerHTML = data.sessions
-                .map(s => `<div class="session-card" onclick="connect('${s.name}')"><h3>${s.name}</h3></div>`)
-                .join('') || '<p>No sessions</p>';
+            const list = document.getElementById('session-list');
+            list.innerHTML = '';
+            if (!data.sessions.length) { list.innerHTML = '<p>No sessions</p>'; return; }
+            for (const s of data.sessions) {
+                const card = document.createElement('div');
+                card.className = 'session-card';
+                card.onclick = () => connect(s.name);
+                const h = document.createElement('h3');
+                h.textContent = s.name;
+                card.appendChild(h);
+                list.appendChild(card);
+            }
         }
 
         function openSse(name) {
