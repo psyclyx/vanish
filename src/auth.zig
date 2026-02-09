@@ -374,7 +374,7 @@ pub fn validateToken(self: *Auth, token: []const u8) !TokenPayload {
     defer self.alloc.free(provided_sig);
 
     if (provided_sig.len != 32) return error.InvalidToken;
-    if (!std.mem.eql(u8, provided_sig, &expected_sig)) return error.InvalidSignature;
+    if (!std.crypto.timing_safe.eql([32]u8, provided_sig[0..32].*, expected_sig)) return error.InvalidSignature;
 
     // Build payload struct
     const exp: ?i64 = if (obj.get("exp")) |v| @intCast(v.integer) else null;
