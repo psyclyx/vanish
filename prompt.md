@@ -65,24 +65,12 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
-Done (Session 66):
-
-- ✓ Reflection on index.html splitting debate. Concluded: collocated but not
-  complected. The debate surfaced a useful general principle (same "understand A
-  without B" test from the http.zig debate) and confirmed the decision. One
-  actionable insight: key mapping logic could be tested without splitting.
-  Debate cycle complete for this topic.
-- ✓ Architecture review (3-session checkpoint since S62). Zero code changes
-  since v1.0.0 tag. All 15 files unchanged. 6,088 lines, 44 tests, zero
-  TODO/FIXME/HACK. Build clean. No architectural issues.
-- ✓ Archived sessions 59-65 to doc/sessions-archive.md (now covers sessions
-  1-65). Condensed Done summaries for sessions 55-65.
-
-Done (Sessions 55-65): Resize re-render fix (S55), cursor position fix (S56),
+Done (Sessions 55-66): Resize re-render fix (S55), cursor position fix (S56),
 architecture review (S57), Arch PKGBUILD + LICENSE (S58), session list SSE
 (S59), architecture review + http.zig devil's advocate (S60), http.zig
 reflection + archive cleanup (S61), docs audit + dual-bind fix (S62), v1.0.0 tag
-(S63), index.html splitting devil's advocate (S64), response (S65).
+(S63), index.html splitting devil's advocate (S64), response (S65), index.html
+reflection + architecture review (S66).
 
 Done (Sessions 26-58): See [doc/sessions-archive.md](doc/sessions-archive.md)
 for detailed notes. Key milestones: HTML deltas (S26), web input fix (S32),
@@ -178,156 +166,147 @@ lightweight libghostty terminal session multiplexer with web access
 
 # Progress Notes
 
-## 2026-02-09: Session 66 - Reflection: index.html Splitting + Architecture Review
+## 2026-02-09: Session 67 - Devil's Advocate: The Protocol Design
 
-### Reflection: The index.html Splitting Decision
+### Settled Decisions (from previous debates)
 
-Sessions 64-65 wrote the case for splitting index.html into multiple files and
-the response against it. This is the reflection.
+1. **http.zig monolithic:** Keep. (Sessions 60-61)
+2. **index.html single-file:** Keep. (Sessions 64-66)
 
-**The case was:** (1) Three languages = three concerns, (2) JS does real work (6
-subsystems), (3) 11 mutable globals are complected, (4) ES modules are
-zero-build-step, (5) one HTTP request is marginal benefit, (6) testability would
-improve, (7) line count thresholds are arbitrary.
+Both settled on the same heuristic: the split trigger is "understanding concern A
+requires understanding concern B," not file size or count.
 
-**The response was:** (1) HTML/CSS/JS is one deployment unit, not three
-concerns, (2) 31 lines per "subsystem" is too small to warrant files, (3)
-globals are UI state, inherently shared, (4) @embedFile is single-file so
-splitting requires a static file server, (5) the real benefit is zero serving
-infrastructure, (6) testability is valid but only 8 lines benefit, (7)
-maintenance hasn't been harder.
+### Devil's Advocate: The Case Against the Protocol
 
-**The reflection:**
+The protocol has been praised repeatedly as simple, clean, minimal. 192 lines,
+5-byte header, 17 message types, extern structs. It has never been seriously
+challenged. Here is the best case a thoughtful critic would make.
 
-The response won this debate, and it wasn't close. The case made principled
-arguments that sound right in the abstract but fall apart when examined
-concretely. Here's what matters:
+**1. Native byte order is a time bomb.**
 
-**The factual error was decisive.** The case assumed the server already had
-static file serving ("adding more files to that directory is free"). It doesn't.
-The server uses a single `@embedFile` and a single route. Splitting the frontend
-doesn't just reorganize JS files — it requires building a static file server
-that doesn't exist. This transforms a "should we reorganize files?" question
-into a "should we add a new server feature?" question. The answer to the second
-question is obviously no, since the current system works and the new feature adds
-attack surface (path traversal, MIME sniffing) for zero user-facing benefit.
+`std.mem.asBytes` and `std.mem.bytesToValue` serialize structs in the CPU's
+native byte order. Today, every machine running vanish is little-endian x86_64.
+But Zig targets 60+ architectures. The protocol is a wire format — it goes over
+Unix domain sockets between processes. If vanish ever runs on a big-endian
+system, or if someone cross-compiles a client for a different architecture that
+shares the same socket directory (NFS, container bind mounts), the wire format
+silently produces garbage. Every serious binary protocol (protobuf, msgpack,
+cap'n proto, even HTTP/2) specifies byte order. This one doesn't.
 
-**The "complected" framing was wrong.** Session 61's http.zig reflection
-established the right test: "can you understand concern A without understanding
-concern B?" The case tried to argue that 11 mutable globals make the JS
-complected. But the response correctly categorized them: 6 are UI state
-(inherently shared because the UI is one thing), 2 are connection handles, 3 are
-render caches. None of them create hidden dependencies between unrelated
-concerns. You can understand `handleKey` without understanding `handleUpdate`.
-The globals are the _state of the application_, not coupling between
-independent modules. Calling UI state "complected" is like calling a struct's
-fields "complected" — they're the definition of the thing.
+The fix is trivial (`std.mem.nativeTo`/`std.mem.toNative` with `.little`), but
+the current code would need to change every `asBytes`/`bytesToValue` call. The
+longer you wait, the more client code exists that assumes native order.
 
-**The Zig separation analogy was false.** The case compared index.html to having
-three Zig files in one. But Zig modules are separated because they have
-independent consumers and lifecycles. The CSS, HTML, and JS in index.html have
-one consumer (the browser), one lifecycle (page load), and direct mutual
-dependencies (JS queries DOM elements the HTML creates, CSS targets classes the
-HTML uses). Separating them into files doesn't remove any coupling — it just
-means you need to open three files to understand one page.
+**2. extern struct alignment is fragile and undertested.**
 
-**What the case got right (and what to do about it):**
+The protocol relies on `extern struct` to get C-compatible layout, but the
+actual wire sizes depend on field ordering and platform alignment rules.
+Consider:
 
-The testability argument is genuinely valid. The key mapping logic (the object
-literal mapping key names to escape sequences, plus the Ctrl modifier
-computation) is dense, has no tests, and would be silently broken if wrong.
-This is worth addressing — but not by splitting the file. If a bug surfaces in
-key mapping, the fix would be:
+- `Header` is 5 bytes. There's a test for this. Good.
+- `Welcome` is logically 21 bytes (1 + 16 + 2 + 2) but actually 24 due to
+  alignment padding after the `role: u8` field. **There is no test for this.**
+- `ClientInfo` is logically 9 bytes (4 + 1 + 2 + 2) but actually 10 bytes due
+  to padding after `role: u8`. **There is no test for this.** The `client_list`
+  message parses it as `header.len / @sizeOf(ClientInfo)` — if the size
+  assumption is wrong, the parser silently reads garbage.
+- `Hello` is 76 bytes with a [64]u8 array. No size test.
 
-1. Extract the key map object and the Ctrl computation into a testable form
-   (either inline in a `<script>` tag that can be loaded by a test runner, or
-   as a single external `.js` file).
-2. Write tests for the specific mappings.
+These struct sizes are part of the wire format. They should all have size tests
+like `Header` does. Without them, a Zig compiler update that changes extern
+struct layout rules (or a platform with different alignment) silently breaks the
+protocol. The Header test was the right instinct — the mistake was stopping at
+one.
 
-This is a targeted fix for a specific risk. It doesn't require the 4-file module
-system the case proposed.
+**3. No version negotiation means no evolution path.**
 
-**What the debate process revealed:**
+The `hello`/`welcome` handshake has no version field. This means:
 
-Both the http.zig debate (sessions 60-61) and the index.html debate (sessions
-64-66) converged on the same principle: **the split trigger is "understanding
-concern A requires understanding concern B," not file size, language count, or
-global count.** This is now a settled heuristic for this project. Line count
-thresholds (400, 1000, 1500) are retired. The question is always about
-comprehension coupling.
+- You cannot add a field to `Hello` (it would change the struct size, and old
+  servers would read garbage from the extra bytes or fail on EndOfStream).
+- You cannot add a field to `Welcome` (same problem in reverse).
+- You cannot change the semantics of any existing message type.
+- You cannot deprecate a message type (old clients would still send it).
 
-**Debate cycle complete.** The decision stands: index.html stays as a single
-file. The only actionable outcome is the key mapping testability note, which is
-filed as a "if a bug surfaces" item, not a proactive task.
+The only extension mechanism is adding new `ClientMsg`/`ServerMsg` enum values.
+But there's no way for a client to know if the server supports a given message
+type. If a v1.1 client sends `list_sessions` (0x0A) to a v1.0 server, the
+server hits the `else` branch in its switch and... what? Drops the connection?
+Ignores it? The behavior is whatever the current `else` branch does, which is
+not negotiated or specified.
 
-### Architecture Review (3-session checkpoint since S62)
+"We're at v1.0.0, we don't need versioning" is a common argument. But the cost
+of adding a version byte to the hello handshake is 1 byte and ~5 lines of code
+_now_. The cost of retrofitting versioning later is a breaking change to the
+wire format, which means either a flag day (all clients and servers upgrade
+simultaneously) or maintaining two protocol parsers.
 
-**Zero code changes since v1.0.0.** Three commits since the tag, all
-documentation (session notes for S63-S65). Every source file is identical to the
-tagged release.
+**4. No message-level integrity checking.**
 
-| File         | Lines     | Change from S62 | Purpose                    |
-| ------------ | --------- | --------------- | -------------------------- |
-| http.zig     | 1,082     | 0               | Web server, SSE, routing   |
-| main.zig     | 976       | 0               | CLI entry point            |
-| client.zig   | 648       | 0               | Native client, viewport    |
-| auth.zig     | 585       | 0               | JWT/HMAC, OTP exchange     |
-| session.zig  | 526       | 0               | Daemon, poll loop          |
-| config.zig   | 461       | 0               | JSON config parsing        |
-| vthtml.zig   | 374       | 0               | VT→JSON, delta computation |
-| terminal.zig | 351       | 0               | ghostty-vt wrapper         |
-| index.html   | 312       | 0               | Web frontend               |
-| protocol.zig | 192       | 0               | Wire format                |
-| keybind.zig  | 185       | 0               | Input state machine        |
-| naming.zig   | 165       | 0               | Auto-name generation       |
-| pty.zig      | 140       | 0               | PTY operations             |
-| signal.zig   | 48        | 0               | Signal handling            |
-| paths.zig    | 43        | 0               | Shared utilities           |
-| **Total**    | **6,088** | **0**           | 15 files                   |
+There is no checksum, CRC, or MAC on individual messages. Unix domain sockets
+are reliable — they don't corrupt data like UDP might. But the protocol is also
+used over TCP (the HTTP bridge connects to the session socket). And there's a
+subtler issue: if the framing gets out of sync (a bug causes a partial read, or
+a message length field is corrupted in memory), every subsequent message is
+garbage. A per-message checksum would detect this immediately. Without one, a
+framing desync manifests as mysterious "invalid message type" errors or silent
+data corruption that's extremely hard to debug.
 
-Build: Clean. Tests: 44 unit tests across 9 files. All passing. Zero
-TODO/FIXME/HACK.
+**5. The fixed-size term field in Hello is a C-ism.**
 
-**Assessment:** The codebase is frozen at v1.0.0. No architectural issues. All
-previously tracked duplication (connectToSession 3x, auth validation 6x, scroll
-actions 8x, TCP socket creation 2x) unchanged and stable. Nothing to act on.
+`term: [64]u8` with null termination is a C pattern, not a Zig pattern. It
+wastes 50+ bytes per hello message (most TERM values are 10-20 chars), it has
+a hard truncation limit, and it requires manual null-termination logic
+(`setTerm`/`getTerm`). The Zig-idiomatic approach would be a length-prefixed
+string in the variable payload section. This is a minor point, but it reveals a
+tension: the protocol uses `extern struct` for zero-copy parsing (a C
+optimization), but this means it inherits C's limitations around variable-length
+data. The protocol can't represent a string longer than 63 bytes without
+redesigning the message format.
 
-### Settled Decisions
+**6. The output/full distinction is implicit and underdocumented.**
 
-Two devil's advocate debate cycles are now complete:
+`output` (0x82) sends incremental terminal output. `full` (0x83) sends a full
+screen state. But from the wire format alone, there's no way to distinguish
+"this is a full redraw because the terminal resized" from "this is a full redraw
+because a new client connected." The client must infer semantics from context
+(did I just send a hello? did I just receive a session_resize?). This is fine
+for two tightly-coupled implementations, but it's the kind of implicit coupling
+that makes writing a third-party client harder — you'd need to read the vanish
+source to understand the state machine, not just the protocol spec.
 
-1. **http.zig monolithic:** Keep. Essential coupling, not incidental. Split
-   trigger = comprehension coupling, not line count. (Sessions 60-61)
+**7. The enum value scheme is arbitrary and wastes space.**
 
-2. **index.html single-file:** Keep. One deployment unit, not three concerns.
-   Splitting requires building a static file server. Globals are UI state, not
-   hidden coupling. (Sessions 64-66)
+Client messages use 0x01-0x09. Server messages use 0x81-0x88. The high-bit
+convention (server messages have bit 7 set) is undocumented but consistent. This
+is fine. But the msg_type field is a u8 in the header, giving 256 possible
+values. With 17 used, 239 are undefined. There's no "unknown message" handling
+strategy. A receiver that encounters an unknown msg_type must... skip
+`header.len` bytes? Drop the connection? The protocol doesn't say. This matters
+the moment you add a message type: old receivers have undefined behavior.
 
-These decisions don't need to be revisited unless the premises change (e.g., a
-new server feature requires multi-file static serving, or the JS grows past the
-point where you can't understand one function without understanding another).
+**In summary:** The protocol is simple and correct for the current single-
+platform, single-version deployment. The critique is not that it's broken — it's
+that it has made several "works for now" choices (native byte order, no
+versioning, no struct size tests, no integrity checks) that are trivially cheap
+to fix now but expensive to fix later. A protocol that crosses process
+boundaries is an API contract. It deserves the same care as a public function
+signature.
 
-### Project Status
+### What this critique does NOT argue
 
-v1.0.0 tagged. Maintenance mode. No inbox items. No known bugs. Future work
-driven by usage.
+This is not an argument for protobuf, msgpack, or any serialization framework.
+The hand-rolled binary protocol is the right call for vanish. The argument is
+that the hand-rolled protocol should be more rigorous about the things that
+matter for wire formats: byte order, size stability, version negotiation, and
+error handling for unknown messages.
 
-**Next devil's advocate topic (when it feels right):** The protocol design. 17
-message types, 5-byte header, no versioning. This has been praised repeatedly
-but never challenged. What would a critic say about no versioning, no
-extensibility, and the fixed header format?
+### Recommendations for Next Session
 
-### Recommendations for Next Sessions
-
-1. **Session 67:** Consider archiving this session's detailed notes and keeping
-   only the summary. prompt.md is now lean (~330 lines of active content). The
-   project is in maintenance mode — sessions should be short unless there's a
-   bug report or feature request.
-
-2. **Future:** Protocol devil's advocate when the mood strikes. `vanish version`,
-   shell completions, `vanish attach --last` if driven by usage.
+Session 68 should write the response defending the current protocol design.
+Session 69 will be the reflection.
 
 ---
 
-> Earlier session notes (1-65) archived to
+> Earlier session notes (1-66) archived to
 > [doc/sessions-archive.md](doc/sessions-archive.md).

@@ -1,7 +1,23 @@
-# Vanish Session Notes Archive (Sessions 1-65)
+# Vanish Session Notes Archive (Sessions 1-66)
 
 These session notes were archived from prompt.md. They cover the project
-from initial implementation through the Arch PKGBUILD (session 58).
+from initial implementation through v1.0.0 and subsequent maintenance sessions.
+
+## 2026-02-09: Session 66 - index.html Reflection + Architecture Review
+
+Completed the index.html splitting debate cycle. The case for splitting (S64)
+made principled arguments about three-language separation, 11 mutable globals,
+and testability. The response (S65) won: index.html is one deployment unit, not
+three concerns; splitting requires building a static file server that doesn't
+exist; globals are UI state, not hidden coupling. One actionable takeaway: key
+mapping logic could be tested without splitting (filed as "if a bug surfaces").
+
+Established a settled heuristic for both the http.zig and index.html debates:
+the split trigger is "understanding concern A requires understanding concern B,"
+not file size, language count, or global count.
+
+Architecture review: zero code changes since v1.0.0 tag. 15 files, 6,088 lines,
+44 tests. All clean. Archived sessions 59-65.
 
 For current session notes (59+), see prompt.md.
 
