@@ -1,6 +1,7 @@
 const std = @import("std");
 const ghostty_vt = @import("ghostty-vt");
 const VTerminal = @import("terminal.zig");
+const paths = @import("paths.zig");
 
 /// Represents the rendered state of a single cell
 pub const Cell = struct {
@@ -271,23 +272,7 @@ pub fn updatesToJson(alloc: std.mem.Allocator, updates: []const CellUpdate, cols
 
         // Character (JSON-escaped)
         try json.appendSlice(alloc, ",\"c\":\"");
-        const char_slice = update.cell.char[0..update.cell.char_len];
-        for (char_slice) |c| {
-            switch (c) {
-                '"' => try json.appendSlice(alloc, "\\\""),
-                '\\' => try json.appendSlice(alloc, "\\\\"),
-                '\n' => try json.appendSlice(alloc, "\\n"),
-                '\r' => try json.appendSlice(alloc, "\\r"),
-                '\t' => try json.appendSlice(alloc, "\\t"),
-                else => if (c < 0x20) {
-                    var buf: [6]u8 = undefined;
-                    _ = std.fmt.bufPrint(&buf, "\\u{x:0>4}", .{c}) catch continue;
-                    try json.appendSlice(alloc, &buf);
-                } else {
-                    try json.append(alloc, c);
-                },
-            }
-        }
+        try paths.appendJsonEscaped(alloc, &json, update.cell.char[0..update.cell.char_len]);
         try json.append(alloc, '"');
 
         // Style (only if non-empty)

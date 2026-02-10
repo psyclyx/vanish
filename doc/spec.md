@@ -544,7 +544,7 @@ Rationale: if the application cleared the screen, sending old scrollback would c
 
 **SSE client disconnects**: detected via write error on next send. Client removed from SSE list.
 
-**SSE keyframe timing**: approximately 1 second between keyframes. Not guaranteed. Keyframes are full-screen sends that resync state in case SSE events were lost.
+**SSE keyframe timing**: approximately 30 seconds between keyframes (time-based). Not guaranteed. Keyframes are full-screen sends that resync state in case SSE events were lost.
 
 **Token expiry during SSE**: token is validated once at connection time. Long-lived SSE connections are not re-validated. To force disconnect: revoke tokens (key rotation) and the SSE client will persist until next server restart or client disconnect.
 
