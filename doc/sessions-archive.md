@@ -1,9 +1,20 @@
-# Vanish Session Notes Archive (Sessions 1-107)
+# Vanish Session Notes Archive (Sessions 1-108)
 
 These session notes were archived from prompt.md. They cover the project
 from initial implementation through v1.0.0 and subsequent maintenance sessions.
 
-For current session notes (108+), see prompt.md.
+For current session notes (109+), see prompt.md.
+
+## 2026-02-09: Session 108 - Architecture Review (3-Session Checkpoint)
+
+Re-read every source file and spec. Simplicity scorecard: 10 "Yes", 2 "Mostly"
+(main.zig, http.zig). Total: 5,982 lines, 53 unit + 11 integration tests.
+Accepted: JSON escaping dedup in vthtml.zig (use paths.appendJsonEscaped),
+spec fix for SSE keyframe timing (said ~1s, actually ~30s). Rejected again:
+vthtml loop dedup (readability cost). Resolved: handleClientInput at 61 lines
+is comfortable. Closed: http.zig event loop — stopping re-evaluation unless
+features require changes. Noted minor hardening items (HTTP body size limit,
+keyframe config) as YAGNI for now.
 
 ## 2026-02-09: Session 107 - Protocol Utilities + Spec Compliance Fix
 

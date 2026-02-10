@@ -56,7 +56,7 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
-Done (Sessions 1-107): See [doc/sessions-archive.md](doc/sessions-archive.md).
+Done (Sessions 1-108): See [doc/sessions-archive.md](doc/sessions-archive.md).
 Key milestones: HTML deltas (S26), web input fix (S32), cell gaps (S35), status
 bar (S37), auto-naming (S38-40), docs (S45), browser perf (S50), read-only OTPs
 (S52), resize fix (S55), PKGBUILD+LICENSE (S58), v1.0.0 tag (S63), protocol
@@ -67,7 +67,8 @@ debate + struct tests (S67-69), function decomposition (S70-75), UX hammock
 viewer direct navigation (S95), web viewer fixes (S97), challenge/response/
 reflection cycle (S99-S101), accepted refactors + tests (S102), archive cleanup
 + spec audit (S103), architecture pre-review (S104), architecture review +
-refactors (S105), hammock on pride (S106), protocol utilities + spec fix (S107).
+refactors (S105), hammock on pride (S106), protocol utilities + spec fix (S107),
+architecture review checkpoint (S108).
 
 The task at hand
 
@@ -156,139 +157,42 @@ lightweight libghostty terminal session multiplexer with web access
 
 # Progress Notes
 
-## 2026-02-09: Session 108 - Architecture Review (3-Session Checkpoint)
+## 2026-02-09: Session 109 - Accepted Refactors from S108
 
-### Context
+### What was done
 
-This is the S108 architecture review checkpoint (3 sessions after S105). I
-re-read every source file and the spec.
+Implemented the two items accepted in S108's architecture review:
 
-### Simplicity scorecard
+1. **JSON escaping dedup**: `vthtml.zig:updatesToJson` now calls
+   `paths.appendJsonEscaped` instead of inlining identical escape logic.
+   -15 lines, 1 new import. Existing tests pass unchanged.
 
-| Component | Simple? | Change since S105 |
-|-----------|---------|-------------------|
-| protocol.zig (230) | Yes | +17 (readStruct, skipBytes). Still clean. |
-| session.zig (545) | Yes | -14. handleClientInput down to 61 lines. |
-| client.zig (705) | Yes | -6. skipBytes cleanup only. |
-| terminal.zig (348) | Yes | No change. |
-| vthtml.zig (374) | Yes | No change. |
-| config.zig (461) | Yes | No change. |
-| auth.zig (585) | Yes | No change. |
-| keybind.zig (193) | Yes | No change. |
-| naming.zig (165) | Yes | No change. |
-| pty.zig (140) | Yes | No change. |
-| paths.zig (53) | Yes | No change. |
-| signal.zig (48) | Yes | No change. |
-| main.zig (1,079) | Mostly | No change. Procedural CLI — acceptable. |
-| http.zig (1,056) | Mostly | -9. Event loop still the weakest spot. |
+2. **Spec fix**: `doc/spec.md` SSE keyframe timing corrected from
+   "approximately 1 second" to "approximately 30 seconds (time-based)."
+   The actual implementation uses `now - sse.last_update >= 30` (seconds),
+   which is a 30-second wall-clock check, not a counter as I described in
+   S108. Corrected my own notes here.
 
-**Total: 5,982 lines, 53 unit tests + 11 integration tests.**
+### Line count delta
 
-### What changed since S105
-
-Only S107 had code changes. Two protocol utilities (`readStruct`, `skipBytes`)
-consolidated 3 inline patterns. A spec compliance bug was fixed (unknown message
-types now skip payload in session.zig). `handleClientInput` dropped from 75→61
-lines. Net -12 lines.
-
-The changes were surgical and correct. Nothing destabilized.
-
-### Items evaluated
-
-**1. JSON escaping duplication: `paths.zig:appendJsonEscaped` vs inline in
-`vthtml.zig:updatesToJson`.**
-
-These are the same escaping logic (switch on `"`, `\\`, `\n`, `\r`, `\t`,
-control chars). One operates on `[]const u8` via `std.ArrayList`, the other
-on `[4]u8` char slices inline. Could share a common function.
-
-**Verdict: Accept.** The vthtml version can call `paths.appendJsonEscaped`
-for the char slice. This is a real duplication — same switch, same escape
-sequences, same control char handling. A 1-line call replaces 13 lines of
-inline escaping. Will implement next session.
-
-**2. http.zig event loop (lines 165-299).**
-
-Re-examined for the fourth time (S99, S104, S105, now S108). The poll index
-arithmetic is still correct, still ugly, still contained. Nothing has changed
-about the analysis. The epoll alternative would be cleaner but is a rewrite.
-
-**Verdict: No change.** Same conclusion as S105. Stopping re-evaluating this
-unless the event loop needs modification for a feature.
-
-**3. handleClientInput (session.zig:304-364).**
-
-S107 brought this from 75→61 lines. S106 flagged it as "at the edge" at 75.
-At 61 lines with 8 branches, most 2-4 lines, this is well within the comfort
-zone. The `.input` branch is the longest at 11 lines and it's doing real work
-(read payload, forward to PTY).
-
-**Verdict: Resolved.** No longer a concern.
-
-**4. vthtml `updateFromVTerm` vs `fullScreen` duplication (~30 lines).**
-
-Re-examined from S105. The two functions share the same row/cell iteration
-loop but differ in whether they check `eql` before appending. Could extract
-the iteration into a helper that takes a `should_diff: bool` parameter or
-a callback.
-
-**Verdict: Reject again.** The functions are adjacent, easy to audit visually,
-and parameterizing would obscure the core difference (one diffs, one doesn't).
-A reader would have to understand the parameterization to know what each does.
-Two clear functions > one clever one.
-
-### New observations
-
-**1. SSE keyframe interval is hardcoded at ~30s (via counter in http.zig).**
-
-Not configurable. Probably fine — 30s is reasonable for web viewing — but
-worth noting as a future config candidate if usage reveals problems.
-
-**2. No request body size limit on HTTP input endpoint.**
-
-The `handleInput` endpoint reads from the HTTP body without a size cap. In
-practice the input is keystrokes (small), and the server is localhost-only, but
-a malicious or buggy client could send a large body. This is a minor hardening
-item, not urgent.
-
-**3. The spec documents "approximately 1 second" for SSE keyframe timing
-(line 547)** but the actual interval is ~30 seconds (counter-based, resets
-after 30 updates). The spec should say "approximately 30 seconds" or describe
-the counter mechanism.
-
-**Verdict on new items:**
-
-- Item 1: Leave. Config for this is YAGNI.
-- Item 2: Note for future hardening. Not a real risk on localhost.
-- Item 3: **Accept.** Fix the spec. This is a factual error. Will include in
-  next session's commit.
-
-### Architecture summary
-
-The architecture is sound. Three review cycles (S99-S102, S104-S105, S108)
-have converged on the same conclusion: the design works, the code is clean,
-the remaining rough edges (http event loop, main.zig boilerplate) are
-acceptable tradeoffs.
-
-Two small items for next session:
-1. Deduplicate JSON escaping in vthtml.zig (use `paths.appendJsonEscaped`).
-2. Fix spec: SSE keyframe timing description.
+vthtml.zig: 375 → 361 (-14 lines, +1 import line = net -13)
 
 ### Next architecture review
 
-S111 (3 sessions from now). Unless features are added, these reviews should
-stay lightweight.
+S111 (2 sessions from now).
 
 ### Recommendations for next session
 
-- Implement the two accepted items (JSON escaping dedup, spec timing fix).
 - The fullscreen app viewer inbox item still needs interactive testing.
-- Consider archiving S102-S106 — prompt.md has been getting long again.
+- The inbox "hammocking about pride" item is open-ended — consider whether
+  the dedup just done is the last cleanup, or if there's more to find.
+- S108 had two minor hardening observations (SSE keyframe config YAGNI,
+  HTTP input body size limit) — no action needed now.
 
 ---
 
-> Earlier session notes (1-107) archived to
+> Earlier session notes (1-108) archived to
 > [doc/sessions-archive.md](doc/sessions-archive.md).
 
-<!-- Archive marker: S107 and earlier archived in S108. -->
+<!-- Archive marker: S108 and earlier archived in S109. -->
 
