@@ -140,6 +140,16 @@ const Client = struct {
                     self.running = false;
                     return;
                 };
+            } else if (self.role == .viewer) {
+                if (viewerNav(byte, is_ctrl)) |action| {
+                    if (self.hint_visible) {
+                        self.hint_visible = false;
+                        self.clearHint();
+                    }
+                    try self.executeAction(action);
+                } else {
+                    self.flashViewerHint();
+                }
             }
             i += 1;
         }
@@ -260,6 +270,8 @@ const Client = struct {
             \\   ?       show this help
             \\   Esc     cancel
             \\
+            \\ viewers: hjkl/u/d/g/G navigate without leader key
+            \\
         ;
         _ = posix.write(STDOUT, help) catch {};
     }
@@ -315,6 +327,14 @@ const Client = struct {
         w.writeAll("\x1b[0m\x1b8") catch return; // reset, restore cursor
 
         _ = posix.write(STDOUT, fbs.getWritten()) catch {};
+    }
+
+    fn flashViewerHint(self: *Client) void {
+        const leader_name = self.keys.leaderName();
+        var buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "\x1b7\x1b[{d};1H\x1b[K\x1b[2m viewer \xe2\x94\x82 {s}t takeover\x1b[0m\x1b8", .{ self.rows, leader_name }) catch return;
+        _ = posix.write(STDOUT, msg) catch {};
+        self.hint_visible = true;
     }
 
     fn ensureVTerm(self: *Client) !void {
@@ -587,6 +607,25 @@ fn runClientLoop(client: *Client) !void {
             break;
         }
     }
+}
+
+fn viewerNav(byte: u8, is_ctrl: bool) ?keybind.Action {
+    if (is_ctrl) return switch (byte) {
+        0x15 => .scroll_page_up, // Ctrl+U
+        0x04 => .scroll_page_down, // Ctrl+D
+        else => null,
+    };
+    return switch (byte) {
+        'h' => .scroll_left,
+        'j' => .scroll_down,
+        'k' => .scroll_up,
+        'l' => .scroll_right,
+        'u' => .scroll_page_up,
+        'd' => .scroll_page_down,
+        'g' => .scroll_top,
+        'G' => .scroll_bottom,
+        else => null,
+    };
 }
 
 fn connectSocket(path: []const u8) !posix.fd_t {

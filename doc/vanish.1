@@ -119,6 +119,11 @@ Esc     cancel
 .PP
 Viewport panning is available when the viewer's terminal is smaller than the
 session terminal.
+.PP
+Viewers can navigate directly with
+.BR h ", " j ", " k ", " l ", " u ", " d ", " g ", " G
+without pressing the leader key first, since they cannot type into the session.
+Unmapped keys show a brief hint with the takeover keybinding.
 .SH CONFIGURATION
 Configuration is read from
 .I ~/.config/vanish/config.json

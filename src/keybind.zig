@@ -62,6 +62,14 @@ pub const State = struct {
         return byte == self.config.leader and is_ctrl == self.config.leader_ctrl;
     }
 
+    pub fn leaderName(self: *const State) []const u8 {
+        if (self.config.leader_ctrl and self.config.leader <= 26) {
+            const names = [_][]const u8{ "^@", "^A", "^B", "^C", "^D", "^E", "^F", "^G", "^H", "^I", "^J", "^K", "^L", "^M", "^N", "^O", "^P", "^Q", "^R", "^S", "^T", "^U", "^V", "^W", "^X", "^Y", "^Z" };
+            return names[self.config.leader];
+        }
+        return "?";
+    }
+
     pub fn processKey(self: *State, byte: u8, is_ctrl: bool) ?Action {
         if (!self.in_leader) {
             if (self.isLeaderKey(byte, is_ctrl)) {

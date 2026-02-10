@@ -168,7 +168,7 @@ Edge case: if no primary exists, viewer still goes through the takeover flow (st
 
 Two states: normal and leader.
 
-**Normal state**: All input forwarded to session as `input` messages (primary) or silently dropped by session (viewer). If byte matches leader key: enter leader state, consume the byte.
+**Normal state**: All input forwarded to session as `input` messages (primary only). If byte matches leader key: enter leader state, consume the byte. Viewer input handled by direct navigation (see below).
 
 **Leader state**: Next byte looked up in binds table. If match: execute action, return to normal. If no match: return `cancel` action, return to normal. Escape always cancels.
 
@@ -202,6 +202,18 @@ Applies when `session_cols > local_cols` or `session_rows > local_rows`.
 - `dumpViewport(offset_x, offset_y, view_cols, view_rows)` renders a window into the terminal state.
 - Offset bounds: `0 <= offset_x <= session_cols - local_cols`, same for y.
 - Pan actions move offset by 1 (hjkl), half-screen (Ctrl+U/D), or jump to extremes (g/G).
+
+### Viewer Direct Navigation
+
+Viewers cannot type into the session, so non-leader keys are free for navigation. When a viewer presses a key outside of leader mode:
+
+- `h`/`j`/`k`/`l`: pan viewport (same as leader + hjkl)
+- `u`/`d`: page up/down (same as leader + Ctrl+U/Ctrl+D)
+- `g`/`G`: jump to top-left/bottom-right
+- `Ctrl+U`/`Ctrl+D`: page up/down
+- Any other key: shows a brief "viewer" hint with the takeover keybinding
+
+The leader key still works normally for all keybinds (detach, takeover, help, etc.). Direct navigation is a convenience that avoids requiring the leader prefix for the most common viewer action.
 
 ### Scrollback
 
