@@ -159,6 +159,7 @@
             list.innerHTML = '';
             if (!data.sessions.length) { list.innerHTML = '<p>No sessions</p>'; return; }
             for (const s of data.sessions) {
+                if (s.live === false) continue;
                 const card = document.createElement('div');
                 card.className = 'session-card';
                 card.onclick = () => connect(s.name);
@@ -299,13 +300,31 @@
         });
 
         function handleKey(e, session) {
+            if (!isPrimary) {
+                if (!isReadOnly && !e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) showViewerHint();
+                return;
+            }
             e.preventDefault();
-            if (!isPrimary) return;
             const key = e.key, ctrl = e.ctrlKey || ctrlActive;
             if (ctrlActive && key.length === 1) { ctrlActive = false; document.getElementById('ctrl-btn').classList.remove('active'); }
             let data = key.length === 1 ? (ctrl ? String.fromCharCode(key.toLowerCase().charCodeAt(0) - 96) : key) :
                 { Enter: '\r', Backspace: '\x7f', Tab: '\t', Escape: '\x1b', ArrowUp: '\x1b[A', ArrowDown: '\x1b[B', ArrowRight: '\x1b[C', ArrowLeft: '\x1b[D', Home: '\x1b[H', End: '\x1b[F', Delete: '\x1b[3~', PageUp: '\x1b[5~', PageDown: '\x1b[6~', Insert: '\x1b[2~' }[key];
             if (data) fetch(`/api/sessions/${encodeURIComponent(session)}/input`, { method: 'POST', body: data });
+        }
+
+        let viewerHintTimeout = null;
+        function showViewerHint() {
+            let hint = document.getElementById('viewer-hint');
+            if (!hint) {
+                hint = document.createElement('div');
+                hint.id = 'viewer-hint';
+                hint.style.cssText = 'position:fixed;bottom:2rem;left:50%;transform:translateX(-50%);padding:0.5rem 1rem;background:rgba(22,33,62,0.95);border:1px solid #444;border-radius:6px;font:0.85rem/1.4 system-ui,sans-serif;color:#aaa;z-index:10;';
+                hint.textContent = 'Viewer mode \u2014 click Takeover to interact';
+                document.body.appendChild(hint);
+            }
+            hint.classList.remove('hidden');
+            clearTimeout(viewerHintTimeout);
+            viewerHintTimeout = setTimeout(() => hint.classList.add('hidden'), 2000);
         }
     </script>
 </body>
