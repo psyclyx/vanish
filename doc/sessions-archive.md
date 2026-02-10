@@ -1,7 +1,218 @@
-# Vanish Session Notes Archive (Sessions 1-66)
+# Vanish Session Notes Archive (Sessions 1-90)
 
 These session notes were archived from prompt.md. They cover the project
 from initial implementation through v1.0.0 and subsequent maintenance sessions.
+
+For current session notes (91+), see prompt.md.
+
+## 2026-02-09: Session 90 - Shell Wrapper Functions
+
+Created `contrib/v.sh` (bash/zsh) and `contrib/v.fish` shell wrapper functions.
+Interface: `v` (fzf picker), `v <name>` (attach-or-create), `v <name> <cmd>`
+(create with command), `v -l` (list), `v -*` (passthrough to vanish). Attach-or-
+create checks `vanish list` for live sessions. fzf optional (degrades
+gracefully). Single .sh for bash+zsh using POSIX constructs. README updated.
+
+## 2026-02-09: Session 89 - Documentation Consistency Audit
+
+Audited all user-facing artifacts against each other and the code. Fixed version
+number mismatch (build.zig.zon said 0.1.0, package.nix said 0.1.1, both now
+1.0.0). Added `--url` flag to built-in help text and README (was missing from
+S85). Established documentation touchpoints checklist: built-in help, man page,
+README, spec, completions.
+
+## 2026-02-09: Session 88 - Spec Update + Architecture Review
+
+Updated spec with S87 bug fix details (backward viewer iteration, timing-safe
+JWT comparison, IPv6 URL bracketing). Architecture review (3-session checkpoint
+since S84): +22 lines across 2 files. Codebase effectively stable for 10+
+sessions. Spec fully synchronized with code. Zero architectural concerns.
+
+## 2026-02-09: Session 87 - Three Bug Fixes from Audit
+
+Fixed all three bugs from S86 audit: (1) swapRemove during broadcast — changed
+for loop to backward-iterating while loop in `handlePtyOutput`, preventing
+cascading wrong-fd closes with multiple simultaneous viewer disconnections.
+(2) IPv6 URL — `cmdOtp --url` now brackets IPv6 addresses per RFC 3986.
+(3) Timing-safe JWT — replaced `std.mem.eql` with `std.crypto.timing_safe.eql`
+for HMAC signature verification. +13/-4 lines across 3 files.
+
+## 2026-02-09: Session 86 - Spec-vs-Code Audit
+
+First systematic audit of spec against code. Checked 7 major areas — all spec
+claims matched. Found three real bugs: (1) IPv6 URL generation broken in
+`cmdOtp --url` (HIGH). (2) swapRemove during for-loop broadcast in
+`handlePtyOutput` — can cascade to close wrong fds (MEDIUM). (3) Non-constant-
+time JWT signature comparison using `std.mem.eql` (LOW-MEDIUM). All three fixed
+in S87.
+
+## 2026-02-09: Session 85 - `vanish otp --url`
+
+Implemented `--url` flag for `vanish otp`. Prints full auth URL
+(`http://<bind>:<port>?otp=<code>`) for piping to clipboard or browser.
+`cmdOtp` now accepts config (was the only command that didn't). Updated man page,
+spec, and shell completions. +10 lines of logic.
+
+## 2026-02-09: Session 84 - Completion Bug Fixes + Man Page + Architecture Review
+
+Fixed 4 completion bugs: bash/zsh client ID parsing (was splitting on colon,
+output is tab-delimited), fish missing `-vv`, fish `-c` arg not skipped in
+subcommand detection, bash spurious `-c` in `new` positional counter. Man page
+fixes: added `-p` short form for attach, `-j` for list/clients, long forms for
+serve flags. Architecture review: zero Zig code changes since S79.
+
+## 2026-02-09: Session 83 - Shell Completion Scripts
+
+Added bash, zsh, and fish completion scripts covering all 11 subcommands, all
+flags, dynamic session name completion, dynamic client ID completion for kick,
+and command name completion for `vanish new`. Files installed to standard shell
+locations via build.zig. First code change in 5 sessions.
+
+## 2026-02-09: Session 82 - Reflection: Session Model Debate + Architecture Review
+
+Fourth debate cycle reflection. Pattern: devil's advocate raises 5-7 points,
+response concedes 1-2, reflection confirms. Debates reaching diminishing
+returns — major architectural decisions all examined. Paused debate cycles.
+Session model debate revealed: input authorization and terminal sizing are
+correctly coupled (person typing should see output formatted for their
+terminal). Two deferred UX items (viewer feedback, attach hint). Architecture
+review: zero code changes since S79. Codebase in maintenance mode.
+
+## 2026-02-09: Session 81 - Response: Defending the Session Model
+
+Defended primary+viewers model point-by-point. Key arguments: (1) vanish is a
+session multiplexer, not a collaboration tool — multi-writer without
+coordination UX is chaos. (2) The primary slot friction is a feedback problem
+(UX fix), not a model problem. (3) Takeover's visible 42 lines are less complex
+than multi-writer's hidden coordination problems. (4) `vanish send` failing when
+primary exists is a safety feature. (5) Silent viewer input drop is a web UI
+issue, not a model issue. (6) dtach/tmux precedent doesn't apply — different
+tools, different problems. (7) Primary correctly couples input permission with
+terminal sizing. Zero code changes. Two UX polish items deferred.
+
+## 2026-02-09: Session 80 - Devil's Advocate: The Session Model
+
+Made the case against max-1-primary + N viewers. Seven points: (1) prevents
+natural collaborative workflows. (2) hidden resource contention from invisible
+primary slot. (3) takeover mechanism more complex than multi-writer would be.
+(4) `vanish send` fails if primary exists. (5) viewer input silently dropped.
+(6) dtach/tmux both allow multi-writer. (7) model conflates input authorization
+and terminal sizing. Strongest counter-argument identified: multiple writers to
+a PTY is chaotic.
+
+## 2026-02-09: Session 79 - Architecture Review + Spec Update
+
+Architecture review (3-session checkpoint since S76): +38 lines for S78's socket
+liveness feature across 3 files. New http→session dependency justified
+(`isSocketLive` is a pure function). Updated spec with S78 behavioral changes:
+liveness probing, stale socket detection, `(stale)` annotations, `"live"` JSON
+field, TOCTOU race documentation.
+
+## 2026-02-09: Session 78 - Socket Clobbering Fix + Stale Socket Detection
+
+Fixed socket clobbering: `createSocket` now probes with connect before deleting
+existing sockets. Returns `SessionAlreadyExists` if socket is live. `cmdNew`
+checks liveness before forking. Added `isSocketLive(path)` public function to
+session.zig. `vanish list` now probes each socket — stale sessions annotated
+with `(stale)` in text output, `"live":false` in JSON. HTTP API also includes
+`live` field. Top two items from S77 hammock implemented.
+
+## 2026-02-09: Session 77 - Hammock: What Would Make This Proud Work?
+
+UX-focused hammock from user's perspective. Key findings: (1) Socket clobbering
+bug — `createSocket` silently deletes live sockets, orphaning sessions. (2)
+Stale sockets in `vanish list` — dead sessions shown without indication. (3)
+`vanish send` error when primary exists — verified error message is already
+clear. Assessed attach defaults (viewer default is correct — deterministic
+behavior over conditional convenience). OTP workflow is fine. No new
+decomposition needed. Concluded: pride comes from boring UX details, not more
+refactoring.
+
+## 2026-02-09: Session 76 - Architecture Review (Post-Decomposition)
+
+Post-decomposition review. All three S70 candidates completed: cmdNew (S71),
+processRequest (S74), writeCell (S75). Assessment: decomposition improved
+readability and maintainability. No new candidates. Remaining long functions
+(eventLoop, handleSseStream, etc.) are long for structural reasons (poll loops,
+sequential pipelines, switch dispatchers). Codebase stable at ~6,120 lines for
+6 sessions. Dependency graph acyclic. http.zig has most imports (6). Module
+boundaries sound.
+
+## 2026-02-09: Session 75 - writeCell Extraction
+
+Final S70 decomposition candidate. Extracted `writeCell` (20 lines) and
+`writeCodepoint` (4 lines) from `dumpViewport` in terminal.zig. Inner loop
+reduced from ~35 lines of inline cell rendering to a single `writeCell` call.
+All three S70 candidates now complete.
+
+## 2026-02-09: Session 74 - processRequest Decomposition
+
+S70 decomposition #2. Extracted `parseSessionRoute` (8 lines, 7 test cases) and
+`dispatchSessionRoute` (15 lines) from 73-line `processRequest` in http.zig.
+Reduced to 25 lines. Deduplicated 4 instances of session-name extraction logic.
+Minor behavioral change: empty session names return 404 instead of 400.
+
+## 2026-02-09: Session 73 - Architecture Review
+
+3-session checkpoint since S70. Zero code changes since S71. cmdNew decomposition
+holds up well. Remaining decomposition candidates (processRequest, writeCell)
+still valid. vthtml.zig `updateFromVTerm`/`fullScreen` duplication assessed —
+left as-is (small, intentional, function names descriptive). Dependency graph
+unchanged, acyclic. Module boundaries sound.
+
+## 2026-02-09: Session 72 - Specification Document
+
+Created `doc/spec.md` — comprehensive behavioral specification covering protocol
+wire format, session lifecycle, role model, native client keybinding state
+machine, HTTP server endpoints, authentication flow, configuration schema, state
+directories, edge cases, and allocator choices. Key corrections found: state
+directory is `~/.local/state/vanish`, `vanish send` connects as primary (not
+viewer).
+
+## 2026-02-09: Session 71 - cmdNew Decomposition
+
+S70 decomposition #1. Extracted `parseCmdNewArgs` (65 lines) and `forkSession`
+(32 lines) from 122-line `cmdNew`. cmdNew reduced to 22 lines. `name_buf`
+pointer pattern avoids Zig struct-returning-slice-into-own-buffer footgun.
+Pure refactoring, no behavior changes.
+
+## 2026-02-09: Session 70 - Abstraction Interrogation: Function Decomposition
+
+3-session architecture review. Surveyed all functions by length. Identified
+three decomposition candidates: (1) `cmdNew` in main.zig (122 lines — highest
+impact). (2) `processRequest` in http.zig (73 lines — repeated name extraction).
+(3) `dumpViewport` in terminal.zig (105 lines — inline cell rendering).
+Assessed session.zig as gold standard. Identified spec document gap.
+Distinguished structurally-long functions (poll loops, pipelines) from
+decomposition failures (mixed concerns).
+
+## 2026-02-09: Session 69 - Reflection: Protocol Debate Settled
+
+Protocol debate reflection. Two actions implemented: (1) Fix Header size test
+(expected 5, actual 8 due to alignment) and add `@sizeOf` tests for all wire
+structs. (2) Add protocol assumptions comment block. Key insight: scope
+determines rigor — local IPC over UDS between co-compiled processes needs
+different rigor than internet protocols. Versioning, checksums, and variable-
+length fields all correctly rejected.
+
+## 2026-02-09: Session 68 - Response: Defending the Protocol
+
+Defended protocol point-by-point. Concessions: struct size tests (right — only
+Header tested, should test all wire structs) and documentation (byte order
+assumption, high-bit convention should be stated). Rebuttals: native byte order
+fine for UDS (same host by definition), no version negotiation needed (single
+binary), no checksums needed (UDS reliable, HTTP bridge doesn't expose binary
+protocol), fixed-size term field simpler than variable-length for one-time
+handshake.
+
+## 2026-02-09: Session 67 - Devil's Advocate: The Protocol Design
+
+Made the case against the protocol. Seven points: (1) native byte order is a
+time bomb for cross-arch. (2) extern struct sizes undertested. (3) no version
+negotiation. (4) no message-level integrity. (5) fixed-size term field is a
+C-ism. (6) output/full distinction is implicit. (7) unknown message handling
+undefined. Strongest point: struct size tests missing. Weakest: versioning
+(single binary makes it unnecessary).
 
 ## 2026-02-09: Session 66 - index.html Reflection + Architecture Review
 
@@ -18,8 +229,6 @@ not file size, language count, or global count.
 
 Architecture review: zero code changes since v1.0.0 tag. 15 files, 6,088 lines,
 44 tests. All clean. Archived sessions 59-65.
-
-For current session notes (59+), see prompt.md.
 
 ## 2026-02-09: Session 58 - Arch PKGBUILD + LICENSE
 
