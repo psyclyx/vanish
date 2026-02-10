@@ -97,6 +97,20 @@ const Viewport = struct {
         self.clampOffset();
     }
 
+    fn applyScroll(self: *Viewport, action: keybind.Action) void {
+        switch (action) {
+            .scroll_up => self.moveUp(),
+            .scroll_down => self.moveDown(),
+            .scroll_left => self.moveLeft(),
+            .scroll_right => self.moveRight(),
+            .scroll_page_up => self.pageUp(),
+            .scroll_page_down => self.pageDown(),
+            .scroll_top => self.jumpTopLeft(),
+            .scroll_bottom => self.jumpBottomRight(),
+            else => {},
+        }
+    }
+
     fn clampOffset(self: *Viewport) void {
         const max_x = if (self.session_cols > self.local_cols)
             self.session_cols - self.local_cols
@@ -180,43 +194,8 @@ const Client = struct {
                     protocol.writeMsg(self.fd, @intFromEnum(protocol.ClientMsg.takeover), "") catch {};
                 }
             },
-            .scroll_up => {
-                self.viewport.moveUp();
-                self.renderViewport();
-                self.renderStatusBar();
-            },
-            .scroll_down => {
-                self.viewport.moveDown();
-                self.renderViewport();
-                self.renderStatusBar();
-            },
-            .scroll_left => {
-                self.viewport.moveLeft();
-                self.renderViewport();
-                self.renderStatusBar();
-            },
-            .scroll_right => {
-                self.viewport.moveRight();
-                self.renderViewport();
-                self.renderStatusBar();
-            },
-            .scroll_page_up => {
-                self.viewport.pageUp();
-                self.renderViewport();
-                self.renderStatusBar();
-            },
-            .scroll_page_down => {
-                self.viewport.pageDown();
-                self.renderViewport();
-                self.renderStatusBar();
-            },
-            .scroll_top => {
-                self.viewport.jumpTopLeft();
-                self.renderViewport();
-                self.renderStatusBar();
-            },
-            .scroll_bottom => {
-                self.viewport.jumpBottomRight();
+            .scroll_up, .scroll_down, .scroll_left, .scroll_right, .scroll_page_up, .scroll_page_down, .scroll_top, .scroll_bottom => {
+                self.viewport.applyScroll(action);
                 self.renderViewport();
                 self.renderStatusBar();
             },
@@ -688,4 +667,45 @@ fn setRawMode() !posix.termios {
 
 fn restoreTermios(termios: posix.termios) void {
     posix.tcsetattr(STDIN, .FLUSH, termios) catch {};
+}
+
+test "viewport applyScroll" {
+    var vp = Viewport{
+        .session_cols = 120,
+        .session_rows = 40,
+        .local_cols = 80,
+        .local_rows = 24,
+    };
+    vp.applyScroll(.scroll_down);
+    try std.testing.expectEqual(@as(u16, 1), vp.offset_y);
+    vp.applyScroll(.scroll_right);
+    try std.testing.expectEqual(@as(u16, 1), vp.offset_x);
+    vp.applyScroll(.scroll_bottom);
+    try std.testing.expectEqual(@as(u16, 40 - 24), vp.offset_y);
+    try std.testing.expectEqual(@as(u16, 120 - 80), vp.offset_x);
+    vp.applyScroll(.scroll_top);
+    try std.testing.expectEqual(@as(u16, 0), vp.offset_y);
+    try std.testing.expectEqual(@as(u16, 0), vp.offset_x);
+}
+
+test "viewerNav basic mappings" {
+    try std.testing.expectEqual(keybind.Action.scroll_left, viewerNav('h', false).?);
+    try std.testing.expectEqual(keybind.Action.scroll_down, viewerNav('j', false).?);
+    try std.testing.expectEqual(keybind.Action.scroll_up, viewerNav('k', false).?);
+    try std.testing.expectEqual(keybind.Action.scroll_right, viewerNav('l', false).?);
+    try std.testing.expectEqual(keybind.Action.scroll_page_up, viewerNav('u', false).?);
+    try std.testing.expectEqual(keybind.Action.scroll_page_down, viewerNav('d', false).?);
+    try std.testing.expectEqual(keybind.Action.scroll_top, viewerNav('g', false).?);
+    try std.testing.expectEqual(keybind.Action.scroll_bottom, viewerNav('G', false).?);
+}
+
+test "viewerNav ctrl mappings" {
+    try std.testing.expectEqual(keybind.Action.scroll_page_up, viewerNav(0x15, true).?);
+    try std.testing.expectEqual(keybind.Action.scroll_page_down, viewerNav(0x04, true).?);
+}
+
+test "viewerNav unmapped keys return null" {
+    try std.testing.expectEqual(@as(?keybind.Action, null), viewerNav('a', false));
+    try std.testing.expectEqual(@as(?keybind.Action, null), viewerNav('z', false));
+    try std.testing.expectEqual(@as(?keybind.Action, null), viewerNav(0x01, true));
 }

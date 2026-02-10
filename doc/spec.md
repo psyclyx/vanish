@@ -510,6 +510,12 @@ infinite recursion that occurs when a session's shell attaches to itself.
 
 **Session daemon crashes**: Socket file left behind (stale socket). `vanish new` with same name detects the stale socket via `isSocketLive` (connect fails), deletes it, and creates a new session. `vanish list` annotates stale sockets with `(stale)` in text output and `"live":false` in JSON output.
 
+### Recovery
+
+Session state is not persisted. Terminal content, scrollback, and cursor position exist only in the session daemon's memory (via libghostty's VTerminal). If the daemon crashes or is killed, the session is lost. There is no recovery mechanism and this is by design — vanish is a session multiplexer, not a session manager. The expected workflow is: detect the stale socket, create a new session.
+
+Stale socket cleanup: `vanish new` with the same name detects and replaces stale sockets automatically. `vanish list` marks them so users can identify dead sessions. The web UI filters them out entirely.
+
 ### Child Process
 
 **Child exits normally**: PTY read returns 0 -> session sends `exit{code}` to all clients -> session shuts down.

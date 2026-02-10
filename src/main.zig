@@ -1040,3 +1040,50 @@ test "parse duration" {
     try std.testing.expectEqual(@as(?i64, 604800), parseDuration("1w"));
     try std.testing.expectEqual(@as(?i64, null), parseDuration("invalid"));
 }
+
+test "parseCmdNewArgs basic" {
+    const cfg = config.Config{};
+    var name_buf: [64]u8 = undefined;
+    const args: []const []const u8 = &.{ "work", "zsh" };
+    const result = try parseCmdNewArgs(std.testing.allocator, args, &cfg, &name_buf);
+    try std.testing.expectEqualStrings("work", result.session_name);
+    try std.testing.expectEqual(false, result.detach);
+    try std.testing.expectEqual(false, result.serve);
+    try std.testing.expectEqual(false, result.auto_name);
+    try std.testing.expectEqual(@as(usize, 1), result.cmd_args.len);
+    try std.testing.expectEqualStrings("zsh", result.cmd_args[0]);
+}
+
+test "parseCmdNewArgs with flags" {
+    const cfg = config.Config{};
+    var name_buf: [64]u8 = undefined;
+    const args: []const []const u8 = &.{ "--detach", "--serve", "work", "zsh", "-l" };
+    const result = try parseCmdNewArgs(std.testing.allocator, args, &cfg, &name_buf);
+    try std.testing.expectEqualStrings("work", result.session_name);
+    try std.testing.expectEqual(true, result.detach);
+    try std.testing.expectEqual(true, result.serve);
+    try std.testing.expectEqual(@as(usize, 2), result.cmd_args.len);
+    try std.testing.expectEqualStrings("zsh", result.cmd_args[0]);
+    try std.testing.expectEqualStrings("-l", result.cmd_args[1]);
+}
+
+test "parseCmdNewArgs with separator" {
+    const cfg = config.Config{};
+    var name_buf: [64]u8 = undefined;
+    const args: []const []const u8 = &.{ "work", "--", "zsh", "-l" };
+    const result = try parseCmdNewArgs(std.testing.allocator, args, &cfg, &name_buf);
+    try std.testing.expectEqualStrings("work", result.session_name);
+    try std.testing.expectEqual(@as(usize, 2), result.cmd_args.len);
+    try std.testing.expectEqualStrings("zsh", result.cmd_args[0]);
+}
+
+test "parseCmdNewArgs short flags" {
+    const cfg = config.Config{};
+    var name_buf: [64]u8 = undefined;
+    const args: []const []const u8 = &.{ "-d", "-s", "dev", "bash" };
+    const result = try parseCmdNewArgs(std.testing.allocator, args, &cfg, &name_buf);
+    try std.testing.expectEqual(true, result.detach);
+    try std.testing.expectEqual(true, result.serve);
+    try std.testing.expectEqualStrings("dev", result.session_name);
+    try std.testing.expectEqualStrings("bash", result.cmd_args[0]);
+}
