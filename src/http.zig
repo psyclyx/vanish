@@ -722,16 +722,7 @@ fn handleSseSessionOutput(self: *HttpServer, sse_idx: usize) !void {
             }
         },
         else => {
-            // Skip unknown messages
-            if (header.len > 0) {
-                var remaining = header.len;
-                var skip_buf: [4096]u8 = undefined;
-                while (remaining > 0) {
-                    const chunk: usize = @min(remaining, skip_buf.len);
-                    try protocol.readExact(sse.session_fd, skip_buf[0..chunk]);
-                    remaining -= @intCast(chunk);
-                }
-            }
+            protocol.skipBytes(sse.session_fd, header.len);
         },
     }
 }

@@ -571,13 +571,7 @@ fn runClientLoop(client: *Client) !void {
                     client.renderStatusBar();
                 },
                 else => {
-                    var remaining = header.len;
-                    var skip_buf: [1024]u8 = undefined;
-                    while (remaining > 0) {
-                        const chunk: usize = @min(remaining, skip_buf.len);
-                        protocol.readExact(client.fd, skip_buf[0..chunk]) catch break;
-                        remaining -= @intCast(chunk);
-                    }
+                    protocol.skipBytes(client.fd, header.len);
                 },
             }
         }

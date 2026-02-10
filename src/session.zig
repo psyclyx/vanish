@@ -320,32 +320,21 @@ fn handleClientInput(self: *Session, is_primary: bool, viewer_idx: usize) !void 
                 };
                 _ = posix.write(self.pty.master, buf[0..to_read]) catch {};
             } else {
-                var remaining = header.len;
-                var skip_buf: [1024]u8 = undefined;
-                while (remaining > 0) {
-                    const chunk: usize = @min(remaining, skip_buf.len);
-                    protocol.readExact(client.fd, skip_buf[0..chunk]) catch break;
-                    remaining -= @intCast(chunk);
-                }
+                protocol.skipBytes(client.fd, header.len);
             }
         },
         .resize => {
-            if (header.len == @sizeOf(protocol.Resize)) {
-                var resize_buf: [@sizeOf(protocol.Resize)]u8 = undefined;
-                protocol.readExact(client.fd, &resize_buf) catch return;
-                const resize = std.mem.bytesToValue(protocol.Resize, &resize_buf);
-                if (is_primary) {
-                    client.cols = resize.cols;
-                    client.rows = resize.rows;
-                    self.cols = resize.cols;
-                    self.rows = resize.rows;
-                    self.pty.resize(.{ .rows = resize.rows, .cols = resize.cols }) catch {};
-                    if (self.terminal) |*term| {
-                        term.resize(resize.cols, resize.rows) catch {};
-                    }
-                    // Notify viewers of session resize
-                    self.notifyViewersResize();
+            const resize = protocol.readStruct(protocol.Resize, client.fd, header.len) catch return orelse return;
+            if (is_primary) {
+                client.cols = resize.cols;
+                client.rows = resize.rows;
+                self.cols = resize.cols;
+                self.rows = resize.rows;
+                self.pty.resize(.{ .rows = resize.rows, .cols = resize.cols }) catch {};
+                if (self.terminal) |*term| {
+                    term.resize(resize.cols, resize.rows) catch {};
                 }
+                self.notifyViewersResize();
             }
         },
         .detach => {
@@ -363,18 +352,15 @@ fn handleClientInput(self: *Session, is_primary: bool, viewer_idx: usize) !void 
             self.sendClientList(client.fd) catch {};
         },
         .kick_client => {
-            if (header.len == @sizeOf(protocol.KickClient)) {
-                var kick_buf: [@sizeOf(protocol.KickClient)]u8 = undefined;
-                protocol.readExact(client.fd, &kick_buf) catch return;
-                const kick = std.mem.bytesToValue(protocol.KickClient, &kick_buf);
-                self.kickClient(kick.id);
-            }
+            const kick = protocol.readStruct(protocol.KickClient, client.fd, header.len) catch return orelse return;
+            self.kickClient(kick.id);
         },
         .kill_session => {
-            // Terminate the session gracefully
             self.running = false;
         },
-        else => {},
+        else => {
+            protocol.skipBytes(client.fd, header.len);
+        },
     }
 }
 

@@ -173,6 +173,23 @@ pub fn readExact(fd: posix.fd_t, buf: []u8) !void {
     if (n < buf.len) return error.EndOfStream;
 }
 
+pub fn readStruct(comptime T: type, fd: posix.fd_t, wire_len: u32) !?T {
+    if (wire_len != @sizeOf(T)) return null;
+    var buf: [@sizeOf(T)]u8 = undefined;
+    try readExact(fd, &buf);
+    return std.mem.bytesToValue(T, &buf);
+}
+
+pub fn skipBytes(fd: posix.fd_t, len: u32) void {
+    var remaining = len;
+    var buf: [4096]u8 = undefined;
+    while (remaining > 0) {
+        const chunk: usize = @min(remaining, buf.len);
+        readExact(fd, buf[0..chunk]) catch return;
+        remaining -= @intCast(chunk);
+    }
+}
+
 test "hello struct" {
     var hello = Hello{
         .role = .primary,
