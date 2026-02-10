@@ -84,7 +84,7 @@ If role is viewer: session dimensions unchanged; client adapts via viewport.
 1. Parse args: `parseCmdNewArgs` extracts flags, session name, command.
 2. Resolve socket path: `$socket_dir/$name`.
 3. Liveness check: probe socket with connect attempt (`isSocketLive`). If live, error: "Session '$name' already exists". This prevents silently clobbering a running session's socket.
-4. `forkSession`: create pipe, fork. Child daemonizes (setsid, close stdin/stdout/stderr), calls `Session.runWithNotify`. Parent waits for ready byte on pipe.
+4. `forkSession`: create pipe, fork. Child daemonizes (setsid, close stdin/stdout/stderr), sets `VANISH_SESSION` and `VANISH_SOCKET` environment variables, calls `Session.runWithNotify`. Parent waits for ready byte on pipe.
 5. `createSocket` (in child): secondary liveness guard — if socket became live between step 3 and the child's bind attempt, returns `error.SessionAlreadyExists`. TOCTOU race is acceptable; worst case falls back to "Session failed to start" error.
 6. If `--auto-name`: print generated name to stdout.
 7. If `--serve` or `config.serve.auto_serve`: start HTTP server (idempotent).
@@ -449,6 +449,21 @@ Aliases: pan_up, pan_down, pan_left, pan_right, page_up, page_down, top, bottom,
 | Socket dir | Session Unix sockets | `$XDG_RUNTIME_DIR/vanish` |
 | State dir | HMAC keys, OTP files | `$XDG_STATE_HOME/vanish` or `~/.local/state/vanish` |
 | Config dir | config.json | `$XDG_CONFIG_HOME/vanish` or `~/.config/vanish` |
+
+## Environment Variables
+
+The child process spawned by `vanish new` inherits the parent shell's
+environment. Additionally, vanish sets:
+
+| Variable | Value | Example |
+|----------|-------|---------|
+| `VANISH_SESSION` | Session name | `work` |
+| `VANISH_SOCKET` | Full socket path | `/run/user/1000/vanish/work` |
+
+These are set via `setenv()` in the session daemon before spawning the PTY
+child, so they're available in the shell and any processes it starts. Useful for
+scripts that need to know they're running inside vanish (e.g., status bar
+integration, auto-attach logic).
 
 ## Edge Cases
 

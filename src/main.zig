@@ -325,7 +325,7 @@ fn parseCmdNewArgs(
     };
 }
 
-fn forkSession(socket_path: []const u8, cmd_args: []const []const u8) !void {
+fn forkSession(socket_path: []const u8, session_name: []const u8, cmd_args: []const []const u8) !void {
     const pipe_fds = try posix.pipe();
 
     const pid = try posix.fork();
@@ -338,12 +338,13 @@ fn forkSession(socket_path: []const u8, cmd_args: []const []const u8) !void {
         const child_alloc = std.heap.c_allocator;
 
         const child_socket_path = child_alloc.dupe(u8, socket_path) catch std.process.exit(1);
+        const child_session_name = child_alloc.dupe(u8, session_name) catch std.process.exit(1);
         const child_cmd_args = child_alloc.alloc([]const u8, cmd_args.len) catch std.process.exit(1);
         for (cmd_args, 0..) |arg, i| {
             child_cmd_args[i] = child_alloc.dupe(u8, arg) catch std.process.exit(1);
         }
 
-        Session.runWithNotify(child_alloc, child_socket_path, child_cmd_args, pipe_fds[1]) catch std.process.exit(1);
+        Session.runWithNotify(child_alloc, child_socket_path, child_session_name, child_cmd_args, pipe_fds[1]) catch std.process.exit(1);
         std.process.exit(0);
     }
 
@@ -373,7 +374,7 @@ fn cmdNew(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const config
         std.process.exit(1);
     }
 
-    try forkSession(socket_path, parsed.cmd_args);
+    try forkSession(socket_path, parsed.session_name, parsed.cmd_args);
 
     if (parsed.auto_name) {
         var msg_buf: [128]u8 = undefined;

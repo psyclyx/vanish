@@ -29,14 +29,15 @@ cols: u16 = 80,
 rows: u16 = 24,
 next_client_id: u32 = 1,
 
-pub fn run(alloc: std.mem.Allocator, socket_path: []const u8, argv: []const []const u8) !void {
-    return runWithNotify(alloc, socket_path, argv, null);
+pub fn run(alloc: std.mem.Allocator, socket_path: []const u8, session_name: []const u8, argv: []const []const u8) !void {
+    return runWithNotify(alloc, socket_path, session_name, argv, null);
 }
 
-pub fn runWithNotify(alloc: std.mem.Allocator, socket_path: []const u8, argv: []const []const u8, notify_fd: ?posix.fd_t) !void {
+pub fn runWithNotify(alloc: std.mem.Allocator, socket_path: []const u8, session_name: []const u8, argv: []const []const u8, notify_fd: ?posix.fd_t) !void {
     var pty = try Pty.open();
     errdefer pty.close();
 
+    setSessionEnv(session_name, socket_path);
     try pty.resize(.{ .rows = 24, .cols = 80 });
     try pty.spawn(argv, null);
 
@@ -526,6 +527,26 @@ fn createSocket(path: []const u8) !posix.socket_t {
     try posix.listen(sock, 5);
 
     return sock;
+}
+
+fn setSessionEnv(name: []const u8, socket_path: []const u8) void {
+    const setenv = struct {
+        extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+    }.setenv;
+
+    var name_buf: [65]u8 = undefined;
+    var sock_buf: [std.fs.max_path_bytes + 1]u8 = undefined;
+
+    if (name.len < name_buf.len) {
+        @memcpy(name_buf[0..name.len], name);
+        name_buf[name.len] = 0;
+        _ = setenv("VANISH_SESSION", @ptrCast(name_buf[0..name.len :0]), 1);
+    }
+    if (socket_path.len < sock_buf.len) {
+        @memcpy(sock_buf[0..socket_path.len], socket_path);
+        sock_buf[socket_path.len] = 0;
+        _ = setenv("VANISH_SOCKET", @ptrCast(sock_buf[0..socket_path.len :0]), 1);
+    }
 }
 
 /// Probe a Unix socket path to check if a session is listening.
