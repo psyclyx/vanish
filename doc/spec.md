@@ -465,6 +465,11 @@ child, so they're available in the shell and any processes it starts. Useful for
 scripts that need to know they're running inside vanish (e.g., status bar
 integration, auto-attach logic).
 
+**Self-join protection**: `vanish attach` checks `VANISH_SOCKET` and
+`VANISH_SESSION` before connecting. If the target session matches the current
+session, it exits with "Cannot attach to own session". This prevents the
+infinite recursion that occurs when a session's shell attaches to itself.
+
 ## Edge Cases
 
 ### Resize

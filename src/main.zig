@@ -87,6 +87,16 @@ pub const Verbosity = enum(u2) {
 
 var global_verbosity: Verbosity = .quiet;
 
+fn isSelfSession(socket_path: []const u8) bool {
+    if (std.posix.getenv("VANISH_SOCKET")) |env_socket| {
+        if (std.mem.eql(u8, socket_path, env_socket)) return true;
+    }
+    if (std.posix.getenv("VANISH_SESSION")) |env_name| {
+        if (std.mem.eql(u8, std.fs.path.basename(socket_path), env_name)) return true;
+    }
+    return false;
+}
+
 fn writeAll(fd: posix.fd_t, data: []const u8) !void {
     var written: usize = 0;
     while (written < data.len) {
@@ -418,6 +428,11 @@ fn cmdAttach(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const con
 
     const socket_path = try paths.resolveSocketPath(alloc, socket_arg.?, cfg);
     defer alloc.free(socket_path);
+
+    if (isSelfSession(socket_path)) {
+        try writeAll(STDERR_FILENO, "Cannot attach to own session\n");
+        std.process.exit(1);
+    }
 
     const Client = @import("client.zig");
     try Client.attach(alloc, socket_path, !as_primary, cfg);
