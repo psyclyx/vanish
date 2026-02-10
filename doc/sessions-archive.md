@@ -1,9 +1,111 @@
-# Vanish Session Notes Archive (Sessions 1-90)
+# Vanish Session Notes Archive (Sessions 1-101)
 
 These session notes were archived from prompt.md. They cover the project
 from initial implementation through v1.0.0 and subsequent maintenance sessions.
 
-For current session notes (91+), see prompt.md.
+For current session notes (102+), see prompt.md.
+
+## 2026-02-09: Session 101 - Reflection on the Challenge/Response Cycle
+
+Third and final part of the S99-S101 cycle. Analyzed the adversarial framing of
+the challenge/response process. Key findings: S99 was wrong about testing (didn't
+check for existing 46 tests), S100 was too dismissive of the event loop index
+fragility concern. Identified three forms of calcification: reflexive rejection
+of abstraction, anchoring on existing decisions, diminishing returns as
+validation. Concluded the codebase is genuinely complete — meaningful improvement
+requires usage, not self-generated challenges. Confirmed three accepted items for
+S102 implementation.
+
+## 2026-02-09: Session 100 - Response to Challenges
+
+Second part of the S99-S101 challenge/response cycle. Corrected S99's "no tests"
+claim (46 tests exist across 10 files). Rejected: event loop unification (three
+different lifecycle semantics), main.zig CLI extraction (functions are linear,
+called once each). Accepted: `applyScroll` viewport method to collapse 8
+identical `executeAction` branches (-15 lines), recovery section in spec, tests
+for `viewerNav` and `parseCmdNewArgs`. Deferred: http.zig split (at threshold but
+not urgent at 1,101 lines).
+
+## 2026-02-09: Session 99 - Hammock: The Case Against Our Decisions
+
+First part of a three-session challenge/response/reflection cycle. Built the
+strongest case against current decisions: three separate event loops vs a generic
+Poller, `executeAction` scroll branch repetition, http.zig at 1,101 lines with
+three natural seams, main.zig mixing arg parsing with business logic,
+specification gaps around crash recovery and ordering guarantees, and testing
+coverage. Identified that the codebase is genuinely lean (5,963 lines) but
+challenged whether the architecture choices were right or just defended
+reflexively.
+
+## 2026-02-09: Session 98 - Archive Cleanup
+
+Archived sessions S67-S90 from prompt.md to sessions-archive.md. Each session
+received a condensed summary paragraph. prompt.md reduced from ~3,860 to ~1,120
+lines. One unresolved inbox item remaining (fullscreen apps in smaller viewer
+sessions).
+
+## 2026-02-09: Session 97 - Architecture Review + Web Viewer Fixes
+
+Architecture review (3-session checkpoint since S94): +47 lines in Zig source
+across 2 files (client.zig, keybind.zig), all from S95. Implemented three web
+viewer fixes from S96 hammock: (1) moved `e.preventDefault()` after `!isPrimary`
+check — browser keyboard scrolling now works for viewers. (2) Added
+`showViewerHint()` overlay for viewer key presses. (3) Filtered stale sessions
+from web session list using existing `live` field. All inbox web viewer items
+resolved.
+
+## 2026-02-09: Session 96 - Hammock: Web Viewer Experience
+
+Analyzed web viewer architecture vs native viewer. Found a real bug:
+`e.preventDefault()` called unconditionally in `handleKey`, blocking browser
+keyboard scrolling for viewers. Decided against custom keyboard scroll handlers
+(browser handles this natively once `preventDefault` is fixed). Recommended:
+(1) fix `preventDefault` bug, (2) add viewer key hint matching native client
+behavior, (3) filter stale sessions from web UI. Rejected WebSocket upgrade and
+web-side viewport panning as unnecessary complexity.
+
+## 2026-02-09: Session 95 - Viewer Direct Navigation
+
+Implemented direct viewport navigation for viewers without leader key. `viewerNav`
+(pure function, 15 lines) maps hjkl/u/d/g/G/Ctrl+U/Ctrl+D to viewport actions.
+Unmapped keys show brief "viewer | ^At takeover" hint. Resolves two inbox items:
+key flash indicator (most keys now do something useful) and pannable edge fringe
+(direct navigation makes panning discoverable). Added `leaderName` method to
+keybind.zig for hint formatting.
+
+## 2026-02-09: Session 94 - Architecture Review + Viewer UX Hammock
+
+Architecture review: +21 lines since S91, both changes small and self-contained.
+Codebase stable at ~5,916 lines. Hammock on remaining inbox items: (1) fullscreen
+app viewer redraw — traced code, `sendTerminalState` should provide correct
+content, needs testing not code. (2) Pannable edge fringe — rejected all visual
+indicator options (steal space, fight content), status bar already shows offset.
+(3) Viewer key press feedback — evolved into recommendation for direct viewport
+navigation (viewers can't type, so hjkl should navigate without leader key).
+
+## 2026-02-09: Session 93 - Alternate Screen Buffer Fix
+
+Fixed stale top line on `vanish new -a zsh` and cursor state on attach/detach.
+Root cause: client never cleared screen before rendering session output. Fix:
+enter alternate screen buffer (`\x1b[?1049h`) on attach, leave it
+(`\x1b[?1049l`) on detach. Standard mechanism used by tmux/vim/less. Preserves
+user's pre-attach terminal history (restored on detach). +4 lines in client.zig.
+
+## 2026-02-09: Session 92 - Self-Join Protection
+
+Implemented `isSelfSession` in main.zig — checks `VANISH_SOCKET` (exact path)
+and `VANISH_SESSION` (basename fallback) env vars before connecting. Prevents
+infinite recursion when running `vanish attach work` from within the `work`
+session. Exits with "Cannot attach to own session". Not applied to `cmdSend`
+(already fails with "primary exists" error, no recursion risk). +13 lines.
+
+## 2026-02-09: Session 91 - Environment Variables + Architecture Review
+
+Investigated env inheritance (works correctly via fork). Added `setSessionEnv()`
+to session.zig: sets `VANISH_SESSION` and `VANISH_SOCKET` via libc `setenv()`
+before PTY spawn. Used `extern "c"` declaration for `setenv` (not in Zig 0.15's
+std.c). Architecture review (3-session checkpoint since S88): +20 lines across 2
+files, minimal growth, no coupling concerns. Codebase at 5,895 lines.
 
 ## 2026-02-09: Session 90 - Shell Wrapper Functions
 
