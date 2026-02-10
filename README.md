@@ -135,6 +135,22 @@ Actions: `detach`, `takeover`, `toggle_status`, `help`, `scrollback`,
 
 All fields are optional. Unset values use defaults.
 
+## Shell wrapper
+
+`contrib/v.sh` provides a `v` function for daily use:
+
+```sh
+# Source in .bashrc or .zshrc
+source /path/to/vanish/contrib/v.sh
+
+v              # pick session with fzf, attach
+v work         # attach to 'work', or create it with $SHELL
+v work zsh     # create 'work' with zsh
+v -l           # list sessions
+```
+
+Fish users: copy `contrib/v.fish` to `~/.config/fish/functions/v.fish`.
+
 ## Design
 
 Sessions are PTY + ghostty-vt terminal emulator pairs, managed as daemon
