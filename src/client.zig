@@ -458,9 +458,13 @@ pub fn attach(alloc: std.mem.Allocator, socket_path: []const u8, as_viewer: bool
     var old_termios: ?posix.termios = null;
     if (posix.isatty(STDIN)) {
         old_termios = setRawMode() catch null;
+        _ = posix.write(STDOUT, "\x1b[?1049h") catch {}; // enter alternate screen
     }
     defer {
-        if (old_termios) |t| restoreTermios(t);
+        if (old_termios) |t| {
+            _ = posix.write(STDOUT, "\x1b[?1049l") catch {}; // leave alternate screen
+            restoreTermios(t);
+        }
     }
 
     const session_name = std.fs.path.basename(socket_path);

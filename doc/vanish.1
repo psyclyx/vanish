@@ -36,6 +36,8 @@ Attach to an existing session as a viewer.
 .B \-\-primary
 (\fB\-p\fR) attaches as the primary client, taking over input control.
 Attaching to one's own session is detected and refused.
+Uses the alternate screen buffer for a clean display; the previous terminal
+content is restored on detach.
 .TP
 .B list \fR[\fB\-j\fR|\fB\-\-json\fR]
 List active sessions. With

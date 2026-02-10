@@ -223,6 +223,14 @@ Only shows "important" actions (detach, toggle_status, takeover, help, scrollbac
 
 Toggled with leader + s. Shows session info when active. Also temporarily shown during leader state.
 
+### Terminal State on Attach/Detach
+
+On attach: enters alternate screen buffer (`\x1b[?1049h`) and sets raw mode. This gives a clean canvas and preserves the user's pre-attach terminal content.
+
+On detach/exit: leaves alternate screen buffer (`\x1b[?1049l`) and restores original termios. The user's previous terminal content is restored.
+
+This matches the behavior of tmux, screen, and other TUI applications.
+
 ## HTTP Server
 
 ### Startup
