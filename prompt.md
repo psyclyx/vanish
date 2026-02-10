@@ -262,6 +262,193 @@ covering S1-S102 with key milestones listed.
   S99-S101 challenge cycle. No new items have emerged since.
 - prompt.md is now lean at ~240 lines. No archiving needed for many sessions.
 
+## 2026-02-09: Session 104 - Architecture Pre-Review
+
+### Purpose
+
+S105 is the 3-session architecture review checkpoint. This session prepares by
+reading every source file and evaluating: what's working, what's not, what's
+simple, what's complected, and where the maintenance burden will land.
+
+### Codebase snapshot
+
+| File | Lines | Role |
+|------|-------|------|
+| http.zig | 1,101 | HTTP server, SSE, session list streaming |
+| main.zig | 1,089 | CLI commands, arg parsing, daemonization |
+| client.zig | 711 | TUI client, viewport, keybind dispatch |
+| auth.zig | 585 | JWT/HMAC auth, OTP management |
+| session.zig | 559 | Session server, PTY, client management |
+| config.zig | 461 | JSON config parsing, serialization |
+| vthtml.zig | 374 | VT→HTML cell diffing for web UI |
+| terminal.zig | 348 | VTerminal wrapper around ghostty-vt |
+| protocol.zig | 213 | Binary wire protocol |
+| keybind.zig | 193 | Keybinding state machine |
+| naming.zig | 165 | Auto-naming (adjective-noun-command) |
+| pty.zig | 140 | PTY open/close/resize/spawn |
+| build.zig | 60 | Build configuration |
+| signal.zig | 48 | Signal handling |
+| paths.zig | 43 | Path resolution |
+| **Total** | **~6,090** | **53 tests across 11 files** |
+
+### What's working well
+
+**1. Protocol (protocol.zig, 213 lines).** Clean, minimal. The header+payload
+framing is dead simple. The extern struct approach with size assertions is the
+right call for same-host IPC. The `writeMsg`/`writeStruct`/`readHeader`/
+`readExact` API is easy to use correctly. No complaints.
+
+**2. Keybinding (keybind.zig, 193 lines).** Small, focused, well-tested. The
+state machine (in_leader → match bind → action | cancel) is obvious. The hint
+formatting logic is the only subtle part and it's well-contained.
+
+**3. Session server (session.zig, 559 lines).** Clean ownership model:
+one optional primary, a list of viewers. The poll loop is straightforward.
+`handleNewConnection` and `handleClientInput` are the two big functions but
+they're linear dispatches, not deeply nested. The takeover logic is correct
+and contained.
+
+**4. Terminal wrapper (terminal.zig, 348 lines).** Good abstraction boundary.
+Hides ghostty-vt behind a clean feed/dump/resize interface. The viewport
+rendering (`dumpViewport`) is well-structured. The `screen_cleared` flag for
+alternate screen detection is a clean solution.
+
+**5. Config (config.zig, 461 lines).** The `load` → `LoadResult` pattern with
+explicit error typing is clean. Arena-backed parsing avoids lifetime issues.
+Key parsing handles all the edge cases (^A, Ctrl+A, Ctrl+Space, etc.) with
+good test coverage.
+
+**6. Naming (naming.zig, 165 lines).** Self-contained, pure logic, good.
+
+### Areas of concern
+
+**1. http.zig is the largest file (1,101 lines) and the most complected.**
+
+The `eventLoop` function (lines 165-299) manually manages poll index arithmetic
+across four different fd types (listen sockets, HTTP clients, SSE clients,
+session list clients). The index tracking (`idx`, `client_idx`, `sse_idx`,
+`sl_idx`) is fragile — adding a new client type would mean touching multiple
+places. This is the one function in the codebase that genuinely worries me.
+
+Also: the auth validation pattern repeats identically across `handleInput`,
+`handleResize`, `handleTakeover`, `handleSseStream`, and
+`handleSessionListStream`. Each does:
+```
+const payload = self.validateAuth(headers) catch {
+    try self.sendError(client, 401, "Unauthorized");
+    return;
+};
+defer if (payload.session) |s| self.alloc.free(s);
+```
+Plus the session-scope check pattern:
+```
+if (payload.scope == .session) {
+    if (payload.session) |allowed| {
+        if (!std.mem.eql(u8, session_name, allowed)) {
+            try self.sendError(client, 403, "Session not allowed");
+            return;
+        }
+    }
+}
+```
+This appears 4 times. A helper like `validateAuthForSession(headers,
+session_name)` that returns the payload or sends the error would be cleaner.
+
+**Not proposing a fix yet.** This is noting the smell for S105 evaluation.
+
+**2. main.zig (1,089 lines) is long but not deeply complected.**
+
+The length comes from many independent `cmdX` functions that each parse their
+own args. These are mostly linear and self-contained. The command dispatch in
+`main()` is a simple if/else chain. This is fine — the functions don't interact
+with each other, so the file length isn't a real problem.
+
+The one slightly concerning pattern: `connectAsViewer` in main.zig duplicates
+socket connection + hello/welcome logic that also appears in http.zig's
+`handleSseStream`. Both do: connect → send hello → read welcome → skip full
+state. This could be a shared function in protocol.zig or a small
+`connection.zig` module, but it's not urgent — there are only two call sites.
+
+**3. `connectToSession` is defined in both main.zig (line 712) and http.zig
+(line 1067).** Identical function bodies. This is a straightforward
+deduplication candidate — should live in a shared location (paths.zig or a
+new `socket.zig`).
+
+**4. vthtml.zig's `updateFromVTerm` and `fullScreen` share most of their loop
+body.** The only difference: `updateFromVTerm` checks if the cell changed,
+`fullScreen` emits everything unconditionally. These could share a core loop
+with a boolean parameter or an `enum { delta, full }`, but the current
+duplication is only ~30 lines. Not urgent but worth noting.
+
+**5. The `writeAll` function in main.zig (line 100) duplicates `writeAllFd`
+in protocol.zig (line 114).** Same retry-on-WouldBlock logic. Could be shared.
+
+### Simplicity scorecard
+
+| Component | Simple? | Notes |
+|-----------|---------|-------|
+| protocol | Yes | Clean data types, clean framing |
+| keybind | Yes | Small state machine, well-bounded |
+| session | Yes | Linear poll loop, clean ownership |
+| terminal | Yes | Good abstraction over ghostty-vt |
+| config | Yes | Arena-backed parsing, explicit errors |
+| pty | Yes | Thin POSIX wrapper |
+| signal | Yes | Two booleans, one setup function |
+| paths | Yes | Three utility functions |
+| naming | Yes | Pure logic, self-contained |
+| client | Mostly | Viewport is clean; Client struct's handleInput/executeAction are clear |
+| vthtml | Mostly | Good diffing design; some loop duplication |
+| auth | Mostly | Solid crypto; JSON construction is manual but fine |
+| http | No | Event loop indexing is fragile; auth pattern repeats 5x |
+| main | Mostly | Long but linear; some duplication with http.zig |
+
+### Concrete items for S105 to evaluate
+
+1. **Extract `connectToSession` to shared location.** Two identical copies.
+   Trivial win.
+2. **Extract auth+session-check pattern in http.zig.** 4-5 repetitions of the
+   same ~10-line block. A helper would save ~30 lines and reduce error risk.
+3. **Consider whether http.zig's event loop can be simplified.** The poll index
+   arithmetic is the most fragile code in the project. Possible approach: a
+   tagged union for "poll entry" that carries its handler, so the dispatch
+   loop doesn't need manual index tracking. But this might be over-engineering
+   for a stable, working system. Needs careful thought.
+4. **vthtml loop duplication.** Minor. Could be parameterized or left alone.
+5. **writeAll duplication.** Minor. Could be shared or left alone.
+
+### What I'd leave alone
+
+- **main.zig's length.** The `cmdX` functions are independent and linear. No
+  benefit from splitting into multiple files — you'd just be moving code
+  around without reducing complexity.
+- **session.zig's structure.** It's clean. The poll loop is straightforward
+  because there are only 3 fd types (PTY, socket, clients).
+- **auth.zig's manual JSON construction.** It's explicit and obvious. Using
+  a JSON library for construction would add a dependency for no real gain.
+- **The protocol itself.** It's intentionally minimal. No version negotiation
+  because client and server are the same binary. This is the right call.
+
+### Overall assessment
+
+The codebase is in good shape at 6,090 lines. The architecture is sound: clean
+separation between session server, client TUI, web server, and protocol. The
+main risk area is http.zig's event loop complexity, which is manageable but
+the most likely place for bugs to hide. The auth pattern duplication in http.zig
+is the clearest refactoring opportunity.
+
+No structural changes needed. The challenge/response cycle in S99-S101
+confirmed this — the codebase resisted unnecessary changes and only accepted
+three small improvements. That's a sign of maturity.
+
+### Recommendations for S105
+
+- Evaluate items 1-3 from the concrete list above. Item 1 is trivially worth
+  doing. Item 2 is likely worth doing. Item 3 needs careful thought — the
+  current code works and is tested, so "cleaner" needs to actually be simpler,
+  not just different.
+- The fullscreen app viewer inbox item still needs interactive testing.
+- No new features or structural changes warranted. The system is stable.
+
 ---
 
 > Earlier session notes (1-101) archived to
