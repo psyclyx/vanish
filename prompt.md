@@ -56,7 +56,7 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
-Done (Sessions 1-102): See [doc/sessions-archive.md](doc/sessions-archive.md).
+Done (Sessions 1-105): See [doc/sessions-archive.md](doc/sessions-archive.md).
 Key milestones: HTML deltas (S26), web input fix (S32), cell gaps (S35), status
 bar (S37), auto-naming (S38-40), docs (S45), browser perf (S50), read-only OTPs
 (S52), resize fix (S55), PKGBUILD+LICENSE (S58), v1.0.0 tag (S63), protocol
@@ -65,7 +65,9 @@ debate + struct tests (S67-69), function decomposition (S70-75), UX hammock
 (S83-84), otp --url (S85), spec audit + bug fixes (S86-87), shell wrappers
 (S90), env vars (S91), self-join protection (S92), alternate screen buffer (S93),
 viewer direct navigation (S95), web viewer fixes (S97), challenge/response/
-reflection cycle (S99-S101), accepted refactors + tests (S102).
+reflection cycle (S99-S101), accepted refactors + tests (S102), archive cleanup
++ spec audit (S103), architecture pre-review (S104), architecture review +
+refactors (S105).
 
 The task at hand
 
@@ -343,6 +345,146 @@ features are added.
 - The fullscreen app viewer inbox item still needs interactive testing.
 - No code changes warranted. The system is stable at v1.0.0.
 - Next architecture review: S108.
+
+## 2026-02-09: Session 106 - Hammock: What Would Make Me Proud
+
+### The prompt
+
+"It's complete — but could it be better? What would make you proud to have done
+in this codebase?"
+
+I re-read every source file. Not skimming — actually reading, tracing the flow,
+sitting with it. Here's what I found.
+
+### What I'm genuinely proud of
+
+**The protocol is right.** 10 structs, 17 message types, no version negotiation
+needed because client and server are the same binary. Native byte order because
+it's same-host UDS. Struct sizes pinned by comptime tests. This is the kind of
+decision that sounds reckless until you realize UDS *guarantees* same-host, and
+the simplicity it buys is enormous. No serialization library, no protobuf, no
+schema evolution headaches. The protocol file is 213 lines and hasn't needed
+significant changes since S67.
+
+**The session model is clean.** One primary, N viewers, PTY multiplexing with
+terminal state tracking. The core `session.zig` is 559 lines and does exactly
+one thing. No configuration, no policies, no optional behaviors — it's a
+session. The event loop is straightforward poll(). The Client struct is 7 fields.
+
+**The client is invisible.** The design goal was "you shouldn't even be able to
+tell that you're in one of these sessions." That's achieved. No chrome by
+default. Leader key activates a compact hint line, not a persistent bar. The
+status bar is opt-in. This restraint is harder than adding features.
+
+**The auth is boring.** OTP→JWT→cookie. No OAuth, no API keys, no refresh
+tokens. SHA256 hashes stored instead of plaintext. HMAC key rotation for
+revocation. 585 lines, four scopes, done. It's the kind of auth system where
+nothing is clever.
+
+### What nags at me
+
+**1. `main.zig` is 1,079 lines of procedural argument parsing.**
+
+Every `cmdFoo` function follows the same pattern: parse flags with a while loop,
+validate, resolve socket path, connect, do something, format output. This isn't
+wrong — it's explicit, obvious, each function is self-contained. But there's a
+lot of boilerplate: the error output formatting, the `writeAll(STDERR_FILENO, ...)`
+pattern, the `std.process.exit(1)` calls scattered everywhere.
+
+The counter-argument: this is a CLI. The boilerplate is the domain. Abstracting
+it would add indirection without reducing complexity. Every "framework" for CLI
+argument parsing in Zig is worse than just writing the loops. The functions are
+boring and that's fine.
+
+**Verdict**: Leave it. The boilerplate is essential complexity, not accidental.
+What I'd do differently if starting over: nothing. This is how CLIs should look.
+
+**2. The `handleClientInput` switch in `session.zig` (lines 304-378).**
+
+This is a 75-line function with 8 switch branches. Some branches are 2 lines,
+some are 10. The `input` branch has a reader/skipper split. The `resize` branch
+has validation + application + notification. These are different levels of
+complexity jammed into one switch.
+
+The fix would be: extract `handleInputMsg`, `handleResizeMsg`, etc. Each would
+be 5-15 lines. The switch would become 8 lines of dispatch.
+
+But I keep not doing this, and I should ask why. The reason is that these
+functions would only be called from one place, and the switch reads fine as-is.
+It's a message handler — you switch on the message type and handle it. The
+locality matters: someone reading the code sees all behaviors in one place.
+
+**Verdict**: This one I'm less sure about. The function is at the edge of "too
+long." If any branch grew, it should split. But right now, it reads.
+
+**3. The http.zig event loop (165-299) is the ugliest code in the project.**
+
+134 lines of poll index arithmetic with manual `idx` tracking across 4 client
+types. This has been identified in S104, S105, and the S99-S101 cycle. It's
+correct. It's tested (indirectly through integration tests). It's contained.
+But it's the one place where I can't quickly glance at the code and know it's
+right.
+
+Every proposed fix makes it worse. Tagged unions add allocation. Separate arrays
+with a merge step add complexity. An epoll-based design would be cleaner but
+is a rewrite.
+
+**Verdict**: This is genuinely the weakest code in the project. The right fix
+might be epoll (which would also make the server more scalable), but that's
+a substantial rewrite for a working system. For now, the complexity is
+contained and stable.
+
+### What's missing that usage would reveal
+
+- **Reconnection UX.** When a session dies, there's no notification beyond the
+  socket going away. In daily use, you notice your terminal froze, try to type,
+  realize it's dead, detach. A heartbeat or keepalive would detect this faster.
+
+- **Multiple sessions in one terminal.** The design is one session per terminal.
+  Tmux's splits are out of scope (and wrong for this tool), but quick-switching
+  between sessions (like screen's Ctrl+A n) could be valuable.
+
+- **Clipboard integration.** Copy/paste in the web viewer works through the
+  browser. In the native client, it's whatever your terminal does. If vanish
+  is your primary terminal wrapper, clipboard support could matter.
+
+These are all v2 features. None of them should be built until usage demands them.
+
+### What simplicity looks like
+
+The codebase is 5,994 lines across 14 files. That's smaller than most argument
+parsing libraries. It replaces tmux (71k lines of C) for the use case of
+persistent sessions with web access. The protocol is 213 lines. The auth is
+585. The session daemon is 559.
+
+The things I'd be proud to show someone:
+
+1. `protocol.zig` — here's the entire wire protocol. 213 lines, all struct
+   sizes tested at compile time. No versioning needed.
+2. `session.zig` — here's a complete session multiplexer. 559 lines.
+3. The fact that you can use it every day without knowing it's there.
+
+### Conclusion
+
+The codebase is better than it needs to be. That's the right place to stop.
+Every improvement from here would either (a) fix something that isn't broken,
+(b) add something nobody's asked for, or (c) change something for aesthetic
+reasons that would churn the test suite. The S99-S101 cycle identified this
+correctly: the system is complete, and improvement requires usage feedback.
+
+What would make me proud? Restraint. The codebase is ~6k lines and does what
+tmux does for the subset of users who want persistent sessions with web access,
+without any of what tmux does that those users don't want. Every feature request
+I've rejected has been the right call. The hardest part of this project has been
+not adding things.
+
+I'm proud of it as it stands.
+
+### Next session
+
+- S107 is a normal session. No architecture review until S108.
+- The fullscreen app viewer inbox item remains. Interactive testing, not code.
+- No code changes from this session — pure hammock.
 
 ---
 
