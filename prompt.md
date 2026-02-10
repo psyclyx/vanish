@@ -486,6 +486,75 @@ I'm proud of it as it stands.
 - The fullscreen app viewer inbox item remains. Interactive testing, not code.
 - No code changes from this session — pure hammock.
 
+## 2026-02-09: Session 107 - Protocol Utilities + Spec Compliance Fix
+
+### What was done
+
+Added two protocol-level utilities and used them to simplify wire-reading
+patterns across the codebase. Also fixed a spec compliance bug.
+
+**1. `protocol.readStruct` and `protocol.skipBytes`.**
+
+Two functions added to `protocol.zig`:
+
+- `readStruct(comptime T, fd, wire_len) !?T` — validates payload length against
+  `@sizeOf(T)`, reads and deserializes. Returns null on length mismatch, error
+  on I/O failure. Replaces the 3-line pattern (validate len + readExact +
+  bytesToValue) that appeared in session.zig's resize and kick_client handlers.
+
+- `skipBytes(fd, len) void` — drains N bytes from a socket. Replaces the 6-line
+  while loop that appeared 3 times across session.zig, client.zig, and http.zig.
+
+**2. Spec compliance fix in `handleClientInput`.**
+
+The `else` branch of `handleClientInput` in session.zig was `else => {}` — it
+did nothing when receiving an unknown message type. The spec says: "Unknown
+message types: receiver skips `header.len` bytes." If an unknown message arrived
+with payload, the undrained bytes would be interpreted as the next message
+header, causing a protocol desync. Both client.zig and http.zig already handled
+this correctly; session.zig did not.
+
+Fixed: `else => { protocol.skipBytes(client.fd, header.len); }`
+
+**3. `handleClientInput` simplification.**
+
+The function went from 75 lines to 61. The `.resize` branch dropped from 16
+lines to 10 (readStruct replaces validate+read+deserialize). The `.kick_client`
+branch dropped from 6 lines to 2. The viewer input skip dropped from 6 lines
+to 1.
+
+**Files changed:**
+
+- `src/protocol.zig`: 213 → 230 (+17) — readStruct, skipBytes
+- `src/session.zig`: 559 → 545 (-14) — handleClientInput simplification + fix
+- `src/client.zig`: 711 → 705 (-6) — skipBytes replaces inline loop
+- `src/http.zig`: 1,065 → 1,056 (-9) — skipBytes replaces inline loop
+
+### Line count
+
+| File | Lines | Change |
+|------|-------|--------|
+| protocol.zig | 230 | +17 |
+| session.zig | 545 | -14 |
+| client.zig | 705 | -6 |
+| http.zig | 1,056 | -9 |
+| **Total Zig** | **5,982** | **-12** |
+
+### Design note
+
+Considered but rejected: applying `readStruct` to `handleNewConnection`'s Hello
+reading. That path has custom error semantics (sends Denied on wrong length,
+closes fd on read error) that don't fit readStruct's null-on-mismatch API. The
+right abstraction for one caller isn't an abstraction.
+
+### Recommendations for next session
+
+- **S108 is the 3-session architecture review checkpoint.**
+- The fullscreen app viewer inbox item still needs interactive testing.
+- `handleClientInput` is now 61 lines. S106 flagged it as "at the edge of too
+  long" at 75 lines — this refactor brought it comfortably under. The remaining
+  complexity (the `.input` branch's primary read-and-forward path) is essential.
+
 ---
 
 > Earlier session notes (1-101) archived to
