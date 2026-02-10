@@ -56,7 +56,7 @@ Current:
 
 - None. v1.0.0 tagged. Future work driven by usage.
 
-Done (Sessions 1-105): See [doc/sessions-archive.md](doc/sessions-archive.md).
+Done (Sessions 1-107): See [doc/sessions-archive.md](doc/sessions-archive.md).
 Key milestones: HTML deltas (S26), web input fix (S32), cell gaps (S35), status
 bar (S37), auto-naming (S38-40), docs (S45), browser perf (S50), read-only OTPs
 (S52), resize fix (S55), PKGBUILD+LICENSE (S58), v1.0.0 tag (S63), protocol
@@ -67,7 +67,7 @@ debate + struct tests (S67-69), function decomposition (S70-75), UX hammock
 viewer direct navigation (S95), web viewer fixes (S97), challenge/response/
 reflection cycle (S99-S101), accepted refactors + tests (S102), archive cleanup
 + spec audit (S103), architecture pre-review (S104), architecture review +
-refactors (S105).
+refactors (S105), hammock on pride (S106), protocol utilities + spec fix (S107).
 
 The task at hand
 
@@ -156,409 +156,139 @@ lightweight libghostty terminal session multiplexer with web access
 
 # Progress Notes
 
-## 2026-02-09: Session 102 - Implement Accepted Refactors + Tests
+## 2026-02-09: Session 108 - Architecture Review (3-Session Checkpoint)
 
-### What was done
+### Context
 
-Implemented the three accepted items from the S99-S101 challenge/response/
-reflection cycle.
+This is the S108 architecture review checkpoint (3 sessions after S105). I
+re-read every source file and the spec.
 
-**1. Viewport.applyScroll + executeAction collapse.**
+### Simplicity scorecard
 
-Added `applyScroll(action)` to the Viewport struct — a 12-line method that
-dispatches a keybind.Action to the corresponding scroll method. Collapsed the
-8 identical scroll branches in `executeAction` (24 lines) into one branch (4
-lines). Net: -21 lines in the function, +14 in Viewport = -7 overall. The
-viewport is the right owner for this dispatch since it owns all scroll methods.
+| Component | Simple? | Change since S105 |
+|-----------|---------|-------------------|
+| protocol.zig (230) | Yes | +17 (readStruct, skipBytes). Still clean. |
+| session.zig (545) | Yes | -14. handleClientInput down to 61 lines. |
+| client.zig (705) | Yes | -6. skipBytes cleanup only. |
+| terminal.zig (348) | Yes | No change. |
+| vthtml.zig (374) | Yes | No change. |
+| config.zig (461) | Yes | No change. |
+| auth.zig (585) | Yes | No change. |
+| keybind.zig (193) | Yes | No change. |
+| naming.zig (165) | Yes | No change. |
+| pty.zig (140) | Yes | No change. |
+| paths.zig (53) | Yes | No change. |
+| signal.zig (48) | Yes | No change. |
+| main.zig (1,079) | Mostly | No change. Procedural CLI — acceptable. |
+| http.zig (1,056) | Mostly | -9. Event loop still the weakest spot. |
 
-**2. Recovery section in spec.**
+**Total: 5,982 lines, 53 unit tests + 11 integration tests.**
 
-Added a "Recovery" subsection under Edge Cases → Disconnect in `doc/spec.md`.
-Documents the explicit contract: session state is not persisted, crashes lose
-the session, stale sockets are cleaned up automatically. Two paragraphs. This
-was the spec gap identified in S99/S100.
+### What changed since S105
 
-**3. Tests for viewerNav, parseCmdNewArgs, and applyScroll.**
+Only S107 had code changes. Two protocol utilities (`readStruct`, `skipBytes`)
+consolidated 3 inline patterns. A spec compliance bug was fixed (unknown message
+types now skip payload in session.zig). `handleClientInput` dropped from 75→61
+lines. Net -12 lines.
 
-Added 8 new test cases across 2 files:
+The changes were surgical and correct. Nothing destabilized.
 
-- `client.zig`: 4 tests — `viewport applyScroll` (movement + boundary),
-  `viewerNav basic mappings` (8 key→action pairs), `viewerNav ctrl mappings`
-  (Ctrl+U, Ctrl+D), `viewerNav unmapped keys return null`.
-- `main.zig`: 4 tests — `parseCmdNewArgs basic` (name + command),
-  `parseCmdNewArgs with flags` (--detach, --serve, multi-arg command),
-  `parseCmdNewArgs with separator` (-- handling), `parseCmdNewArgs short flags`
-  (-d, -s).
+### Items evaluated
 
-Total test count: 46 → 53 across 11 files. The `parseCmdNewArgs` tests only
-cover the non-auto-name happy paths because error paths call
-`std.process.exit(1)` and the auto-name path requires filesystem access.
+**1. JSON escaping duplication: `paths.zig:appendJsonEscaped` vs inline in
+`vthtml.zig:updatesToJson`.**
 
-**Files changed:**
+These are the same escaping logic (switch on `"`, `\\`, `\n`, `\r`, `\t`,
+control chars). One operates on `[]const u8` via `std.ArrayList`, the other
+on `[4]u8` char slices inline. Could share a common function.
 
-- `src/client.zig`: +54/-37 — applyScroll method, collapsed executeAction, 4
-  tests
-- `src/main.zig`: +47/-0 — 4 tests for parseCmdNewArgs
-- `doc/spec.md`: +6/-0 — Recovery section
+**Verdict: Accept.** The vthtml version can call `paths.appendJsonEscaped`
+for the char slice. This is a real duplication — same switch, same escape
+sequences, same control char handling. A 1-line call replaces 13 lines of
+inline escaping. Will implement next session.
 
-**Committed:** `refactor: collapse scroll branches with Viewport.applyScroll, add tests`
+**2. http.zig event loop (lines 165-299).**
 
-### Line count
+Re-examined for the fourth time (S99, S104, S105, now S108). The poll index
+arithmetic is still correct, still ugly, still contained. Nothing has changed
+about the analysis. The epoll alternative would be cleaner but is a rewrite.
 
-| File | Lines | Change |
-|------|-------|--------|
-| client.zig | 711 | +20 (net: +14 applyScroll, -21 collapsed, +41 tests) |
-| main.zig | 1,089 | +47 (tests) |
-| **Total Zig** | **6,030** | **+67** |
+**Verdict: No change.** Same conclusion as S105. Stopping re-evaluating this
+unless the event loop needs modification for a feature.
 
-### Challenge/response cycle complete
+**3. handleClientInput (session.zig:304-364).**
 
-All three accepted items from S100 are implemented. The cycle (S99 challenge →
-S100 response → S101 reflection → S102 implementation) is done. Returning to
-normal cadence.
+S107 brought this from 75→61 lines. S106 flagged it as "at the edge" at 75.
+At 61 lines with 8 branches, most 2-4 lines, this is well within the comfort
+zone. The `.input` branch is the longest at 11 lines and it's doing real work
+(read payload, forward to PTY).
 
-### Recommendations for next session
+**Verdict: Resolved.** No longer a concern.
 
-- **S105 is the next 3-session architecture review checkpoint** (3 sessions
-  after S102).
-- The codebase is stable at 6,030 lines with 53 tests. The challenge/response
-  cycle yielded clean improvements without over-engineering.
-- One inbox item remains: fullscreen apps in smaller viewer sessions. Needs
-  interactive testing, not code.
-- Consider archiving S91-S101 to sessions-archive.md. prompt.md is long again.
-  **Done in S103.**
+**4. vthtml `updateFromVTerm` vs `fullScreen` duplication (~30 lines).**
 
-## 2026-02-09: Session 103 - Archive Cleanup + Spec Audit
+Re-examined from S105. The two functions share the same row/cell iteration
+loop but differ in whether they check `eql` before appending. Could extract
+the iteration into a helper that takes a `should_diff: bool` parameter or
+a callback.
 
-### What was done
+**Verdict: Reject again.** The functions are adjacent, easy to audit visually,
+and parameterizing would obscure the core difference (one diffs, one doesn't).
+A reader would have to understand the parameterization to know what each does.
+Two clear functions > one clever one.
 
-**Archived S91-S101 to sessions-archive.md.** Each session received a condensed
-summary paragraph matching the existing archive format. Archive header updated
-from "Sessions 1-90" to "Sessions 1-101". prompt.md reduced from ~1,847 lines
-to ~240 lines.
+### New observations
 
-**Cleaned up inbox.** Removed 15 resolved items (all marked ✓), leaving only
-two active items: the fullscreen app viewer testing item and the ongoing
-hammock prompt. Added a brief summary of resolved items with session references.
+**1. SSE keyframe interval is hardcoded at ~30s (via counter in http.zig).**
 
-**Spec audit.** Verified doc/spec.md against all code-changing commits since
-S88 (the last spec sync). All four feature commits (S91 env vars, S92
-self-join, S93 alternate screen, S95 viewer navigation) updated the spec in
-the same commit. Cross-checked CLI commands, HTTP endpoints, and protocol
-message types against source — zero gaps found. Spec is fully synchronized.
+Not configurable. Probably fine — 30s is reasonable for web viewing — but
+worth noting as a future config candidate if usage reveals problems.
 
-**Updated Done section.** Merged the two-part Done summary into a single section
-covering S1-S102 with key milestones listed.
+**2. No request body size limit on HTTP input endpoint.**
 
-**Files changed:**
+The `handleInput` endpoint reads from the HTTP body without a size cap. In
+practice the input is keystrokes (small), and the server is localhost-only, but
+a malicious or buggy client could send a large body. This is a minor hardening
+item, not urgent.
 
-- `prompt.md`: -1,607 lines (archiving + inbox cleanup)
-- `doc/sessions-archive.md`: +67 lines (11 session summaries)
+**3. The spec documents "approximately 1 second" for SSE keyframe timing
+(line 547)** but the actual interval is ~30 seconds (counter-based, resets
+after 30 updates). The spec should say "approximately 30 seconds" or describe
+the counter mechanism.
 
-### Recommendations for next session
+**Verdict on new items:**
 
-- **S105 is the next 3-session architecture review checkpoint.**
-- One inbox item remains: fullscreen apps in smaller viewer sessions (needs
-  interactive testing).
-- The ongoing hammock prompt ("could it be better?") was addressed by the
-  S99-S101 challenge cycle. No new items have emerged since.
-- prompt.md is now lean at ~240 lines. No archiving needed for many sessions.
+- Item 1: Leave. Config for this is YAGNI.
+- Item 2: Note for future hardening. Not a real risk on localhost.
+- Item 3: **Accept.** Fix the spec. This is a factual error. Will include in
+  next session's commit.
 
-## 2026-02-09: Session 104 - Architecture Pre-Review
+### Architecture summary
 
-Full review of every source file. Identified 5 concrete candidates for S105:
-(1) connectToSession duplication, (2) auth pattern duplication in http.zig,
-(3) http.zig event loop poll index complexity, (4) vthtml loop duplication,
-(5) writeAll duplication. Simplicity scorecard: 10 components rated "Yes",
-3 "Mostly", 1 "No" (http.zig). Architecture is sound overall. See git history
-for full analysis.
+The architecture is sound. Three review cycles (S99-S102, S104-S105, S108)
+have converged on the same conclusion: the design works, the code is clean,
+the remaining rough edges (http event loop, main.zig boilerplate) are
+acceptable tradeoffs.
 
-## 2026-02-09: Session 105 - Architecture Review + Refactors
-
-### What was done
-
-**3-session architecture review checkpoint.** Evaluated all 5 items from S104.
-
-**Accepted and implemented:**
-
-1. **`connectToSession` → `paths.zig`.** Moved the identical 5-line function
-   from both `main.zig` and `http.zig` to `paths.zig`. Both callers now use
-   `paths.connectToSession()`.
-
-2. **`requireWriteAuth` helper in `http.zig`.** Extracted the 3× repeated
-   pattern (validateAuth + read_only check + session scope check) into a single
-   `requireWriteAuth` method returning `!?Auth.TokenPayload`. The three write
-   endpoints (`handleInput`, `handleResize`, `handleTakeover`) each collapsed
-   from ~19 lines of auth boilerplate to 2 lines:
-   `const payload = try self.requireWriteAuth(client, headers, session_name) orelse return;`
-
-**Rejected with rationale:**
-
-3. **http.zig event loop simplification.** The poll index arithmetic is fragile
-   but stable and tested. A tagged-union approach would add allocation and
-   complexity for marginal clarity. The fragility is contained to one function.
-   Not worth the churn.
-
-4. **vthtml loop duplication (~30 lines).** The two functions are adjacent and
-   easy to keep in sync. Parameterizing would make each harder to read for a
-   small dedup gain.
-
-5. **writeAll duplication (9 lines).** Different semantic contexts (general I/O
-   vs protocol internals). Making `writeAllFd` public would create a dependency
-   from main→protocol for a utility function.
-
-**Files changed:**
-
-- `src/http.zig`: 1,101 → 1,065 (-36) — requireWriteAuth helper, removed
-  connectToSession + 3× auth pattern
-- `src/main.zig`: 1,089 → 1,079 (-10) — removed connectToSession, updated call
-- `src/paths.zig`: 43 → 53 (+10) — added connectToSession
-
-### Line count
-
-| File | Lines | Change |
-|------|-------|--------|
-| http.zig | 1,065 | -36 |
-| main.zig | 1,079 | -10 |
-| paths.zig | 53 | +10 |
-| **Total Zig** | **5,994** | **-36** |
-
-### Updated simplicity scorecard
-
-| Component | Simple? | Notes |
-|-----------|---------|-------|
-| http | Mostly | Auth dedup done; event loop still complex but stable |
-
-http.zig moves from "No" to "Mostly". The auth duplication was the primary
-smell; now only the event loop poll indexing remains as a concern, and it's
-deliberately left alone.
+Two small items for next session:
+1. Deduplicate JSON escaping in vthtml.zig (use `paths.appendJsonEscaped`).
+2. Fix spec: SSE keyframe timing description.
 
 ### Next architecture review
 
-S108 (3 sessions from now). The codebase is at 5,994 lines with 53 tests.
-Two review cycles (S99-S102 challenge/response, S104-S105 architecture) have
-confirmed the design is sound. Future reviews should be lighter unless new
-features are added.
+S111 (3 sessions from now). Unless features are added, these reviews should
+stay lightweight.
 
 ### Recommendations for next session
 
+- Implement the two accepted items (JSON escaping dedup, spec timing fix).
 - The fullscreen app viewer inbox item still needs interactive testing.
-- No code changes warranted. The system is stable at v1.0.0.
-- Next architecture review: S108.
-
-## 2026-02-09: Session 106 - Hammock: What Would Make Me Proud
-
-### The prompt
-
-"It's complete — but could it be better? What would make you proud to have done
-in this codebase?"
-
-I re-read every source file. Not skimming — actually reading, tracing the flow,
-sitting with it. Here's what I found.
-
-### What I'm genuinely proud of
-
-**The protocol is right.** 10 structs, 17 message types, no version negotiation
-needed because client and server are the same binary. Native byte order because
-it's same-host UDS. Struct sizes pinned by comptime tests. This is the kind of
-decision that sounds reckless until you realize UDS *guarantees* same-host, and
-the simplicity it buys is enormous. No serialization library, no protobuf, no
-schema evolution headaches. The protocol file is 213 lines and hasn't needed
-significant changes since S67.
-
-**The session model is clean.** One primary, N viewers, PTY multiplexing with
-terminal state tracking. The core `session.zig` is 559 lines and does exactly
-one thing. No configuration, no policies, no optional behaviors — it's a
-session. The event loop is straightforward poll(). The Client struct is 7 fields.
-
-**The client is invisible.** The design goal was "you shouldn't even be able to
-tell that you're in one of these sessions." That's achieved. No chrome by
-default. Leader key activates a compact hint line, not a persistent bar. The
-status bar is opt-in. This restraint is harder than adding features.
-
-**The auth is boring.** OTP→JWT→cookie. No OAuth, no API keys, no refresh
-tokens. SHA256 hashes stored instead of plaintext. HMAC key rotation for
-revocation. 585 lines, four scopes, done. It's the kind of auth system where
-nothing is clever.
-
-### What nags at me
-
-**1. `main.zig` is 1,079 lines of procedural argument parsing.**
-
-Every `cmdFoo` function follows the same pattern: parse flags with a while loop,
-validate, resolve socket path, connect, do something, format output. This isn't
-wrong — it's explicit, obvious, each function is self-contained. But there's a
-lot of boilerplate: the error output formatting, the `writeAll(STDERR_FILENO, ...)`
-pattern, the `std.process.exit(1)` calls scattered everywhere.
-
-The counter-argument: this is a CLI. The boilerplate is the domain. Abstracting
-it would add indirection without reducing complexity. Every "framework" for CLI
-argument parsing in Zig is worse than just writing the loops. The functions are
-boring and that's fine.
-
-**Verdict**: Leave it. The boilerplate is essential complexity, not accidental.
-What I'd do differently if starting over: nothing. This is how CLIs should look.
-
-**2. The `handleClientInput` switch in `session.zig` (lines 304-378).**
-
-This is a 75-line function with 8 switch branches. Some branches are 2 lines,
-some are 10. The `input` branch has a reader/skipper split. The `resize` branch
-has validation + application + notification. These are different levels of
-complexity jammed into one switch.
-
-The fix would be: extract `handleInputMsg`, `handleResizeMsg`, etc. Each would
-be 5-15 lines. The switch would become 8 lines of dispatch.
-
-But I keep not doing this, and I should ask why. The reason is that these
-functions would only be called from one place, and the switch reads fine as-is.
-It's a message handler — you switch on the message type and handle it. The
-locality matters: someone reading the code sees all behaviors in one place.
-
-**Verdict**: This one I'm less sure about. The function is at the edge of "too
-long." If any branch grew, it should split. But right now, it reads.
-
-**3. The http.zig event loop (165-299) is the ugliest code in the project.**
-
-134 lines of poll index arithmetic with manual `idx` tracking across 4 client
-types. This has been identified in S104, S105, and the S99-S101 cycle. It's
-correct. It's tested (indirectly through integration tests). It's contained.
-But it's the one place where I can't quickly glance at the code and know it's
-right.
-
-Every proposed fix makes it worse. Tagged unions add allocation. Separate arrays
-with a merge step add complexity. An epoll-based design would be cleaner but
-is a rewrite.
-
-**Verdict**: This is genuinely the weakest code in the project. The right fix
-might be epoll (which would also make the server more scalable), but that's
-a substantial rewrite for a working system. For now, the complexity is
-contained and stable.
-
-### What's missing that usage would reveal
-
-- **Reconnection UX.** When a session dies, there's no notification beyond the
-  socket going away. In daily use, you notice your terminal froze, try to type,
-  realize it's dead, detach. A heartbeat or keepalive would detect this faster.
-
-- **Multiple sessions in one terminal.** The design is one session per terminal.
-  Tmux's splits are out of scope (and wrong for this tool), but quick-switching
-  between sessions (like screen's Ctrl+A n) could be valuable.
-
-- **Clipboard integration.** Copy/paste in the web viewer works through the
-  browser. In the native client, it's whatever your terminal does. If vanish
-  is your primary terminal wrapper, clipboard support could matter.
-
-These are all v2 features. None of them should be built until usage demands them.
-
-### What simplicity looks like
-
-The codebase is 5,994 lines across 14 files. That's smaller than most argument
-parsing libraries. It replaces tmux (71k lines of C) for the use case of
-persistent sessions with web access. The protocol is 213 lines. The auth is
-585. The session daemon is 559.
-
-The things I'd be proud to show someone:
-
-1. `protocol.zig` — here's the entire wire protocol. 213 lines, all struct
-   sizes tested at compile time. No versioning needed.
-2. `session.zig` — here's a complete session multiplexer. 559 lines.
-3. The fact that you can use it every day without knowing it's there.
-
-### Conclusion
-
-The codebase is better than it needs to be. That's the right place to stop.
-Every improvement from here would either (a) fix something that isn't broken,
-(b) add something nobody's asked for, or (c) change something for aesthetic
-reasons that would churn the test suite. The S99-S101 cycle identified this
-correctly: the system is complete, and improvement requires usage feedback.
-
-What would make me proud? Restraint. The codebase is ~6k lines and does what
-tmux does for the subset of users who want persistent sessions with web access,
-without any of what tmux does that those users don't want. Every feature request
-I've rejected has been the right call. The hardest part of this project has been
-not adding things.
-
-I'm proud of it as it stands.
-
-### Next session
-
-- S107 is a normal session. No architecture review until S108.
-- The fullscreen app viewer inbox item remains. Interactive testing, not code.
-- No code changes from this session — pure hammock.
-
-## 2026-02-09: Session 107 - Protocol Utilities + Spec Compliance Fix
-
-### What was done
-
-Added two protocol-level utilities and used them to simplify wire-reading
-patterns across the codebase. Also fixed a spec compliance bug.
-
-**1. `protocol.readStruct` and `protocol.skipBytes`.**
-
-Two functions added to `protocol.zig`:
-
-- `readStruct(comptime T, fd, wire_len) !?T` — validates payload length against
-  `@sizeOf(T)`, reads and deserializes. Returns null on length mismatch, error
-  on I/O failure. Replaces the 3-line pattern (validate len + readExact +
-  bytesToValue) that appeared in session.zig's resize and kick_client handlers.
-
-- `skipBytes(fd, len) void` — drains N bytes from a socket. Replaces the 6-line
-  while loop that appeared 3 times across session.zig, client.zig, and http.zig.
-
-**2. Spec compliance fix in `handleClientInput`.**
-
-The `else` branch of `handleClientInput` in session.zig was `else => {}` — it
-did nothing when receiving an unknown message type. The spec says: "Unknown
-message types: receiver skips `header.len` bytes." If an unknown message arrived
-with payload, the undrained bytes would be interpreted as the next message
-header, causing a protocol desync. Both client.zig and http.zig already handled
-this correctly; session.zig did not.
-
-Fixed: `else => { protocol.skipBytes(client.fd, header.len); }`
-
-**3. `handleClientInput` simplification.**
-
-The function went from 75 lines to 61. The `.resize` branch dropped from 16
-lines to 10 (readStruct replaces validate+read+deserialize). The `.kick_client`
-branch dropped from 6 lines to 2. The viewer input skip dropped from 6 lines
-to 1.
-
-**Files changed:**
-
-- `src/protocol.zig`: 213 → 230 (+17) — readStruct, skipBytes
-- `src/session.zig`: 559 → 545 (-14) — handleClientInput simplification + fix
-- `src/client.zig`: 711 → 705 (-6) — skipBytes replaces inline loop
-- `src/http.zig`: 1,065 → 1,056 (-9) — skipBytes replaces inline loop
-
-### Line count
-
-| File | Lines | Change |
-|------|-------|--------|
-| protocol.zig | 230 | +17 |
-| session.zig | 545 | -14 |
-| client.zig | 705 | -6 |
-| http.zig | 1,056 | -9 |
-| **Total Zig** | **5,982** | **-12** |
-
-### Design note
-
-Considered but rejected: applying `readStruct` to `handleNewConnection`'s Hello
-reading. That path has custom error semantics (sends Denied on wrong length,
-closes fd on read error) that don't fit readStruct's null-on-mismatch API. The
-right abstraction for one caller isn't an abstraction.
-
-### Recommendations for next session
-
-- **S108 is the 3-session architecture review checkpoint.**
-- The fullscreen app viewer inbox item still needs interactive testing.
-- `handleClientInput` is now 61 lines. S106 flagged it as "at the edge of too
-  long" at 75 lines — this refactor brought it comfortably under. The remaining
-  complexity (the `.input` branch's primary read-and-forward path) is essential.
+- Consider archiving S102-S106 — prompt.md has been getting long again.
 
 ---
 
-> Earlier session notes (1-101) archived to
+> Earlier session notes (1-107) archived to
 > [doc/sessions-archive.md](doc/sessions-archive.md).
 
-<!-- Archive marker: S101 and earlier archived in S103. -->
+<!-- Archive marker: S107 and earlier archived in S108. -->
 

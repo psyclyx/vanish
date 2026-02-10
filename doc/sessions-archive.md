@@ -1,9 +1,58 @@
-# Vanish Session Notes Archive (Sessions 1-101)
+# Vanish Session Notes Archive (Sessions 1-107)
 
 These session notes were archived from prompt.md. They cover the project
 from initial implementation through v1.0.0 and subsequent maintenance sessions.
 
-For current session notes (102+), see prompt.md.
+For current session notes (108+), see prompt.md.
+
+## 2026-02-09: Session 107 - Protocol Utilities + Spec Compliance Fix
+
+Added `protocol.readStruct` and `protocol.skipBytes` utilities. readStruct
+validates payload length, reads, and deserializes in one call. skipBytes drains
+N bytes from a socket. Used both to simplify handleClientInput (75→61 lines),
+client.zig (-6), http.zig (-9). Fixed spec compliance bug: session.zig's else
+branch for unknown message types was a no-op instead of skipping payload bytes,
+which would cause protocol desync. Total: 5,982 lines (-12).
+
+## 2026-02-09: Session 106 - Hammock: What Would Make Me Proud
+
+Pure hammock session re-reading every source file. Identified pride points:
+protocol simplicity (213 lines, no versioning), session model clarity (545
+lines), client invisibility, boring auth. Identified lingering concerns:
+main.zig boilerplate (verdict: leave, it's essential CLI complexity),
+handleClientInput at 75 lines (verdict: at the edge but reads fine),
+http.zig event loop (verdict: weakest code, epoll would help but is a
+rewrite). Listed v2 candidates (reconnection UX, session switching, clipboard)
+— all deferred until usage demands them.
+
+## 2026-02-09: Session 105 - Architecture Review + Refactors
+
+3-session architecture review. Accepted: moved connectToSession to paths.zig
+(dedup from main.zig + http.zig), extracted requireWriteAuth helper in http.zig
+(collapsed 3×19 lines of auth boilerplate to 2 lines each). Rejected: event
+loop simplification (contained complexity), vthtml loop dedup (readability
+cost), writeAll dedup (semantic mismatch). http.zig went from "No" to "Mostly"
+on simplicity scorecard. Total: 5,994 lines (-36).
+
+## 2026-02-09: Session 104 - Architecture Pre-Review
+
+Full source review identifying 5 refactor candidates for S105. Simplicity
+scorecard: 10 "Yes", 3 "Mostly", 1 "No" (http.zig). Architecture sound
+overall.
+
+## 2026-02-09: Session 103 - Archive Cleanup + Spec Audit
+
+Archived S91-S101 to sessions-archive.md. Cleaned inbox to 2 items. Spec audit
+found zero gaps — all features since S88 had inline spec updates. prompt.md
+reduced from ~1,847 to ~240 lines.
+
+## 2026-02-09: Session 102 - Implement Accepted Refactors + Tests
+
+Implemented three items from S99-S101 challenge/response cycle: (1)
+Viewport.applyScroll collapsed 8 scroll branches in executeAction to 1, (2)
+Recovery section added to spec documenting no-persistence contract, (3) 8 new
+tests for viewerNav, parseCmdNewArgs, and applyScroll. Test count: 46→53.
+Total: 6,030 lines (+67).
 
 ## 2026-02-09: Session 101 - Reflection on the Challenge/Response Cycle
 
