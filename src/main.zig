@@ -709,16 +709,6 @@ fn cmdKill(alloc: std.mem.Allocator, args: []const []const u8, cfg: *const confi
     try writeAll(STDOUT_FILENO, "Session terminated\n");
 }
 
-fn connectToSession(path: []const u8) !posix.socket_t {
-    const sock = try posix.socket(posix.AF.UNIX, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
-    errdefer posix.close(sock);
-
-    var addr = std.net.Address.initUnix(path) catch return error.PathTooLong;
-    try posix.connect(sock, &addr.any, addr.getOsSockLen());
-
-    return sock;
-}
-
 fn daemonize() void {
     _ = posix.setsid() catch {};
     posix.close(0);
@@ -732,7 +722,7 @@ fn daemonize() void {
 }
 
 fn connectAsViewer(alloc: std.mem.Allocator, socket_path: []const u8) !posix.socket_t {
-    const sock = try connectToSession(socket_path);
+    const sock = try paths.connectToSession(socket_path);
     errdefer posix.close(sock);
 
     var hello = protocol.Hello{ .role = .viewer, .cols = 80, .rows = 24 };

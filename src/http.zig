@@ -487,25 +487,8 @@ fn handleListSessions(self: *HttpServer, client: *HttpClient, headers: []const u
 }
 
 fn handleInput(self: *HttpServer, client: *HttpClient, headers: []const u8, body: []const u8, session_name: []const u8) !void {
-    const payload = self.validateAuth(headers) catch {
-        try self.sendError(client, 401, "Unauthorized");
-        return;
-    };
+    const payload = try self.requireWriteAuth(client, headers, session_name) orelse return;
     defer if (payload.session) |s| self.alloc.free(s);
-
-    if (payload.read_only) {
-        try self.sendError(client, 403, "Read-only token");
-        return;
-    }
-
-    if (payload.scope == .session) {
-        if (payload.session) |allowed| {
-            if (!std.mem.eql(u8, session_name, allowed)) {
-                try self.sendError(client, 403, "Session not allowed");
-                return;
-            }
-        }
-    }
 
     // Find SSE client for this session and send input through its connection
     for (self.sse_clients.items) |*sse| {
@@ -523,25 +506,8 @@ fn handleInput(self: *HttpServer, client: *HttpClient, headers: []const u8, body
 }
 
 fn handleResize(self: *HttpServer, client: *HttpClient, headers: []const u8, body: []const u8, session_name: []const u8) !void {
-    const payload = self.validateAuth(headers) catch {
-        try self.sendError(client, 401, "Unauthorized");
-        return;
-    };
+    const payload = try self.requireWriteAuth(client, headers, session_name) orelse return;
     defer if (payload.session) |s| self.alloc.free(s);
-
-    if (payload.read_only) {
-        try self.sendError(client, 403, "Read-only token");
-        return;
-    }
-
-    if (payload.scope == .session) {
-        if (payload.session) |allowed| {
-            if (!std.mem.eql(u8, session_name, allowed)) {
-                try self.sendError(client, 403, "Session not allowed");
-                return;
-            }
-        }
-    }
 
     // Parse cols and rows from body (format: "COLSxROWS", e.g. "80x24")
     const sep = std.mem.indexOfScalar(u8, body, 'x') orelse {
@@ -579,25 +545,8 @@ fn handleResize(self: *HttpServer, client: *HttpClient, headers: []const u8, bod
 }
 
 fn handleTakeover(self: *HttpServer, client: *HttpClient, headers: []const u8, session_name: []const u8) !void {
-    const payload = self.validateAuth(headers) catch {
-        try self.sendError(client, 401, "Unauthorized");
-        return;
-    };
+    const payload = try self.requireWriteAuth(client, headers, session_name) orelse return;
     defer if (payload.session) |s| self.alloc.free(s);
-
-    if (payload.read_only) {
-        try self.sendError(client, 403, "Read-only token");
-        return;
-    }
-
-    if (payload.scope == .session) {
-        if (payload.session) |allowed| {
-            if (!std.mem.eql(u8, session_name, allowed)) {
-                try self.sendError(client, 403, "Session not allowed");
-                return;
-            }
-        }
-    }
 
     // Find SSE client for this session and send takeover through its connection
     for (self.sse_clients.items) |*sse| {
@@ -638,7 +587,7 @@ fn handleSseStream(self: *HttpServer, client_idx: usize, headers: []const u8, se
     const socket_path = try paths.resolveSocketPath(self.alloc, session_name, self.cfg);
     defer self.alloc.free(socket_path);
 
-    const sess_sock = connectToSession(socket_path) catch {
+    const sess_sock = paths.connectToSession(socket_path) catch {
         try self.sendError(client, 404, "Session not found");
         return;
     };
@@ -970,6 +919,31 @@ fn validateAuth(self: *HttpServer, headers: []const u8) !Auth.TokenPayload {
     return error.NoToken;
 }
 
+fn requireWriteAuth(self: *HttpServer, client: *HttpClient, headers: []const u8, session_name: []const u8) !?Auth.TokenPayload {
+    const payload = self.validateAuth(headers) catch {
+        try self.sendError(client, 401, "Unauthorized");
+        return null;
+    };
+
+    if (payload.read_only) {
+        defer if (payload.session) |s| self.alloc.free(s);
+        try self.sendError(client, 403, "Read-only token");
+        return null;
+    }
+
+    if (payload.scope == .session) {
+        if (payload.session) |allowed| {
+            if (!std.mem.eql(u8, session_name, allowed)) {
+                self.alloc.free(allowed);
+                try self.sendError(client, 403, "Session not allowed");
+                return null;
+            }
+        }
+    }
+
+    return payload;
+}
+
 fn sendError(self: *HttpServer, client: *HttpClient, code: u16, message: []const u8) !void {
     const status = switch (code) {
         400 => "Bad Request",
@@ -1060,16 +1034,6 @@ fn createTcpSocket6(bind_addr: []const u8, port: u16) !posix.socket_t {
     const addr = net.Address.parseIp6(bind_addr, port) catch net.Address.parseIp6("::1", port) catch unreachable;
     try posix.bind(sock, &addr.any, addr.getOsSockLen());
     try posix.listen(sock, 128);
-
-    return sock;
-}
-
-fn connectToSession(path: []const u8) !posix.socket_t {
-    const sock = try posix.socket(posix.AF.UNIX, posix.SOCK.STREAM | posix.SOCK.CLOEXEC, 0);
-    errdefer posix.close(sock);
-
-    var addr = net.Address.initUnix(path) catch return error.PathTooLong;
-    try posix.connect(sock, &addr.any, addr.getOsSockLen());
 
     return sock;
 }

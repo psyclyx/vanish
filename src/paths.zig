@@ -21,6 +21,16 @@ pub fn resolveSocketPath(alloc: std.mem.Allocator, name_or_path: []const u8, cfg
     return try std.fmt.allocPrint(alloc, "{s}/{s}", .{ dir, name_or_path });
 }
 
+pub fn connectToSession(path: []const u8) !std.posix.socket_t {
+    const sock = try std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC, 0);
+    errdefer std.posix.close(sock);
+
+    var addr = std.net.Address.initUnix(path) catch return error.PathTooLong;
+    try std.posix.connect(sock, &addr.any, addr.getOsSockLen());
+
+    return sock;
+}
+
 pub fn appendJsonEscaped(alloc: std.mem.Allocator, list: *std.ArrayList(u8), s: []const u8) !void {
     for (s) |c| {
         switch (c) {
