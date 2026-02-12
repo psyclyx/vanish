@@ -1,9 +1,10 @@
 {
   lib,
   stdenv,
-  runCommand,
+  callPackage,
   zig_0_15,
-}: let
+}:
+stdenv.mkDerivation {
   pname = "vanish";
   version = "1.0.0";
 
@@ -18,67 +19,16 @@
     ];
   };
 
-  deps =
-    runCommand "${pname}-${version}-zig-deps"
-    {
-      inherit src;
-      nativeBuildInputs = [zig_0_15];
-      outputHashAlgo = null;
-      outputHashMode = "recursive";
-      outputHash = "sha256-XUkft4tNBwkgOWgagNLT6oNFCTqZoEPC9RDxiqgorX0=";
-    }
-    ''
-      export ZIG_GLOBAL_CACHE_DIR=$(mktemp -d)
-      export ZIG_LOCAL_CACHE_DIR=$(mktemp -d)
-      runHook unpackPhase
-      cd $src
-      zig build --fetch=all
+  postConfigure = ''
+    cp -r ${callPackage ./deps.nix {}} $ZIG_GLOBAL_CACHE_DIR/p
+  '';
 
-      # Ghostty pulls these in at build time even though vanish doesn't need them.
-      zig fetch "https://deps.files.ghostty.org/libxev-34fa50878aec6e5fa8f532867001ab3c36fae23e.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/vaxis-7dbb9fd3122e4ffad262dd7c151d80d863b68558.tar.gz"
-      zig fetch "https://github.com/vancluever/z2d/archive/refs/tags/v0.10.0.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/zf-3c52637b7e937c5ae61fd679717da3e276765b23.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/gobject-2025-11-08-23-1.tar.zst"
-      zig fetch "https://deps.files.ghostty.org/JetBrainsMono-2.304.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/NerdFontsSymbolsOnly-3.4.0.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/ghostty-themes-release-20260126-150817-02c580d.tgz"
-      zig fetch "https://deps.files.ghostty.org/highway-66486a10623fa0d72fe91260f96c892e41aceb06.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/fontconfig-2.14.2.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/freetype-1220b81f6ecfb3fd222f76cf9106fecfa6554ab07ec7fdc4124b9bb063ae2adf969d.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/glslang-12201278a1a05c0ce0b6eb6026c65cd3e9247aa041b1c260324bf29cee559dd23ba1.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/libxml2-2.11.5.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/libpng-1220aa013f0c83da3fb64ea6d327f9173fa008d10e28bc9349eac3463457723b1c66.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/DearBindings_v0.17_ImGui_v1.92.5-docking.tar.gz"
-      zig fetch "https://github.com/ocornut/imgui/archive/refs/tags/v1.92.5-docking.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/spirv_cross-1220fb3b5586e8be67bc3feb34cbe749cf42a60d628d2953632c2f8141302748c8da.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/wuffs-122037b39d577ec2db3fd7b2130e7b69ef6cc1807d68607a7c232c958315d381b5cd.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/pixels-12207ff340169c7d40c570b4b6a97db614fe47e0d83b5801a932dcd44917424c8806.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/oniguruma-1220c15e72eadd0d9085a8af134904d9a0f5dfcbed5f606ad60edc60ebeccd9706bb.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/zlib-1220fed0c74e1019b3ee29edae2051788b080cd96e90d56836eea857b0b966742efb.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/utfcpp-1220d4d18426ca72fc2b7e56ce47273149815501d0d2395c2a98c726b31ba931e641.tar.gz"
-      zig fetch "https://deps.files.ghostty.org/harfbuzz-11.0.0.tar.xz"
+  nativeBuildInputs = [zig_0_15];
 
-      mv $ZIG_GLOBAL_CACHE_DIR/p $out
-    '';
-in
-  stdenv.mkDerivation {
-    inherit pname version src;
-
-    postUnpack = ''
-      export ZIG_GLOBAL_CACHE_DIR=$(mktemp -d)
-      export ZIG_LOCAL_CACHE_DIR=$(mktemp -d)
-      ln -s ${deps} $ZIG_GLOBAL_CACHE_DIR/p
-    '';
-
-    nativeBuildInputs = [zig_0_15.hook];
-
-    dontUseZigCheck = true;
-
-    meta = with lib; {
-      description = "Lightweight terminal session multiplexer using libghostty";
-      license = licenses.mit;
-      platforms = platforms.linux;
-      mainProgram = "vanish";
-    };
-  }
+  meta = with lib; {
+    description = "Lightweight terminal session multiplexer using libghostty";
+    license = licenses.mit;
+    platforms = platforms.linux;
+    mainProgram = "vanish";
+  };
+}
