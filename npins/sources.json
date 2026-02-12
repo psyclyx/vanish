@@ -17,8 +17,8 @@
     "nixpkgs-unstable": {
       "type": "Channel",
       "name": "nixpkgs-unstable",
-      "url": "https://releases.nixos.org/nixpkgs/nixpkgs-26.05pre941499.ae67888ff7ef/nixexprs.tar.xz",
-      "hash": "sha256-mjLMjTxcEL89npbCV8UrjFbCqIX1Y961btoVoaLNuho="
+      "url": "https://releases.nixos.org/nixpkgs/nixpkgs-26.05pre944509.8482c7ded03b/nixexprs.tar.xz",
+      "hash": "sha256-1XCkFh4oZKHhObDlQaqCim+PXMnEafjhWW4gUXR4xvM="
     },
     "zig-overlay": {
       "type": "Git",
@@ -29,9 +29,9 @@
       },
       "branch": "main",
       "submodules": false,
-      "revision": "9ddc2de8a97e4c06d9a05ec5ce3bd0bfd03768b4",
-      "url": "https://github.com/mitchellh/zig-overlay/archive/9ddc2de8a97e4c06d9a05ec5ce3bd0bfd03768b4.tar.gz",
-      "hash": "sha256-p9SAg45TJtLVuS9KHNYm48efX7oZplfPBzLQXUMMYGk="
+      "revision": "142495696982c88edddc8e17e4da90d8164acadf",
+      "url": "https://github.com/mitchellh/zig-overlay/archive/142495696982c88edddc8e17e4da90d8164acadf.tar.gz",
+      "hash": "sha256-k+82IDgTd9o5sxHIqGlvfwseKln3Ejx1edGtDltuPXo="
     }
   },
   "version": 7
