@@ -105,7 +105,7 @@ runCommand "zig-packages" {} ''
     hash = "sha256-S9fkxLCeQdHOt1FUa8CcZMmORNcxwQSuchng/dNq4g8=";
   }} $out/N-V-__8AAPlZGwBEa-gxrcypGBZ2R8Bse4JYSfo_ul8i2jlG
   cp -r ${fetchgit {
-    url = "https://github.com/ghostty-org/ghostty";
+    url = "https://github.com/ghostty-org/ghostty.git";
     rev = "c1207afbec2c1c829ea8d3de4ffe1c391944b244";
     hash = "sha256-xWAESmqfG5Xlrak/SL65U5VKIn9QI+mMZnyzEqNxEv0=";
   }} $out/ghostty-1.3.0-dev-5UdBC7otTQSkYgTQAiP03iZL48fg-hOXtUxqpmXIlIdc

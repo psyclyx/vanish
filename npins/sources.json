@@ -32,6 +32,19 @@
       "revision": "142495696982c88edddc8e17e4da90d8164acadf",
       "url": "https://github.com/mitchellh/zig-overlay/archive/142495696982c88edddc8e17e4da90d8164acadf.tar.gz",
       "hash": "sha256-k+82IDgTd9o5sxHIqGlvfwseKln3Ejx1edGtDltuPXo="
+    },
+    "zon2nix": {
+      "type": "Git",
+      "repository": {
+        "type": "GitHub",
+        "owner": "psyclyx",
+        "repo": "zon2nix"
+      },
+      "branch": "psyclyx/path-dep-refactor",
+      "submodules": false,
+      "revision": "bfaa60f10b1c3584760a0a209f87726b6374c947",
+      "url": "https://github.com/psyclyx/zon2nix/archive/bfaa60f10b1c3584760a0a209f87726b6374c947.tar.gz",
+      "hash": "sha256-3sTyUbpR6vDgqKDp97D2btv8Io+2Hpdwk0tlCDfL5Y4="
     }
   },
   "version": 7

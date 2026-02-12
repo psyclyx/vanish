@@ -20,10 +20,10 @@ stdenv.mkDerivation {
   };
 
   postConfigure = ''
-    cp -r ${callPackage ./deps.nix {}} $ZIG_GLOBAL_CACHE_DIR/p
+    cp -r ${callPackage ./deps.nix { }} $ZIG_GLOBAL_CACHE_DIR/p
   '';
 
-  nativeBuildInputs = [zig_0_15];
+  nativeBuildInputs = [ zig_0_15 ];
 
   meta = with lib; {
     description = "Lightweight terminal session multiplexer using libghostty";
